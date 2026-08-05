@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -174,6 +175,7 @@ CREATE TABLE IF NOT EXISTS character (
   series_ids TEXT,
   stat_bonuses TEXT,
   conditional_bonuses TEXT,
+  support_info TEXT,
   raw_path TEXT
 );
 
@@ -379,6 +381,45 @@ def _series_id(rec) -> int | None:
         if s.get("id"):
             return _i(s["id"])
     return _i(rec.get("series"))
+
+
+_SUPPORT_RES = (
+    ("defense", re.compile(r'支援防御[”"』]?\s*[＋+]?\s*(\d+)次')),
+    ("attack", re.compile(r'支援攻击(?:／|/)?反击[”"』]?\s*[＋+]?\s*(\d+)次')),
+    ("extra", re.compile(r'额外行动[”"』]?\s*[＋+]?\s*(\d+)次')),
+)
+
+
+def _support_info(abilities, skills) -> dict:
+    info = {
+        "defense": {"count": 0, "cond": False},
+        "attack": {"count": 0, "cond": False},
+        "extra": {"count": 0, "cond": False},
+    }
+
+    def scan(traits):
+        for t in traits:
+            if not isinstance(t, dict):
+                continue
+            d = t.get("desc") or ""
+            ac = t.get("active_condition") or {}
+            has_cond = any(
+                v not in (None, "", 0, False, [])
+                for k, v in ac.items()
+                if k not in ("id", "trait_condition_set_id")
+            )
+            for kind, rx in _SUPPORT_RES:
+                m = rx.search(d)
+                if m:
+                    info[kind]["count"] += int(m.group(1))
+                    if has_cond:
+                        info[kind]["cond"] = True
+
+    for ab in abilities or []:
+        scan([t.get("trait") or t for t in (ab.get("ability") or {}).get("traits") or []])
+    for sk in skills or []:
+        scan([t.get("trait") or t for t in (sk.get("skill") or {}).get("trait_set") or []])
+    return info
 
 
 def _build_tag_map() -> dict[int, str]:
@@ -596,6 +637,7 @@ def ingest_characters(conn, tag_map: dict[int, str]):
             if ss.get("series_id"):
                 series_id = ss["series_id"]
                 char_series_ids.add(int(ss["series_id"]))
+        support_info = _support_info(c.get("abilities") or [], c.get("skills") or [])
         conn.execute(
             """INSERT OR REPLACE INTO character
                (id, rarity, role, is_playable, name, sort_name, abbreviation, desc,
@@ -605,8 +647,9 @@ def ingest_characters(conn, tag_map: dict[int, str]):
                 max_ranged, max_melee, max_defense, max_reaction, max_awaken,
                 sp_ranged, sp_melee, sp_defense, sp_reaction, sp_awaken,
                 sp_max_ranged, sp_max_melee, sp_max_defense, sp_max_reaction, sp_max_awaken,
-                series_id, series_ids, tags, stat_bonuses, conditional_bonuses, raw_path)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                series_id, series_ids, tags, stat_bonuses, conditional_bonuses,
+                support_info, raw_path)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (_i(c["id"]), _i(c.get("rarity")), _i(c.get("role")),
              _b(c.get("is_playable")), c.get("name"), c.get("sort_name"),
              c.get("abbreviation"), c.get("desc"), c.get("icon"),
@@ -629,6 +672,7 @@ def ingest_characters(conn, tag_map: dict[int, str]):
              json.dumps(tags, ensure_ascii=False),
              json.dumps(stat_bonuses, ensure_ascii=False),
              json.dumps(conditional_bonuses, ensure_ascii=False),
+             json.dumps(support_info, ensure_ascii=False),
              "character.json"),
         )
         for sk in c.get("skills") or []:

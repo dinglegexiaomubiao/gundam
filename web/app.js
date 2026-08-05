@@ -1,7 +1,7 @@
 const $ = (sel) => document.querySelector(sel);
 const state = {
   units: { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", sort: "rarity", order: "desc", page: 0, size: 25 },
-  characters: { q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", skills: [], skill_mode: "any", sort: "rarity", order: "desc", page: 0, size: 25 },
+  characters: { q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", skills: [], skill_mode: "any", support: "", sort: "rarity", order: "desc", page: 0, size: 25 },
   supporters: { q: "", tags: [], tag_mode: "any", sort: "rarity", order: "desc", page: 0, size: 25 },
   stages: { q: "", page: 0, size: 25 },
   search: { type: "skill", kind: "all", q: "", sort: "rarity", order: "desc", page: 0, size: 25 },
@@ -81,7 +81,7 @@ function effectHtml(effects, fallback, condEntities) {
   const list = (effects || []).filter(Boolean);
   const ents = (condEntities || []).slice().sort((a, b) => b.name.length - a.name.length);
   if (!list.length) return esc(fallback || "—");
-  return list.map((e) => {
+  const body = list.map((e) => {
     let html = esc(e);
     ents.forEach((ent) => {
       const escName = esc(ent.name);
@@ -90,6 +90,10 @@ function effectHtml(effects, fallback, condEntities) {
     });
     return `<div class="effect">${html}</div>`;
   }).join("");
+  const combos = (condEntities || []).filter((x) => x.kind === "combo");
+  const comboHtml = combos.length ? `<div class="tags">${combos.map((c) =>
+    `<button class="chip combo-chip" data-series="${esc((c.series || []).join(","))}" data-tags="${esc((c.tags || []).join(","))}" data-mode="${c.mode === "or" ? "or" : "and"}" title="${c.mode === "or" ? "并集（任一满足）" : "交集（全部满足）"}">词条对象${c.mode === "or" ? "（并集）" : "（交集）"}</button>`).join("")}</div>` : "";
+  return body + comboHtml;
 }
 
 function condChips(conditions) {
@@ -146,6 +150,11 @@ function bindTagChips(root) {
       else if (kind === "series") searchUnitsBySeries(Number(b.dataset.id));
       else if (kind === "tag") searchTag(b.dataset.name, "units");
       else if (kind === "type") searchUnitsByType(b.dataset.id);
+    }));
+  (root || document).querySelectorAll(".combo-chip").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      searchUnitsByCombo(b.dataset.series, (b.dataset.tags || "").split(","), b.dataset.mode);
     }));
 }
 
@@ -256,6 +265,26 @@ function searchUnitsByType(role) {
   state.units.wfx = [];
   $("#unit-q").value = "";
   $("#unit-type").value = String(role);
+  syncCombobox("#unit-series-box");
+  renderTagChips("unit");
+  renderWfxChips();
+  activateTab("units");
+  loadUnits(0);
+}
+
+function searchUnitsByCombo(series, tags, mode) {
+  $("#modal").classList.add("hidden");
+  state.units.q = "";
+  state.units.series = series;
+  state.units.tags = tags;
+  state.units.tag_mode = "any";
+  state.units.match = mode === "or" ? "or" : "and";
+  state.units.type = "";
+  state.units.wfx = [];
+  $("#unit-q").value = "";
+  $("#unit-type").value = "";
+  $("#unit-tag-mode").value = "any";
+  $("#unit-match").value = mode === "or" ? "or" : "and";
   syncCombobox("#unit-series-box");
   renderTagChips("unit");
   renderWfxChips();
@@ -468,11 +497,12 @@ function initCombobox(boxId, options, getVal, onPick, clearable) {
 async function initFilterControls() {
   const series = await api("/api/series");
   const seriesOpts = series.map((s) => ({ value: s.id, label: s.name }));
-  const [unitTags, charTags, supTags, skillNames] = await Promise.all([
+  const [unitTags, charTags, supTags, skillNames, supportLabels] = await Promise.all([
     api("/api/tags?kind=unit"),
     api("/api/tags?kind=character"),
     api("/api/tags?kind=supporter"),
     api("/api/skillnames"),
+    api("/api/support-labels"),
   ]);
   const tagOpts = (list) => list.map((t) => ({ value: t, label: t }));
   initCombobox("#unit-series-box", seriesOpts, () => state.units.series,
@@ -489,6 +519,8 @@ async function initFilterControls() {
     (v) => addWfxChip(v), false);
   initCombobox("#char-skill-box", tagOpts(skillNames), () => "",
     (v) => addSkillChip(v), false);
+  $("#char-support").innerHTML = '<option value="">全部支援次数</option>' +
+    supportLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join("");
   initCombobox("#picker-series-box", seriesOpts, () => pickerState.series,
     (v) => { pickerState.series = String(v); }, true);
 }
@@ -661,7 +693,7 @@ async function loadCharacters(page = state.characters.page) {
     q: s.q, rarity: s.rarity, series: s.series, type: s.type,
     tags: s.tags.join(","), tag_mode: s.tag_mode,
     match: s.match, skills: s.skills.join(","), skill_mode: s.skill_mode,
-    sort: s.sort, order: s.order,
+    support: s.support, sort: s.sort, order: s.order,
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/characters?" + q);
@@ -675,6 +707,7 @@ async function loadCharacters(page = state.characters.page) {
         <span class="num">${c.ranged_f}</span><span class="num">${c.melee_f}</span>
         <span class="num">${c.defense_f}</span><span class="num">${c.awaken_f}</span>
         <span class="num">${c.reaction_f}</span>
+        <span class="num">${esc(c.support_label || "")}</span>
       </div>`).join("")
     : '<div class="empty">没有匹配的驾驶员</div>';
   $("#char-list").querySelectorAll(".list-row").forEach((r) =>
@@ -1620,6 +1653,7 @@ $("#char-search").addEventListener("click", () => {
   state.characters.type = $("#char-type").value;
   state.characters.tag_mode = $("#char-tag-mode").value;
   state.characters.skill_mode = $("#char-skill-mode").value;
+  state.characters.support = $("#char-support").value;
   state.characters.match = $("#char-match").value;
   loadCharacters(0);
 });
@@ -1699,7 +1733,7 @@ function resetUnits() {
 function resetCharacters() {
   Object.assign(state.characters, {
     q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and",
-    skills: [], skill_mode: "any",
+    skills: [], skill_mode: "any", support: "",
     sort: "rarity", order: "desc", page: 0,
   });
   $("#char-q").value = "";
@@ -1707,6 +1741,7 @@ function resetCharacters() {
   $("#char-type").value = "";
   $("#char-tag-mode").value = "all";
   $("#char-skill-mode").value = "any";
+  $("#char-support").value = "";
   $("#char-match").value = "and";
   syncCombobox("#char-series-box");
   renderTagChips("char");

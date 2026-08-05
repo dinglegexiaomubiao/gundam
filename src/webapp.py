@@ -29,6 +29,7 @@ from .labels import (
     WEAPON_ATTR,
     resolve_trait_text,
     star_value,
+    support_label,
 )
 
 WEB_DIR = config.PROJECT_ROOT / "web"
@@ -148,6 +149,36 @@ def _trait_effects(traits_raw: str, tag_by_id: dict, series_by_id: dict, unit_by
             if key not in seen:
                 seen.add(key)
                 entities.append(ent)
+        cond = t.get("active_condition") or {}
+        ser_ids = [
+            int(x) for x in str(cond.get("unit_series") or "").split(",")
+            if x.strip().isdigit()
+        ]
+        s_obj = cond.get("series")
+        if isinstance(s_obj, dict) and s_obj.get("id"):
+            sid = int(s_obj["id"])
+            if sid not in ser_ids:
+                ser_ids.append(sid)
+        tag_names = [
+            tag_by_id[int(tid)] for tid in str(cond.get("unit_tags") or "").split(",")
+            if tid.strip().isdigit() and int(tid) in tag_by_id
+        ]
+        combo_mode = None
+        if ser_ids and tag_names:
+            combo_mode = "and"
+        elif len(ser_ids) >= 2 or len(tag_names) >= 2:
+            combo_mode = "or"
+        if combo_mode:
+            key = ("combo", tuple(ser_ids), tuple(tag_names))
+            if key not in seen:
+                seen.add(key)
+                entities.append({
+                    "kind": "combo",
+                    "name": "词条对象",
+                    "series": ser_ids,
+                    "tags": tag_names,
+                    "mode": combo_mode,
+                })
     return effects, entities
 
 
@@ -320,6 +351,18 @@ def api_skillnames() -> list:
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+
+def api_support_labels() -> list:
+    conn = _conn()
+    rows = conn.execute("SELECT support_info FROM character").fetchall()
+    labels: set[str] = set()
+    for (si,) in rows:
+        lbl = support_label(_json_dict(si))
+        if lbl:
+            labels.add(lbl)
+    conn.close()
+    return sorted(labels)
 
 
 PICKER_SORT_KEYS = {
@@ -575,6 +618,7 @@ CHAR_SORT_KEYS = {
     "defense": "defense_f",
     "reaction": "reaction_f",
     "awaken": "awaken_f",
+    "support": "support_label",
 }
 
 WFX_FILTERS = {
@@ -755,7 +799,7 @@ def api_unit_detail(unit_id: int) -> dict | None:
 
 def api_characters(q: str, rarity: str, series: str, type_: str,
                    tags: str, tag_mode: str, match: str, skills: str, skill_mode: str,
-                   sort: str, order: str,
+                   support: str, sort: str, order: str,
                    limit: int, offset: int) -> dict:
     where, args = [], []
     if q:
@@ -780,7 +824,7 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
         f"""SELECT c.id, c.rarity, c.name, s.name AS series_name,
                    c.role, c.ranged, c.melee, c.defense, c.reaction, c.awaken,
                    max_ranged, max_melee, max_defense, max_reaction, max_awaken,
-                   c.stat_bonuses
+                   c.stat_bonuses, c.support_info
             FROM character c LEFT JOIN series s ON s.id = c.series_id
             {w} ORDER BY c.id""",
         args,
@@ -788,11 +832,14 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
     conn.close()
     for r in rows:
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
+        r["support_label"] = support_label(_json_dict(r.get("support_info")))
         bonuses = _json_dict(r.get("stat_bonuses"))
         for key in ("ranged", "melee", "defense", "reaction", "awaken"):
             r[f"{key}_f"] = star_value(
                 r.get(f"max_{key}") or 0, bonuses.get(key, 0), 0
             )[0]
+    if support:
+        rows = [r for r in rows if r["support_label"] == support]
     if sort in CHAR_SORT_KEYS:
         key = CHAR_SORT_KEYS[sort]
         rows.sort(
@@ -1485,6 +1532,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_tags(q.get("kind", [""])[0]))
         if path == "/api/skillnames":
             return self._send_json(api_skillnames())
+        if path == "/api/support-labels":
+            return self._send_json(api_support_labels())
         if path == "/api/units":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)
@@ -1504,6 +1553,7 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("type", [""])[0], q.get("tags", [""])[0],
                 q.get("tag_mode", ["all"])[0], q.get("match", ["and"])[0],
                 q.get("skills", [""])[0], q.get("skill_mode", ["any"])[0],
+                q.get("support", [""])[0],
                 q.get("sort", [""])[0],
                 q.get("order", ["desc"])[0], limit, offset))
         if path == "/api/supporters":

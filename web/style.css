@@ -88,7 +88,7 @@ button.primary:hover, .toolbar button:hover { background: #f05047; }
   cursor: col-resize; z-index: 5;
 }
 .list-head.units, .list-row.units { grid-template-columns: minmax(180px, 1fr) 80px 90px 90px 90px 90px 100px 90px 90px; }
-.list-head.chars, .list-row.chars { grid-template-columns: minmax(180px, 1fr) 80px 90px 90px 90px 90px 90px 90px; }
+.list-head.chars, .list-row.chars { grid-template-columns: minmax(180px, 1fr) 80px 90px 90px 90px 90px 90px 90px 110px; }
 .list-head.sups, .list-row.sups { grid-template-columns: minmax(180px, 1fr) 80px 240px 120px 120px 110px; }
 .list-head.stages, .list-row.stages { grid-template-columns: 80px minmax(180px, 1fr) 90px 90px 90px 110px; }
 .list-head.sr, .list-row.sr { grid-template-columns: 200px 180px 150px minmax(220px, 1fr); }

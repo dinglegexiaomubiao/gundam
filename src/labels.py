@@ -214,7 +214,7 @@ def resolve_trait_text(
         return kind
 
     text = re.sub(
-        r"上述[“”‘’\"'『』]?(标签／系列|标签/系列|类型|标签|系列)[“”‘’\"'『』]?",
+        r"上述\s*[“”‘’\"'『』]?(标签／系列|标签/系列|类型|标签|系列)[“”‘’\"'『』]?",
         repl,
         text,
     )
@@ -358,3 +358,18 @@ def parse_supporter_conditions(
                     "tags": cond_tags,
                 })
     return conditions, sorted(tags)
+
+
+SUPPORT_ORDER = ("defense", "attack", "extra")
+SUPPORT_NAMES = {"defense": "支援防御", "attack": "支援攻击", "extra": "额外行动"}
+
+
+def support_label(info) -> str:
+    """支援次数标签，如 无条件支援防御2次 / 有条件支援攻击2次。"""
+    info = info or {}
+    for k in SUPPORT_ORDER:
+        item = info.get(k) or {}
+        if item.get("count"):
+            cond = "有条件" if item.get("cond") else "无条件"
+            return f"{cond}{SUPPORT_NAMES[k]}{item['count']}次"
+    return ""
