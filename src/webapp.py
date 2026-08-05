@@ -12,9 +12,10 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+import re
 
 from . import config
-from .damage import CombatantStats, DamageContext, calculate_damage
+from .damage import CRITICAL_CORRECTION, CombatantStats, DamageContext, calculate_damage
 from . import pairing
 from .labels import (
     ACQUISITION_ROUTE,
@@ -38,6 +39,50 @@ CHAR_LEVEL_CAPS = {5: 100, 4: 90, 3: 80, 2: 70, 1: 60}
 UNIT_LEVEL_CAPS = {5: 100, 4: 90, 3: 80, 2: 70, 1: 60}
 
 ROLE_NAMES = {1: "攻击型", 2: "耐久型", 3: "支援型"}
+
+_DMG_UP_RE = re.compile(r"(?<!爆击)损伤提升\s*(\d+)%")
+_DMG_DOWN_RE = re.compile(r"损伤(?:减轻|降低)\s*(\d+)%")
+_DEF_UP_RE = re.compile(r"(?:防御力|守备值)(?:及|与|和)?(?:攻击力)?提升\s*(\d+)%")
+_ATK_UP_RE = re.compile(r"攻击力(?:及|与|和)?(?:防御力)?提升\s*(\d+)%")
+_DEF_STACK_RE = re.compile(
+    r"每次受到(?:来自敌方的)?损伤时，\s*自身防御力提升(\d+)%（最高(\d+)%）"
+)
+_HP_RECOVER_RE = re.compile(
+    r"自身HP为(\d+)%以下时，\s*自身HP恢复(\d+)%（1次）"
+)
+_CRIT_DMG_RE = re.compile(r"爆击损伤提升\s*(\d+)%")
+_WA_MAP = {"Physical": 1, "Beam": 2, "Special": 3}
+
+
+def _parse_ability_effects(d: str) -> list[dict]:
+    """从能力描述提取可应用的效果：增伤/减伤/攻击/防御百分比。"""
+    effs: list[dict] = []
+    m = _DMG_UP_RE.search(d)
+    if m:
+        effs.append({"kind": "dmg_up", "pct": int(m.group(1))})
+    m = _DMG_DOWN_RE.search(d)
+    if m:
+        effs.append({"kind": "dmg_down", "pct": int(m.group(1))})
+    m = _DEF_UP_RE.search(d)
+    if m:
+        effs.append({"kind": "def_pct", "pct": int(m.group(1))})
+    m = _ATK_UP_RE.search(d)
+    if m:
+        effs.append({"kind": "atk_pct", "pct": int(m.group(1))})
+    m = _DEF_STACK_RE.search(d)
+    if m:
+        effs.append({
+            "kind": "def_stack", "pct": int(m.group(1)), "max": int(m.group(2)),
+        })
+    m = _HP_RECOVER_RE.search(d)
+    if m:
+        effs.append({
+            "kind": "hp_recover", "threshold": int(m.group(1)), "pct": int(m.group(2)),
+        })
+    m = _CRIT_DMG_RE.search(d)
+    if m:
+        effs.append({"kind": "crit_dmg", "pct": int(m.group(1))})
+    return effs
 
 
 def _conn() -> sqlite3.Connection:
@@ -293,7 +338,7 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
             items = _all(
                 conn,
                 f"""SELECT n.unit_id AS id, n.unit_name AS name, n.level,
-                           n.attack, n.defense
+                           n.attack, n.defense, n.hp
                     FROM stage_map_npc n
                     JOIN (SELECT unit_id, MAX(level) AS ml FROM stage_map_npc
                           GROUP BY unit_id) m
@@ -310,6 +355,12 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 r["role"] = 0
                 r["attack_bonus"] = 0
                 r["defense_bonus"] = 0
+                r["atk_base"] = r.get("attack") or 0
+                r["def_base"] = r.get("defense") or 0
+                r["atk_pct"] = 0
+                r["def_pct"] = 0
+                r["hp_base"] = r.get("hp") or 0
+                r["hp_pct"] = 0
         else:
             where = ["u.name LIKE ? ESCAPE '\\'"]
             args: list = [like]
@@ -327,6 +378,7 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 f"""SELECT u.id, u.name, u.rarity,
                            u.role,
                            u.max_attack AS attack, u.max_defense AS defense,
+                           u.max_hp AS hp,
                            u.tags, s.name AS series_name, u.stat_bonuses
                     FROM unit u LEFT JOIN series s ON s.id = u.series_id {w}
                     ORDER BY u.rarity DESC, u.id""",
@@ -337,8 +389,14 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 r["tags"] = _json_list(r.get("tags"))
                 r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
                 bonuses = _json_dict(r.pop("stat_bonuses", None))
-                for k in ("attack", "defense"):
-                    v, b = star_value(r.get(k) or 0, bonuses.get(k, 0), 0)
+                r["atk_base"] = r.get("attack") or 0
+                r["def_base"] = r.get("defense") or 0
+                r["atk_pct"] = bonuses.get("attack", 0)
+                r["def_pct"] = bonuses.get("defense", 0)
+                r["hp_base"] = r.get("hp") or 0
+                r["hp_pct"] = bonuses.get("hp", 0)
+                for k, bkey in (("attack", "atk_pct"), ("defense", "def_pct")):
+                    v, b = star_value(r.get(k) or 0, r[f"{'atk' if k == 'attack' else 'def'}_pct"], 0)
                     r[k] = v
                     r[f"{k}_bonus"] = b
     elif kind == "pilots":
@@ -1051,7 +1109,325 @@ def api_damage(q: dict) -> dict:
     steps = calculate_damage(attacker, defender, ctx)
     return {"params": {"attacker": attacker.__dict__, "defender": defender.__dict__,
                        "context": {k: v for k, v in ctx.__dict__.items()
-                                   if not isinstance(v, list)}}, "steps": steps}
+                                   if not isinstance(v, list)}},
+            "steps": [[k, v] for k, v in steps.items()]}
+
+
+def api_damage_sim(q: dict) -> dict:
+    """多次攻击模拟：逐次计算伤害，随攻击叠防御、HP 低于阈值恢复，直到 HP 归零。"""
+    def f(name, default=0.0):
+        try:
+            return float(q.get(name, [str(default)])[0])
+        except (TypeError, ValueError):
+            return default
+
+    dhp = f("dhp", 0)
+    if dhp <= 0:
+        return {"hits": [], "error": "请先选择防御方机体以获取 HP"}
+    aua = f("aua")
+    aca = f("aca")
+    dud = f("dud")
+    dcd = f("dcd")
+    wp = f("wp", 1000)
+    terrain = f("terrain", 1.0)
+    vigor = q.get("vigor", ["normal"])[0]
+    buff = f("buff")
+    debuff = f("debuff")
+    crit = q.get("critical", ["0"])[0] == "1"
+    shield = q.get("shield", ["0"])[0] == "1"
+    crit_damage_bonus = f("crit_damage_bonus")
+    def_stack_pct = f("def_stack_pct")
+    def_stack_max = f("def_stack_max")
+    hp_recover_pct = f("hp_recover_pct")
+    hp_recover_threshold = f("hp_recover_threshold")
+
+    base_dud = dud
+    hp = dhp
+    max_hp = dhp
+    hits = []
+    recovered = False
+    n = 0
+    while hp > 0 and n < 300:
+        n += 1
+        attacker = CombatantStats(unit_attack=aua, character_attack=aca)
+        defender = CombatantStats(unit_defense=dud, character_defense=dcd)
+        ctx = DamageContext(
+            weapon_power=wp,
+            terrain_correction=terrain,
+            defensive_correction=0.8 if shield else 1.0,
+            attacker_vigor=vigor,
+            critical=crit,
+            critical_correction_percent=(
+                CRITICAL_CORRECTION.get(vigor, 0) + crit_damage_bonus
+            ) if crit else None,
+            attacker_damage_dealt_percent=[buff],
+            defender_damage_taken_percent=[debuff],
+        )
+        dmg = calculate_damage(attacker, defender, ctx)["final_damage"]
+        hp = max(0.0, hp - dmg)
+        recover_now = False
+        if (
+            not recovered and hp > 0 and hp_recover_pct and hp_recover_threshold
+            and max_hp > 0 and hp / max_hp * 100 <= hp_recover_threshold
+        ):
+            hp = min(max_hp, hp + max_hp * hp_recover_pct / 100)
+            recovered = True
+            recover_now = True
+        hits.append({
+            "n": n,
+            "defense": int(round(dud)),
+            "damage": int(dmg),
+            "hp": int(round(hp)),
+            "hp_pct": round(hp / max_hp * 1000) / 10 if max_hp > 0 else 0,
+            "recovered": recover_now,
+        })
+        if def_stack_pct and def_stack_max:
+            stacks = min(n, int(def_stack_max // def_stack_pct))
+            dud = base_dud * (1 + stacks * def_stack_pct / 100)
+    return {"hits": hits}
+
+
+def _cond_met(cond: dict, own_unit, enemy_unit, weapon_attr, tag_by_id: dict,
+              ignore_unknown: bool = False) -> bool:
+    """评估能力条件的类型/标签/系列/武器属性是否满足。"""
+    if not cond:
+        return True
+    target = cond.get("target") or "Owner"
+    unit = enemy_unit if target in ("Enemy", "AttackTarget") else own_unit
+    role = cond.get("unit_role")
+    if role and str(role).isdigit():
+        if not unit or int(role) != (unit.get("role") or 0):
+            return False
+    tag_ids = [int(t) for t in str(cond.get("unit_tags") or "").split(",") if t.strip().isdigit()]
+    if tag_ids:
+        if not unit:
+            return False
+        names = {tag_by_id.get(i) for i in tag_ids}
+        names.discard(None)
+        if names and not names <= set(unit.get("tags") or []):
+            return False
+    series = [int(s) for s in str(cond.get("unit_series") or "").split(",") if s.strip().isdigit()]
+    if series:
+        if not unit or not (set(series) & set(unit.get("series_ids") or [])):
+            return False
+    uids = [int(x) for x in str(cond.get("unit_ids") or "").split(",") if x.strip().isdigit()]
+    if uids:
+        if not unit or unit.get("id") not in uids:
+            return False
+    wa = cond.get("weapon_attribute")
+    if wa:
+        if weapon_attr is None or _WA_MAP.get(wa) != weapon_attr:
+            return False
+    # 其他无法静态判断的条件（HP阈值/战意/回合/距离等）视为未满足
+    unknown = [
+        "hp_type", "hp_rate_lte_threshold", "hp_rate_gte_threshold",
+        "en_rate_lte_threshold", "en_rate_gte_threshold",
+        "en_value_lte_threshold", "en_value_gte_threshold",
+        "tension", "turn_number", "is_in_one_on_one",
+        "attack_distance_gte_threshold", "attack_distance_lte_threshold",
+        "is_in_chance_step",
+    ]
+    if not ignore_unknown and any(
+        cond.get(k) not in (None, "", 0, False) for k in unknown
+    ):
+        return False
+    return True
+
+
+def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
+                     def_uid, def_usrc, def_pid, def_psrc,
+                     weapon_attr, attack_attr, attr_nullify,
+                     atk_u_on, atk_p_on, def_u_on, def_p_on,
+                     atk_star, def_star) -> dict:
+    """根据已选机体/驾驶员/武器 + 能力开关，计算加成与数值。"""
+    conn = _conn()
+    tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
+    series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
+    unit_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM unit")}
+
+    def load_unit(uid, src):
+        if not uid or src != "library":
+            return None
+        row = conn.execute(
+            "SELECT id, role, tags, series_ids, stat_bonuses, "
+            "max_attack, max_defense, max_hp FROM unit WHERE id=?", (uid,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"], "role": row["role"],
+            "tags": _json_list(row["tags"]),
+            "series_ids": _json_list(row["series_ids"]),
+            "bonuses": _json_dict(row["stat_bonuses"]),
+            "max_attack": row["max_attack"] or 0,
+            "max_defense": row["max_defense"] or 0,
+            "max_hp": row["max_hp"] or 0,
+        }
+
+    def load_char(cid, src):
+        if not cid or src != "library":
+            return None
+        row = conn.execute(
+            "SELECT id, stat_bonuses, max_ranged, max_melee, max_awaken, max_defense "
+            "FROM character WHERE id=?", (cid,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "bonuses": _json_dict(row["stat_bonuses"]),
+            "stats": {
+                "ranged": row["max_ranged"] or 0,
+                "melee": row["max_melee"] or 0,
+                "awaken": row["max_awaken"] or 0,
+                "defense": row["max_defense"] or 0,
+            },
+        }
+
+    atk_unit = load_unit(atk_uid, atk_usrc)
+    def_unit = load_unit(def_uid, def_usrc)
+    atk_pilot = load_char(atk_pid, atk_psrc)
+    def_pilot = load_char(def_pid, def_psrc)
+    weapon_attr_i = int(weapon_attr) if str(weapon_attr).isdigit() else None
+    attack_attr_i = int(attack_attr) if str(attack_attr).isdigit() else None
+    nullify = attr_nullify == "1"
+    atk_star_i = int(atk_star) if str(atk_star).isdigit() else 0
+    def_star_i = int(def_star) if str(def_star).isdigit() else 0
+    on = {
+        "atk_u": set((atk_u_on or "").split(",")) if atk_u_on else set(),
+        "atk_p": set((atk_p_on or "").split(",")) if atk_p_on else set(),
+        "def_u": set((def_u_on or "").split(",")) if def_u_on else set(),
+        "def_p": set((def_p_on or "").split(",")) if def_p_on else set(),
+    }
+
+    def ability_rows(table, owner_id, owner, own_unit, enemy_unit):
+        if not owner:
+            return [], 0, 0
+        rows = conn.execute(
+            f"SELECT id, name, traits FROM {table} WHERE {owner_id} = ?",
+            (owner["id"],),
+        )
+        out = []
+        auto_up = 0
+        auto_down = 0
+        for rid, rname, traits in rows:
+            for t in _json_list(traits):
+                effs = _parse_ability_effects(t.get("desc") or "")
+                if not effs:
+                    continue
+                cond = t.get("active_condition") or {}
+                has_cond = any(
+                    cond.get(k) not in (None, "", 0, False)
+                    for k in (
+                        "unit_role", "unit_tags", "unit_series", "weapon_attribute",
+                        "map_battle_action", "hp_type", "tension", "turn_number",
+                        "hp_rate_lte_threshold", "hp_rate_gte_threshold",
+                    )
+                )
+                if not has_cond:
+                    auto_up += sum(e["pct"] for e in effs if e["kind"] == "dmg_up")
+                    auto_down += sum(e["pct"] for e in effs if e["kind"] == "dmg_down")
+                    effs = [e for e in effs if e["kind"] in ("def_stack", "hp_recover")]
+                    if not effs:
+                        continue
+                is_special = any(
+                    e["kind"] in ("hp_recover", "def_stack") for e in effs
+                )
+                met = _cond_met(
+                    cond, own_unit, enemy_unit, weapon_attr_i, tag_by_id,
+                    ignore_unknown=is_special,
+                )
+                if cond.get("weapon_attribute") and nullify:
+                    met = False
+                desc, _ = resolve_trait_text(
+                    t.get("desc") or "", cond, tag_by_id, series_by_id, unit_by_id
+                )
+                out.append({
+                    "row_id": f"{table}:{rid}:{t.get('id')}",
+                    "name": rname or "",
+                    "effects": effs,
+                    "met": met,
+                    "desc": desc.strip().replace("\n", " "),
+                })
+        return out, auto_up, auto_down
+
+    atk_unit_ab, auto_u_up, _ = ability_rows("unit_ability", "unit_id", atk_unit, atk_unit, def_unit)
+    atk_pilot_ab, auto_p_up, _ = ability_rows("character_ability", "character_id", atk_pilot, atk_unit, def_unit)
+    def_unit_ab, _, auto_u_down = ability_rows("unit_ability", "unit_id", def_unit, def_unit, atk_unit)
+    def_pilot_ab, _, auto_p_down = ability_rows("character_ability", "character_id", def_pilot, def_unit, atk_unit)
+    conn.close()
+
+    def sum_kind(rows, onset, kind):
+        return sum(
+            e["pct"]
+            for r in rows if r["row_id"] in onset
+            for e in r["effects"] if e["kind"] == kind
+        )
+
+    atk_damage = (
+        auto_u_up + auto_p_up +
+        sum_kind(atk_pilot_ab, on["atk_p"], "dmg_up")
+        + sum_kind(atk_unit_ab, on["atk_u"], "dmg_up")
+    )
+    def_taken = (
+        auto_u_down + auto_p_down +
+        sum_kind(def_pilot_ab, on["def_p"], "dmg_down")
+        + sum_kind(def_unit_ab, on["def_u"], "dmg_down")
+    )
+    atk_unit_extra = sum_kind(atk_unit_ab, on["atk_u"], "atk_pct")
+    def_unit_extra = sum_kind(def_unit_ab, on["def_u"], "def_pct")
+    def_pilot_extra = sum_kind(def_pilot_ab, on["def_p"], "def_pct")
+
+    atk_unit_attack = None
+    if atk_unit:
+        atk_unit_attack = star_value(
+            atk_unit["max_attack"],
+            atk_unit["bonuses"].get("attack", 0) + atk_unit_extra,
+            atk_star_i,
+        )[0]
+    def_unit_defense = None
+    if def_unit:
+        def_unit_defense = star_value(
+            def_unit["max_defense"],
+            def_unit["bonuses"].get("defense", 0) + def_unit_extra,
+            def_star_i,
+        )[0]
+    def_unit_hp = None
+    if def_unit:
+        def_unit_hp = star_value(
+            def_unit["max_hp"],
+            def_unit["bonuses"].get("hp", 0),
+            def_star_i,
+        )[0]
+    atk_pilot_attack = None
+    if atk_pilot and attack_attr_i in (1, 2, 3):
+        key = {1: "ranged", 2: "melee", 3: "awaken"}[attack_attr_i]
+        atk_pilot_attack = star_value(
+            atk_pilot["stats"][key], atk_pilot["bonuses"].get(key, 0), 0
+        )[0]
+    def_pilot_defense = None
+    if def_pilot:
+        def_pilot_defense = star_value(
+            def_pilot["stats"]["defense"],
+            def_pilot["bonuses"].get("defense", 0) + def_pilot_extra,
+            0,
+        )[0]
+
+    return {
+        "atk_unit_attack": atk_unit_attack,
+        "atk_pilot_attack": atk_pilot_attack,
+        "def_unit_defense": def_unit_defense,
+        "def_unit_hp": def_unit_hp,
+        "def_pilot_defense": def_pilot_defense,
+        "attacker_damage_bonus": atk_damage,
+        "defender_damage_taken": def_taken,
+        "abilities": {
+            "atk_unit": atk_unit_ab,
+            "atk_pilot": atk_pilot_ab,
+            "def_unit": def_unit_ab,
+            "def_pilot": def_pilot_ab,
+        },
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1131,6 +1507,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_stages(q.get("q", [""])[0], limit, offset))
         if path == "/api/damage":
             return self._send_json(api_damage(q))
+        if path == "/api/damage-sim":
+            return self._send_json(api_damage_sim(q))
+        if path == "/api/damage-bonus":
+            return self._send_json(api_damage_bonus(
+                q.get("atk_uid", [""])[0], q.get("atk_usrc", [""])[0],
+                q.get("atk_pid", [""])[0], q.get("atk_psrc", [""])[0],
+                q.get("def_uid", [""])[0], q.get("def_usrc", [""])[0],
+                q.get("def_pid", [""])[0], q.get("def_psrc", [""])[0],
+                q.get("weapon_attr", [""])[0], q.get("attack_attr", [""])[0],
+                q.get("attr_nullify", ["0"])[0],
+                q.get("atk_u_on", [""])[0], q.get("atk_p_on", [""])[0],
+                q.get("def_u_on", [""])[0], q.get("def_p_on", [""])[0],
+                q.get("atk_star", ["0"])[0], q.get("def_star", ["0"])[0]))
         parts = path.split("/")
         if len(parts) == 5 and parts[1] == "api" and parts[2] == "pairing":
             kind, item_id = parts[3], parts[4]

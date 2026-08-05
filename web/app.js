@@ -992,7 +992,13 @@ async function openStage(id) {
 }
 
 /* ---------- 伤害计算 ---------- */
-const calcSel = { atkUnit: null, atkPilot: null, defUnit: null, defPilot: null };
+const calcSel = {
+  atkUnit: null, atkPilot: null, defUnit: null, defPilot: null,
+  atkSkills: [], defSkills: [],
+  atkUOn: [], atkPOn: [], defUOn: [], defPOn: [],
+  abInit: { atkU: false, atkP: false, defU: false, defP: false },
+};
+const calcSeq = { n: 0 };
 const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", sort: "rarity", order: "desc", page: 0, size: 20, onPick: null };
 
 async function initPickerTagBox(kind) {
@@ -1066,14 +1072,18 @@ async function loadPicker(page = pickerState.page) {
         const w = weapons.find((x) => String(x.id) === r.dataset.w);
         calcSel.atkWeapon = w;
         $("#d-wp").value = w.power_lv5 ?? w.power;
+        $("#d-weapon-name").value = w.name || "—";
         $("#d-wtype").value = w.weapon_attr_label ?? "—";
         $("#d-wstat").value = w.pilot_stat ?? "—";
+        $("#d-wcrit").value = (w.crit_lv5 ?? w.critical_rate ?? 0) + "%";
         const statMap = { 1: "ranged", 2: "melee", 3: "awaken" };
         const key = statMap[w.attack_attr];
         if (key && calcSel.atkPilot && calcSel.atkPilot[key] != null) {
           $("#d-aca").value = calcSel.atkPilot[key];
         }
         $("#picker-modal").classList.add("hidden");
+        resetAbInit();
+        autoCalcBonuses();
       }));
     $("#picker-pager").innerHTML = "";
     return;
@@ -1173,57 +1183,168 @@ async function loadPicker(page = pickerState.page) {
   pager("picker", d.total, s.page, s.size, loadPicker);
 }
 
-async function fillAbilities(side, kind, owner) {
-  const el = $({
-    atk_unit: "#d-atk-unitability",
-    def_unit: "#d-def-unitability",
-    atk_char: "#d-atk-charability",
-    def_char: "#d-def-charability",
-  }[side + "_" + kind]);
-  if (!el) return;
-  if (!owner || owner.source !== "library") {
-    el.value = "—";
-    return;
-  }
-  try {
-    const d = await api(`/api/${kind === "unit" ? "units" : "characters"}/${owner.id}`);
-    const list = d.abilities || [];
-    el.value = list.map((a) => a.name).join("、") || "—";
-  } catch {
-    el.value = "—";
-  }
-}
-
 function pickInfoText(it) {
   const role = it.role_label && it.role_label !== "—" ? " · " + it.role_label : "";
   return it.name ? `${it.name}${role}` : "";
 }
 
+async function autoCalcBonuses() {
+  const seq = ++calcSeq.n;
+  const au = calcSel.atkUnit, ap = calcSel.atkPilot;
+  const du = calcSel.defUnit, dp = calcSel.defPilot;
+  const w = calcSel.atkWeapon;
+  const q = new URLSearchParams({
+    atk_uid: au ? au.id : "", atk_usrc: au ? au.source : "",
+    atk_pid: ap ? ap.id : "", atk_psrc: ap ? ap.source : "",
+    def_uid: du ? du.id : "", def_usrc: du ? du.source : "",
+    def_pid: dp ? dp.id : "", def_psrc: dp ? dp.source : "",
+    weapon_attr: w ? w.weapon_attr : "", attack_attr: w ? w.attack_attr : "",
+    attr_nullify: w && (w.effects || []).some((e) =>
+      ((e.name || "") + (e.desc || "")).includes("武装属性损伤减轻无效")) ? "1" : "0",
+    atk_u_on: calcSel.atkUOn.join(","), atk_p_on: calcSel.atkPOn.join(","),
+    def_u_on: calcSel.defUOn.join(","), def_p_on: calcSel.defPOn.join(","),
+    atk_star: au ? (au.star || 0) : 0, def_star: du ? (du.star || 0) : 0,
+  });
+  const d = await api("/api/damage-bonus?" + q);
+  if (seq !== calcSeq.n) return;
+  if (d.atk_unit_attack != null && au) $("#d-aua").value = d.atk_unit_attack;
+  if (d.atk_pilot_attack != null && ap) $("#d-aca").value = d.atk_pilot_attack;
+  if (d.def_unit_defense != null && du) $("#d-dud").value = d.def_unit_defense;
+  if (d.def_unit_hp != null && du) $("#d-dhp").value = d.def_unit_hp;
+  if (d.def_pilot_defense != null && dp) $("#d-dcd").value = d.def_pilot_defense;
+  if (au || ap) $("#d-buff").value = d.attacker_damage_bonus || 0;
+  if (du || dp) $("#d-debuff").value = d.defender_damage_taken || 0;
+  calcSel.lastAbilities = d.abilities || {};
+  const critDmg = attackerCritDmg(d.abilities || {});
+  $("#d-wcritdmg").value = critDmg ? `+${critDmg}%` : "—";
+  if (renderAbilityLists(d.abilities || {})) {
+    autoCalcBonuses();
+  }
+}
+
+function attackerCritDmg(ab) {
+  let total = 0;
+  const sum = (rows, key) => (rows || []).forEach((r) => {
+    if (!calcSel[key].includes(r.row_id)) return;
+    (r.effects || []).forEach((e) => {
+      if (e.kind === "crit_dmg") total += e.pct;
+    });
+  });
+  sum(ab.atk_unit, "atkUOn");
+  sum(ab.atk_pilot, "atkPOn");
+  return total;
+}
+
+function effectsText(effs) {
+  const lbl = { dmg_up: "增伤+", dmg_down: "减伤+", atk_pct: "攻击+", def_pct: "防御+" };
+  return (effs || []).map((e) => `${lbl[e.kind] || ""}${e.pct}%`).join(" ");
+}
+
+function resetAbInit() {
+  calcSel.abInit = { atkU: false, atkP: false, defU: false, defP: false };
+}
+
+function renderAbilityLists(ab) {
+  let changed = false;
+  changed = renderAbContainer("#atk-unit-ab", ab.atk_unit, "atkU") || changed;
+  changed = renderAbContainer("#atk-pilot-ab", ab.atk_pilot, "atkP") || changed;
+  changed = renderAbContainer("#def-unit-ab", ab.def_unit, "defU") || changed;
+  changed = renderAbContainer("#def-pilot-ab", ab.def_pilot, "defP") || changed;
+  return changed;
+}
+
+function renderAbContainer(sel, rows, key) {
+  const box = $(sel);
+  if (!box) return;
+  if (!rows || !rows.length) {
+    box.innerHTML = '<div class="empty small">—</div>';
+    return false;
+  }
+  let inited = false;
+  if (!calcSel.abInit[key]) {
+    calcSel[key + "On"] = rows.filter((r) => r.met).map((r) => r.row_id);
+    calcSel.abInit[key] = true;
+    inited = true;
+  }
+  const onArr = calcSel[key + "On"];
+  box.innerHTML = rows.map((r) => `
+    <label class="ab-row">
+      <span class="ab-main">
+        <span class="ab-name">${esc(r.name)}</span>
+        <span class="muted">${esc(r.desc || effectsText(r.effects))}</span>
+      </span>
+      <input type="checkbox" class="ab-switch" data-key="${key}" data-rid="${esc(r.row_id)}" ${onArr.includes(r.row_id) ? "checked" : ""}>
+    </label>`).join("");
+  box.querySelectorAll(".ab-switch").forEach((cb) =>
+    cb.addEventListener("change", () => {
+      const k = cb.dataset.key;
+      const rid = cb.dataset.rid;
+      const cur = calcSel[k + "On"].slice();
+      if (cb.checked) {
+        if (!cur.includes(rid)) cur.push(rid);
+      } else {
+        const i = cur.indexOf(rid);
+        if (i >= 0) cur.splice(i, 1);
+      }
+      calcSel[k + "On"] = cur;
+      autoCalcBonuses();
+    }));
+  return inited;
+}
+
+function starVal(base, pct, star) {
+  const mults = [[1, 1], [6, 5], [13, 10], [7, 5]];
+  const m = mults[star] || [1, 1];
+  const sb = Math.floor((base || 0) * m[0] / m[1]);
+  return Math.floor(sb * (100 + (pct || 0)) / 100);
+}
+
+function applyUnitStar(side) {
+  const u = side === "atk" ? calcSel.atkUnit : calcSel.defUnit;
+  if (!u) return;
+  u.star = Number($(`#${side}-unit-star`).value || 0);
+  autoCalcBonuses();
+}
+
 $("#pick-atk-unit").addEventListener("click", () => openPicker("unit", async (it) => {
-  calcSel.atkUnit = it;
-  $("#d-aua").value = it.attack ?? "";
+  calcSel.atkUnit = { ...it, star: 0 };
+  calcSel.atkUOn = [];
+  resetAbInit();
   $("#atk-unit-info").textContent = pickInfoText(it);
-  await fillAbilities("atk", "unit", it);
+  $("#atk-unit-star").classList.remove("hidden");
+  $("#atk-unit-star").value = "0";
+  applyUnitStar("atk");
+  await autoCalcBonuses();
 }));
 $("#pick-def-unit").addEventListener("click", () => openPicker("unit", async (it) => {
-  calcSel.defUnit = it;
-  $("#d-dud").value = it.defense ?? "";
+  calcSel.defUnit = { ...it, star: 0 };
+  calcSel.defUOn = [];
+  resetAbInit();
   $("#def-unit-info").textContent = pickInfoText(it);
-  await fillAbilities("def", "unit", it);
+  $("#def-unit-star").classList.remove("hidden");
+  $("#def-unit-star").value = "0";
+  applyUnitStar("def");
+  await autoCalcBonuses();
 }));
+$("#atk-unit-star").addEventListener("change", () => applyUnitStar("atk"));
+$("#def-unit-star").addEventListener("change", () => applyUnitStar("def"));
 $("#pick-atk-pilot").addEventListener("click", () => openPicker("pilot", async (it) => {
   calcSel.atkPilot = { id: it.id, source: it.source, ranged: it.ranged, melee: it.melee, awaken: it.awaken, defense: it.defense };
+  calcSel.atkPOn = [];
+  resetAbInit();
   $("#atk-pilot-info").textContent = pickInfoText(it);
   const statMap = { 1: "ranged", 2: "melee", 3: "awaken" };
   const key = calcSel.atkWeapon ? statMap[calcSel.atkWeapon.attack_attr] : "ranged";
   $("#d-aca").value = (key && calcSel.atkPilot[key] != null) ? calcSel.atkPilot[key] : (it.ranged ?? "");
-  await fillAbilities("atk", "char", calcSel.atkPilot);
+  await autoCalcBonuses();
 }));
 $("#pick-def-pilot").addEventListener("click", () => openPicker("pilot", async (it) => {
   calcSel.defPilot = { id: it.id, source: it.source, ranged: it.ranged, melee: it.melee, awaken: it.awaken, defense: it.defense };
+  calcSel.defPOn = [];
+  resetAbInit();
   $("#d-dcd").value = it.defense ?? "";
   $("#def-pilot-info").textContent = pickInfoText(it);
-  await fillAbilities("def", "char", calcSel.defPilot);
+  await autoCalcBonuses();
 }));
 $("#pick-weapon").addEventListener("click", () => openPicker("weapon", null));
 
@@ -1234,6 +1355,9 @@ function pickSkill(side) {
     return;
   }
   openPicker("skill", (sk) => {
+    const arr = side === "atk" ? calcSel.atkSkills : calcSel.defSkills;
+    if (sk.name && !arr.includes(sk.name)) arr.push(sk.name);
+    $(side === "atk" ? "#d-atk-skills" : "#d-def-skills").value = arr.join("、") || "—";
     let buff = 0, debuff = 0;
     (sk.effects || []).forEach((e) => {
       const m1 = e.match(/损伤提升\s*(\d+)%/);
@@ -1284,33 +1408,117 @@ $("#picker-modal").addEventListener("click", (e) => {
 });
 
 $("#d-calc").addEventListener("click", async () => {
+  const ab = calcSel.lastAbilities || {};
+  let defStackPct = 0, defStackMax = 0;
+  let hpRecPct = 0, hpRecTh = 0;
+  (ab.def_unit || []).forEach((r) => {
+    if (!calcSel.defUOn.includes(r.row_id)) return;
+    (r.effects || []).forEach((e) => {
+      if (e.kind === "def_stack") {
+        defStackPct += e.pct;
+        defStackMax = Math.max(defStackMax, e.max);
+      }
+    });
+  });
+  (ab.def_pilot || []).forEach((r) => {
+    if (!calcSel.defPOn.includes(r.row_id)) return;
+    (r.effects || []).forEach((e) => {
+      if (e.kind === "hp_recover") {
+        hpRecPct += e.pct;
+        hpRecTh = e.threshold;
+      }
+    });
+  });
   const q = new URLSearchParams({
     aua: $("#d-aua").value, aca: $("#d-aca").value,
-    dud: $("#d-dud").value, dcd: $("#d-dcd").value,
+    dud: $("#d-dud").value, dcd: $("#d-dcd").value, dhp: $("#d-dhp").value,
     wp: $("#d-wp").value, terrain: $("#d-terrain").value,
-    vigor: $("#d-vigor").value,
+    vigor: $("#d-vigor-atk").value,
     buff: $("#d-buff").value, debuff: $("#d-debuff").value,
     critical: $("#d-crit").checked ? "1" : "0",
     shield: $("#d-shield").checked ? "1" : "0",
+    def_stack_pct: defStackPct, def_stack_max: defStackMax,
+    hp_recover_pct: hpRecPct, hp_recover_threshold: hpRecTh,
+    crit_damage_bonus: attackerCritDmg(calcSel.lastAbilities || {}),
   });
-  const d = await api("/api/damage?" + q);
-  const names = {
-    character_stat_ratio: "角色属性差比", unit_stat_ratio: "机体属性差比",
-    character_sigmoid: "角色 sigmoid 修正", unit_sigmoid: "机体 sigmoid 修正",
-    base_damage: "基础伤害", attacker_combined_stat: "攻击方综合值",
-    target_combined_stat: "防御方综合值", damage_correction: "攻防修正",
-    battle_damage: "战斗伤害（地形修正后）",
-    total_damage_multiplier_percent: "总增伤倍率 %",
-    scaled_damage: "倍率加成伤害", combined_damage: "合并伤害（护盾）",
-    critical_correction_percent: "暴击修正 %", final_damage: "最终伤害",
-  };
-  $("#d-result").innerHTML =
-    d.steps.map(([k, v]) => `
-      <div class="step-row ${k === "final_damage" ? "final" : ""}">
-        <span class="lbl">${names[k] ?? k}</span>
-        <span class="val">${typeof v === "number" ? Math.round(v * 1000) / 1000 : v}</span>
-      </div>`).join("");
+  const d = await api("/api/damage-sim?" + q);
+  if (d.error) {
+    $("#d-result").innerHTML = `<div class="empty">${esc(d.error)}</div>`;
+    return;
+  }
+  const hits = d.hits || [];
+  const first = hits[0];
+  if (first) {
+    $("#d-summary").innerHTML =
+      `<div class="damage-final">本次攻击伤害 <b>${first.damage}</b></div>` +
+      `<div class="remain-hp">防御方剩余 HP：<b>${first.hp}</b>（${first.hp_pct}%）</div>`;
+  }
+  const totalDmg = hits.reduce((s, h) => s + h.damage, 0);
+  const avgDmg = hits.length ? Math.round(totalDmg / hits.length) : 0;
+  const finalDef = hits.length ? hits[hits.length - 1].defense : 0;
+  $("#d-result").innerHTML = hits.length ? `
+    <div class="sim-summary">
+      <span>共 <b>${hits.length}</b> 次攻击</span>
+      <span>总伤害 <b>${totalDmg}</b></span>
+      <span>平均每次 <b>${avgDmg}</b></span>
+      <span>最终防御 <b>${finalDef}</b></span>
+    </div>
+    <h3>逐次攻击明细</h3>
+    <table>
+      <tr><th>次数</th><th>防御</th><th>本次伤害</th><th>剩余HP</th><th>剩余%</th><th>触发</th></tr>
+      ${hits.map((h) => `
+        <tr class="${h.hp <= 0 ? "dead" : ""}">
+          <td class="mono">${h.n}</td>
+          <td class="mono">${h.defense}</td>
+          <td class="mono">${h.damage}</td>
+          <td class="mono">${h.hp}</td>
+          <td class="mono">${h.hp_pct}%</td>
+          <td>${h.recovered ? "HP恢复" : ""}</td>
+        </tr>`).join("")}
+    </table>` : '<div class="empty">无数据</div>';
 });
+
+function resetDamage() {
+  $("#d-aua").value = 3000;
+  $("#d-aca").value = 800;
+  $("#d-dud").value = 2800;
+  $("#d-dcd").value = 750;
+  $("#d-dhp").value = 0;
+  $("#d-wp").value = 5000;
+  $("#d-wtype").value = "—";
+  $("#d-wstat").value = "—";
+  $("#d-weapon-name").value = "—";
+  $("#d-wcrit").value = "—";
+  $("#d-wcritdmg").value = "—";
+  $("#d-terrain").value = 1.0;
+  $("#d-vigor-atk").value = "normal";
+  $("#d-vigor-def").value = "normal";
+  $("#d-buff").value = 0;
+  $("#d-debuff").value = 0;
+  $("#d-crit").checked = false;
+  $("#d-shield").checked = false;
+  calcSel.atkUnit = calcSel.atkPilot = null;
+  calcSel.defUnit = calcSel.defPilot = null;
+  calcSel.atkWeapon = null;
+  calcSel.atkSkills = [];
+  calcSel.defSkills = [];
+  calcSel.atkUOn = []; calcSel.atkPOn = [];
+  calcSel.defUOn = []; calcSel.defPOn = [];
+  calcSel.abInit = { atk_u: false, atk_p: false, def_u: false, def_p: false };
+  ["atk-unit-info", "atk-pilot-info", "def-unit-info", "def-pilot-info"].forEach((id) => {
+    $(`#${id}`).textContent = "";
+  });
+  ["#atk-unit-ab", "#atk-pilot-ab", "#def-unit-ab", "#def-pilot-ab"].forEach((id) => {
+    $(id).innerHTML = "";
+  });
+  $("#d-atk-skills").value = "—";
+  $("#d-def-skills").value = "—";
+  $("#atk-unit-star").classList.add("hidden");
+  $("#def-unit-star").classList.add("hidden");
+  $("#d-result").innerHTML = "";
+  $("#d-summary").innerHTML = "";
+}
+$("#d-reset").addEventListener("click", resetDamage);
 
 /* ---------- 工具栏事件 ---------- */
 $("#unit-search").addEventListener("click", () => {

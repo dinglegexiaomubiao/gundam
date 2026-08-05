@@ -236,8 +236,10 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--accent2); border-left: 3p
 .hint { color: var(--muted); font-size: 12px; margin: 6px 0 10px; }
 .cond-panel { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 14px; margin-top: 10px; background: var(--panel2); }
 .cond-panel h4 { color: var(--accent2); font-size: 14px; margin-bottom: 6px; }
-.calc-wrap { display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start; }
-.calc-side { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+.calc-wrap { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: 14px; align-items: start; }
+.calc-side { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.mods-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; align-items: end; }
+.calc-actions { display: flex; gap: 10px; margin-top: 14px; }
 .calc-side label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
 .calc-side input, .calc-side select { margin-top: 2px; }
 .pick-row { display: flex; gap: 6px; }
@@ -249,6 +251,33 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--accent2); border-left: 3p
 .pick-btn:hover { border-color: var(--accent2); color: var(--accent2); }
 .skill-pick { width: 100%; text-align: center; margin: -4px 0 10px; }
 .pick-info { font-size: 12px; color: var(--accent2); margin: -6px 0 10px; min-height: 16px; }
+.ab-head { display: block; font-size: 13px; color: var(--muted); margin: 4px 0 4px; }
+.ability-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.ab-row {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 10px; font-size: 12px; cursor: pointer;
+}
+.ab-row .ab-main { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ab-row .ab-name { font-weight: 600; color: var(--text); }
+.ab-row .muted { font-size: 11px; white-space: normal; }
+.ab-switch { width: auto; margin: 0; flex-shrink: 0; }
+.empty.small { padding: 8px; font-size: 12px; }
+.star-select { width: 100%; margin: -4px 0 10px; }
+.damage-final {
+  font-size: 14px; color: var(--muted); margin-bottom: 10px;
+  padding: 12px 14px; border: 1px solid var(--accent); border-radius: 10px;
+  background: var(--panel2);
+}
+.damage-final b { font-size: 26px; color: var(--accent2); }
+#d-result tr.dead { color: var(--accent); font-weight: 700; }
+.remain-hp {
+  font-size: 14px; color: var(--muted); margin-top: 8px;
+  padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel2);
+}
+.remain-hp b { color: var(--ok); font-size: 18px; }
+#d-summary { margin-top: 12px; }
 .picker-list .picker-row {
   display: flex; align-items: center; gap: 10px; padding: 8px 12px;
   border-bottom: 1px solid var(--line); cursor: pointer; font-size: 13px;
@@ -275,7 +304,17 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--accent2); border-left: 3p
 .picker-head .picker-sort:hover { color: var(--accent2); }
 .checks { display: flex; gap: 18px; margin: 6px 0 14px; }
 .checks label { flex-direction: row; align-items: center; gap: 6px; }
-.calc-result { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-height: 300px; }
+.calc-result { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; min-height: 0; max-height: 76vh; overflow-y: auto; }
+.ability-list { max-height: 210px; overflow-y: auto; padding-right: 4px; }
+.calc-side .pick-btn { padding: 4px 8px; font-size: 12px; }
+.calc-side .pick-row input { min-width: 0; }
+.calc-result h3 { margin-top: 4px; }
+.sim-summary {
+  display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 10px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel2); font-size: 13px; color: var(--muted);
+}
+.sim-summary b { color: var(--accent2); }
 .step-row { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 14px; }
 .step-row:last-child { border-bottom: none; }
 .step-row .lbl { color: var(--muted); }
