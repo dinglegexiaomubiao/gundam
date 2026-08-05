@@ -232,7 +232,7 @@
     <section id="tab-damage" class="tab">
       <div class="calc-wrap">
         <div class="calc-side">
-          <h3>攻击方</h3>
+          <h3 class="side-title">攻击方 <button type="button" class="reset-btn small" id="reset-atk">重置</button></h3>
           <label>机体攻击
             <span class="pick-row"><input id="d-aua" type="number" value="3000"><button type="button" class="pick-btn" id="pick-atk-unit">选择机体</button></span>
           </label>
@@ -252,9 +252,7 @@
           <label class="ab-head">驾驶员的角色能力</label>
           <div id="atk-pilot-ab" class="ability-list"></div>
           <button type="button" class="pick-btn skill-pick" id="pick-atk-skill">选择驾驶员技能</button>
-          <label>已选驾驶员技能
-            <span class="pick-row"><input id="d-atk-skills" type="text" readonly value="—"></span>
-          </label>
+          <div id="d-atk-skills" class="tagbar"></div>
           <label>武器威力
             <span class="pick-row"><input id="d-wp" type="number" value="5000"><button type="button" class="pick-btn" id="pick-weapon">选择武器</button></span>
           </label>
@@ -283,7 +281,7 @@
           </label>
         </div>
         <div class="calc-side">
-          <h3>防御方</h3>
+          <h3 class="side-title">防御方 <button type="button" class="reset-btn small" id="reset-def">重置</button></h3>
           <label>机体防御
             <span class="pick-row"><input id="d-dud" type="number" value="2800"><button type="button" class="pick-btn" id="pick-def-unit">选择机体</button></span>
           </label>
@@ -306,9 +304,7 @@
           <label class="ab-head">驾驶员的角色能力</label>
           <div id="def-pilot-ab" class="ability-list"></div>
           <button type="button" class="pick-btn skill-pick" id="pick-def-skill">选择驾驶员技能</button>
-          <label>已选驾驶员技能
-            <span class="pick-row"><input id="d-def-skills" type="text" readonly value="—"></span>
-          </label>
+          <div id="d-def-skills" class="tagbar"></div>
           <label>战意
             <select id="d-vigor-def">
               <option value="normal" selected>一般</option>
@@ -328,12 +324,16 @@
             </div>
           </div>
           <div class="calc-actions">
-            <button id="d-calc" class="primary">计算伤害</button>
             <button id="d-reset" class="reset-btn">重置</button>
           </div>
           <div id="d-summary"></div>
         </div>
-        <div id="d-result" class="calc-result"></div>
+        <div id="d-result" class="calc-result">
+          <div class="calc-result-head">
+            <button id="d-calc" class="primary">计算伤害</button>
+          </div>
+          <div id="d-result-body"></div>
+        </div>
       </div>
     </section>
 

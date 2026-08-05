@@ -51,6 +51,10 @@ _HP_RECOVER_RE = re.compile(
     r"自身HP为(\d+)%以下时，\s*自身HP恢复(\d+)%（1次）"
 )
 _CRIT_DMG_RE = re.compile(r"爆击损伤提升\s*(\d+)%")
+_STAT_COMBO_RE = re.compile(
+    r"((?:射击值|格斗值|觉醒值)(?:及|与|和)?(?:射击值|格斗值|觉醒值)?)提升\s*(\d+)%"
+)
+_STAT_ALIAS = {"射击值": "ranged", "格斗值": "melee", "觉醒值": "awaken"}
 _WA_MAP = {"Physical": 1, "Beam": 2, "Special": 3}
 
 
@@ -82,6 +86,14 @@ def _parse_ability_effects(d: str) -> list[dict]:
     m = _CRIT_DMG_RE.search(d)
     if m:
         effs.append({"kind": "crit_dmg", "pct": int(m.group(1))})
+    m = _STAT_COMBO_RE.search(d)
+    if m:
+        pct = int(m.group(2))
+        for name in _STAT_ALIAS:
+            if name in m.group(1):
+                effs.append({
+                    "kind": "stat_pct", "stat": _STAT_ALIAS[name], "pct": pct,
+                })
     return effs
 
 
@@ -1238,7 +1250,8 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
                      def_uid, def_usrc, def_pid, def_psrc,
                      weapon_attr, attack_attr, attr_nullify,
                      atk_u_on, atk_p_on, def_u_on, def_p_on,
-                     atk_star, def_star) -> dict:
+                     atk_star, def_star,
+                     atk_skill_ranged, atk_skill_melee, atk_skill_awaken) -> dict:
     """根据已选机体/驾驶员/武器 + 能力开关，计算加成与数值。"""
     conn = _conn()
     tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
@@ -1364,6 +1377,14 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
             for e in r["effects"] if e["kind"] == kind
         )
 
+    def sum_stat(rows, onset, stat):
+        return sum(
+            e["pct"]
+            for r in rows if r["row_id"] in onset
+            for e in r["effects"]
+            if e["kind"] == "stat_pct" and e.get("stat") == stat
+        )
+
     atk_damage = (
         auto_u_up + auto_p_up +
         sum_kind(atk_pilot_ab, on["atk_p"], "dmg_up")
@@ -1402,8 +1423,18 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
     atk_pilot_attack = None
     if atk_pilot and attack_attr_i in (1, 2, 3):
         key = {1: "ranged", 2: "melee", 3: "awaken"}[attack_attr_i]
+        skill_pcts = {
+            "ranged": atk_skill_ranged, "melee": atk_skill_melee, "awaken": atk_skill_awaken,
+        }
+        try:
+            skill_pct = float(skill_pcts.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            skill_pct = 0
+        ability_pct = sum_stat(atk_pilot_ab, on["atk_p"], key)
         atk_pilot_attack = star_value(
-            atk_pilot["stats"][key], atk_pilot["bonuses"].get(key, 0), 0
+            atk_pilot["stats"][key],
+            atk_pilot["bonuses"].get(key, 0) + ability_pct + skill_pct,
+            0,
         )[0]
     def_pilot_defense = None
     if def_pilot:
@@ -1519,7 +1550,10 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("attr_nullify", ["0"])[0],
                 q.get("atk_u_on", [""])[0], q.get("atk_p_on", [""])[0],
                 q.get("def_u_on", [""])[0], q.get("def_p_on", [""])[0],
-                q.get("atk_star", ["0"])[0], q.get("def_star", ["0"])[0]))
+                q.get("atk_star", ["0"])[0], q.get("def_star", ["0"])[0],
+                q.get("atk_skill_ranged", ["0"])[0],
+                q.get("atk_skill_melee", ["0"])[0],
+                q.get("atk_skill_awaken", ["0"])[0]))
         parts = path.split("/")
         if len(parts) == 5 and parts[1] == "api" and parts[2] == "pairing":
             kind, item_id = parts[3], parts[4]
