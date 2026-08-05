@@ -1,8 +1,8 @@
 const $ = (sel) => document.querySelector(sel);
 const state = {
-  units: { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", sort: "rarity", order: "desc", page: 0, size: 25 },
+  units: { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", cond: null, sort: "rarity", order: "desc", page: 0, size: 25 },
   characters: { q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", skills: [], skill_mode: "any", support: "", sort: "rarity", order: "desc", page: 0, size: 25 },
-  supporters: { q: "", tags: [], tag_mode: "any", sort: "rarity", order: "desc", page: 0, size: 25 },
+  supporters: { q: "", tags: [], tag_mode: "any", skills: [], skill_mode: "any", sort: "rarity", order: "desc", page: 0, size: 25 },
   stages: { q: "", page: 0, size: 25 },
   search: { type: "skill", kind: "all", q: "", sort: "rarity", order: "desc", page: 0, size: 25 },
 };
@@ -178,8 +178,10 @@ function bindSupporterConds() {
   document.querySelectorAll(".sup-cond").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (b.dataset.kind === "series") searchUnitsBySeries(Number(b.dataset.id));
-      else searchTag(b.dataset.name, "units");
+      const s = currentSupporter;
+      if (!s) return;
+      const g = s.cond_groups?.[Number(b.dataset.branch)];
+      if (g) searchUnitsByCond([condToBranch(g)]);
     }));
   const allBtn = $("#sup-all-targets");
   if (allBtn) allBtn.addEventListener("click", searchAllSupporterTargets);
@@ -188,27 +190,8 @@ function bindSupporterConds() {
 function searchAllSupporterTargets() {
   const s = currentSupporter;
   if (!s) return;
-  const conds = s.condition_tags || [];
-  const seriesIds = conds.filter((c) => c.kind === "series" && c.id).map((c) => c.id);
-  const tagNames = conds.filter((c) => c.kind === "tag").map((c) => c.name);
-  $("#modal").classList.add("hidden");
-  state.units.q = "";
-  state.units.series = seriesIds.join(",");
-  state.units.type = "";
-  state.units.tags = tagNames;
-  state.units.tag_mode = "any";
-  state.units.match = "or";
-  state.units.wfx = [];
-  state.units.wfx_mode = "any";
-  $("#unit-q").value = "";
-  $("#unit-type").value = "";
-  $("#unit-tag-mode").value = "any";
-  $("#unit-match").value = "or";
-  syncCombobox("#unit-series-box");
-  renderTagChips("unit");
-  renderWfxChips();
-  activateTab("units");
-  loadUnits(0);
+  const branches = (s.cond_groups || []).map(condToBranch);
+  if (branches.length) searchUnitsByCond(branches);
 }
 
 function searchByName(type, name) {
@@ -231,11 +214,13 @@ function searchUnitsBySeries(seriesId) {
   state.units.type = "";
   state.units.tags = [];
   state.units.wfx = [];
+  state.units.cond = null;
   $("#unit-q").value = "";
   $("#unit-type").value = "";
   syncCombobox("#unit-series-box");
   renderTagChips("unit");
   renderWfxChips();
+  renderUnitCondBar();
   activateTab("units");
   loadUnits(0);
 }
@@ -247,11 +232,13 @@ function searchUnitsByName(name) {
   state.units.type = "";
   state.units.tags = [];
   state.units.wfx = [];
+  state.units.cond = null;
   $("#unit-q").value = name;
   $("#unit-type").value = "";
   syncCombobox("#unit-series-box");
   renderTagChips("unit");
   renderWfxChips();
+  renderUnitCondBar();
   activateTab("units");
   loadUnits(0);
 }
@@ -263,11 +250,13 @@ function searchUnitsByType(role) {
   state.units.type = String(role);
   state.units.tags = [];
   state.units.wfx = [];
+  state.units.cond = null;
   $("#unit-q").value = "";
   $("#unit-type").value = String(role);
   syncCombobox("#unit-series-box");
   renderTagChips("unit");
   renderWfxChips();
+  renderUnitCondBar();
   activateTab("units");
   loadUnits(0);
 }
@@ -279,6 +268,7 @@ function searchUnitsByCombo(series, tags, mode) {
   state.units.tags = tags;
   state.units.tag_mode = "any";
   state.units.match = mode === "or" ? "or" : "and";
+  state.units.cond = null;
   state.units.type = "";
   state.units.wfx = [];
   $("#unit-q").value = "";
@@ -288,6 +278,72 @@ function searchUnitsByCombo(series, tags, mode) {
   syncCombobox("#unit-series-box");
   renderTagChips("unit");
   renderWfxChips();
+  renderUnitCondBar();
+  activateTab("units");
+  loadUnits(0);
+}
+
+function condModeLabel(mode) {
+  if (mode === "and") return "（交集）";
+  if (mode === "or") return "（并集）";
+  return "";
+}
+
+function condToBranch(g) {
+  return {
+    series: (g.series || []).map((x) => x.id),
+    tags: g.tags || [],
+    tag_mode: g.mode === "and" ? "all" : "any",
+  };
+}
+
+function renderUnitCondBar() {
+  const bar = $("#unit-cond-bar");
+  if (!bar) return;
+  const branches = state.units.cond || [];
+  if (!branches.length) {
+    bar.innerHTML = "";
+    return;
+  }
+  bar.innerHTML = `<span class="chip cond">词条对象筛选（${branches.length > 1
+    ? `${branches.length} 个分支的并集`
+    : "单分支"}）<button class="chip-x" id="unit-cond-clear" title="清除词条对象筛选">×</button></span>`;
+  const btn = $("#unit-cond-clear");
+  if (btn) btn.addEventListener("click", () => {
+    clearUnitCond();
+    loadUnits(0);
+  });
+}
+
+function clearUnitCond() {
+  state.units.cond = null;
+  renderUnitCondBar();
+}
+
+function searchUnitsByCond(branches) {
+  $("#modal").classList.add("hidden");
+  state.units.q = "";
+  state.units.rarity = "";
+  state.units.acq = "";
+  state.units.series = "";
+  state.units.type = "";
+  state.units.tags = [];
+  state.units.tag_mode = "all";
+  state.units.match = "and";
+  state.units.wfx = [];
+  state.units.wfx_mode = "any";
+  state.units.cond = branches;
+  $("#unit-q").value = "";
+  $("#unit-rarity").value = "";
+  $("#unit-acq").value = "";
+  $("#unit-type").value = "";
+  $("#unit-tag-mode").value = "all";
+  $("#unit-match").value = "and";
+  $("#unit-wfx-mode").value = "any";
+  syncCombobox("#unit-series-box");
+  renderTagChips("unit");
+  renderWfxChips();
+  renderUnitCondBar();
   activateTab("units");
   loadUnits(0);
 }
@@ -350,10 +406,12 @@ function searchTag(tag, kind) {
     state.units.type = "";
     state.units.wfx = [];
     state.units.wfx_mode = "any";
+    state.units.cond = null;
     $("#unit-type").value = "";
     syncCombobox("#unit-series-box");
     renderTagChips("unit");
     renderWfxChips();
+    renderUnitCondBar();
     activateTab("units");
     loadUnits(0);
   } else if (kind === "characters") {
@@ -497,12 +555,13 @@ function initCombobox(boxId, options, getVal, onPick, clearable) {
 async function initFilterControls() {
   const series = await api("/api/series");
   const seriesOpts = series.map((s) => ({ value: s.id, label: s.name }));
-  const [unitTags, charTags, supTags, skillNames, supportLabels] = await Promise.all([
+  const [unitTags, charTags, supTags, skillNames, supportLabels, supSkillNames] = await Promise.all([
     api("/api/tags?kind=unit"),
     api("/api/tags?kind=character"),
     api("/api/tags?kind=supporter"),
     api("/api/skillnames"),
     api("/api/support-labels"),
+    api("/api/supporter-skillnames"),
   ]);
   const tagOpts = (list) => list.map((t) => ({ value: t, label: t }));
   initCombobox("#unit-series-box", seriesOpts, () => state.units.series,
@@ -519,6 +578,8 @@ async function initFilterControls() {
     (v) => addWfxChip(v), false);
   initCombobox("#char-skill-box", tagOpts(skillNames), () => "",
     (v) => addSkillChip(v), false);
+  initCombobox("#sup-skill-box", tagOpts(supSkillNames), () => "",
+    (v) => addSupSkillChip(v), false);
   $("#char-support").innerHTML = '<option value="">全部支援次数</option>' +
     supportLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join("");
   initCombobox("#picker-series-box", seriesOpts, () => pickerState.series,
@@ -574,6 +635,28 @@ function addSkillChip(v) {
   renderSkillChips();
 }
 
+function renderSupSkillChips() {
+  const box = $("#sup-skill-chips");
+  if (!box) return;
+  box.innerHTML = state.supporters.skills.length
+    ? state.supporters.skills.map((v) =>
+        `<span class="chip sel-tag">${esc(v)}
+          <button class="chip-x" data-skill="${esc(v)}" title="移除">×</button>
+        </span>`).join("")
+    : "";
+  box.querySelectorAll(".chip-x").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.supporters.skills = state.supporters.skills.filter((v) => v !== b.dataset.skill);
+      renderSupSkillChips();
+    }));
+}
+
+function addSupSkillChip(v) {
+  if (!v || state.supporters.skills.includes(v)) return;
+  state.supporters.skills.push(v);
+  renderSupSkillChips();
+}
+
 function renderTagChips(kind) {
   const box = $({
     unit: "#unit-tag-chips",
@@ -624,6 +707,7 @@ async function loadUnits(page = state.units.page) {
     q: s.q, rarity: s.rarity, acq: s.acq, series: s.series, type: s.type,
     tags: s.tags.join(","), tag_mode: s.tag_mode,
     match: s.match, wfx: s.wfx.join(","), wfx_mode: s.wfx_mode,
+    cond: s.cond ? JSON.stringify(s.cond) : "",
     sort: s.sort, order: s.order,
     limit: s.size, offset: s.page * s.size,
   });
@@ -744,19 +828,22 @@ async function loadSupporters(page = state.supporters.page) {
   const s = state.supporters;
   const q = new URLSearchParams({
     q: s.q, tags: s.tags.join(","), tag_mode: s.tag_mode,
+    skills: s.skills.join(","), skill_mode: s.skill_mode,
     sort: s.sort, order: s.order,
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/supporters?" + q);
   $("#sup-count").textContent = `共 ${d.total} 条结果`;
   const route = { 1: "扭蛋", 2: "活动", 3: "商店", 4: "其他" };
+  renderSupSkillChips();
   $("#sup-list").innerHTML = d.items.length
     ? d.items.map((x) => `
       <div class="list-row sups" data-id="${x.id}">
         <span class="name">${esc(x.name)}</span>
         ${cell(rarityBadge(x.rarity))}
         <span class="sup-tags-cell">${(x.condition_tags || []).map((c) =>
-          `<span class="chip cond">${c.kind === "series" ? "系列 · " : "标签 · "}${esc(c.name)}</span>`).join("") || "—"}</span>
+          `<span class="chip cond">${esc(c.text)}${condModeLabel(c.mode)}</span>`).join("") || "—"}</span>
+        <span>${esc(x.active_skill || "—")}</span>
         <span class="num">+${x.max_hp_addition_value}</span>
         <span class="num">+${x.max_attack_addition_value}</span>
         <span>${route[x.acquisition_route] ?? x.acquisition_route}</span>
@@ -772,21 +859,67 @@ async function loadSupporters(page = state.supporters.page) {
 async function openSupporter(id) {
   const s = await api(`/api/supporters/${id}`);
   currentSupporter = s;
-  const rows = s.skills.map((sk) => `
-    <tr><td>${esc(sk.limit_break_step)}</td><td>${sk.skill_type === "leader" ? "队长技" : "主动技"}</td>
-      <td>${esc(sk.name || "—")}</td>
-      <td class="desc">${esc(sk.desc || "—")}${condChips(sk.conditions)}</td></tr>`).join("");
+  const maxStep = s.leader_skills.length
+    ? s.leader_skills[s.leader_skills.length - 1].step
+    : 0;
   showModal(s.name,
     `<p class="desc">${esc(s.obtained_word || s.desc || "暂无描述")}</p>
-     ${s.condition_tags && s.condition_tags.length ? `<h3 class="cond-head">词条对象（点击直接在机体中搜索）<button id="sup-all-targets" class="cond-btn" title="显示该支援角色所有可加成机体（系列与标签的并集）">显示所有影响对象</button></h3><div class="tags">${s.condition_tags.map((c) =>
-       `<button class="chip sup-cond" data-kind="${c.kind}" data-id="${c.id ?? ""}" data-name="${esc(c.name)}">${c.kind === "series" ? "系列 · " : "标签 · "}${esc(c.name)}</button>`).join("")}</div>` : ""}
      <h3>加成</h3>
      <table><tr><th>最大 HP 加成</th><th>最大攻击加成</th><th>稀有度</th></tr>
        <tr><td class="mono">+${s.max_hp_addition_value}</td><td class="mono">+${s.max_attack_addition_value}</td>
          <td>${rarityBadge(s.rarity)}</td></tr></table>
-     <h3>技能（按突破阶段）</h3>
-     <table><tr><th>突破</th><th>类型</th><th>名称</th><th>效果 / 词条对象</th></tr>${rows}</table>`);
+     <h3>主动技能</h3>
+     ${(s.active_skills || []).length ? `<div class="skills">${s.active_skills.map((a) => `
+       <div class="skill-block">
+         <div class="skill-name">${esc(a.name)}${a.is_auto_usage ? '<span class="chip">自动使用</span>' : ""}</div>
+         <div class="skill-desc">${esc(a.desc || "—")}</div>
+       </div>`).join("")}</div>` : '<div class="empty">暂无主动技能</div>'}
+     <h3>队长技能</h3>
+     <div class="star-bar" id="sup-lb-bar">
+       <span class="star-label">突破</span>
+       ${s.leader_skills.map((ls) =>
+         `<button class="star-btn ${ls.step === maxStep ? "active" : ""}" data-step="${ls.step}">突破 ${ls.step}</button>`).join("")}
+       <span class="cap-chip">默认显示满突破</span>
+     </div>
+     <div id="sup-leader-body"></div>
+     <h3 class="cond-head">词条对象（点击直接在机体中搜索）<button id="sup-all-targets" class="cond-btn" title="显示该支援角色所有可加成机体（各分支的并集）">显示所有影响对象</button></h3>
+     <div class="tags">${(s.cond_groups || []).map((g, i) =>
+       `${i ? '<span class="cond-or">或</span>' : ""}<button class="chip sup-cond" data-branch="${i}" title="点击搜索该分支的机体">${esc(g.text)}${condModeLabel(g.mode)}</button>`).join("") || '<span class="muted">无条件</span>'}</div>`);
+  renderSupporterLeaderStep(maxStep);
+  bindSupporterLeaderBar();
   bindSupporterConds();
+}
+
+function renderSupporterLeaderStep(step) {
+  const s = currentSupporter;
+  if (!s) return;
+  const ls = s.leader_skills.find((x) => x.step === Number(step))
+    || s.leader_skills[s.leader_skills.length - 1];
+  const body = $("#sup-leader-body");
+  if (!ls) {
+    body.innerHTML = '<div class="empty">暂无队长技能</div>';
+    return;
+  }
+  body.innerHTML = ls.branches.map((b, i) => `
+    <div class="effect-block">
+      <div class="effect">${esc(b.desc)}</div>
+      <div class="tags"><button class="chip sup-branch" data-branch="${i}" title="点击搜索该分支的机体">${esc(b.text)}${condModeLabel(b.mode)}</button></div>
+    </div>`).join("") || '<div class="empty">暂无加成分支</div>';
+  body.querySelectorAll(".sup-branch").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const g = ls.branches[Number(b.dataset.branch)];
+      if (g) searchUnitsByCond([condToBranch(g)]);
+    }));
+}
+
+function bindSupporterLeaderBar() {
+  document.querySelectorAll("#sup-lb-bar .star-btn").forEach((b) =>
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#sup-lb-bar .star-btn").forEach((x) =>
+        x.classList.toggle("active", x === b));
+      renderSupporterLeaderStep(b.dataset.step);
+    }));
 }
 
 /* ---------- 技能 / 能力 / 武装效果 查询 ---------- */
@@ -1702,6 +1835,7 @@ document.querySelectorAll(".sort-th").forEach((b) =>
 $("#sup-search").addEventListener("click", () => {
   state.supporters.q = $("#sup-q").value;
   state.supporters.tag_mode = $("#sup-tag-mode").value;
+  state.supporters.skill_mode = $("#sup-skill-mode").value;
   loadSupporters(0);
 });
 $("#sup-q").addEventListener("keydown", (e) => e.key === "Enter" && $("#sup-search").click());
@@ -1715,7 +1849,7 @@ $("#stage-q").addEventListener("keydown", (e) => e.key === "Enter" && $("#stage-
 function resetUnits() {
   Object.assign(state.units, {
     q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and",
-    wfx: [], wfx_mode: "any",
+    wfx: [], wfx_mode: "any", cond: null,
     sort: "rarity", order: "desc", page: 0,
   });
   $("#unit-q").value = "";
@@ -1728,6 +1862,7 @@ function resetUnits() {
   syncCombobox("#unit-series-box");
   renderTagChips("unit");
   renderWfxChips();
+  renderUnitCondBar();
   loadUnits(0);
 }
 function resetCharacters() {
@@ -1750,11 +1885,14 @@ function resetCharacters() {
 }
 function resetSupporters() {
   Object.assign(state.supporters, {
-    q: "", tags: [], tag_mode: "any", sort: "rarity", order: "desc", page: 0,
+    q: "", tags: [], tag_mode: "any", skills: [], skill_mode: "any",
+    sort: "rarity", order: "desc", page: 0,
   });
   $("#sup-q").value = "";
   $("#sup-tag-mode").value = "any";
+  $("#sup-skill-mode").value = "any";
   renderTagChips("sup");
+  renderSupSkillChips();
   loadSupporters(0);
   updateSortArrows("supporters");
 }

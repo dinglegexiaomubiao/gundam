@@ -82,6 +82,7 @@
       </div>
       <div id="unit-tag-chips" class="tagbar"></div>
       <div id="unit-wfx-chips" class="tagbar"></div>
+      <div id="unit-cond-bar" class="tagbar"></div>
       <div id="unit-count" class="result-count"></div>
       <div class="list-head units">
         <span><button class="sort-th" data-kind="units" data-sort="name">名称</button></span>
@@ -173,15 +174,25 @@
           <option value="any" selected>含任一标签</option>
           <option value="all">含全部标签</option>
         </select>
+        <div class="sbox" id="sup-skill-box">
+          <input class="sbox-input" placeholder="搜索/添加主动技…" autocomplete="off">
+          <div class="sbox-list hidden"></div>
+        </div>
+        <select id="sup-skill-mode">
+          <option value="any" selected>含任一主动技</option>
+          <option value="all">含全部主动技</option>
+        </select>
         <button id="sup-search">查询</button>
         <button id="sup-reset" class="reset-btn" title="重置筛选">重置</button>
       </div>
       <div id="sup-tag-chips" class="tagbar"></div>
+      <div id="sup-skill-chips" class="tagbar"></div>
       <div id="sup-count" class="result-count"></div>
       <div class="list-head sups">
         <span><button class="sort-th" data-kind="supporters" data-sort="name">名称</button></span>
         <span><button class="sort-th" data-kind="supporters" data-sort="rarity">稀有度</button></span>
         <span><button class="sort-th" data-kind="supporters" data-sort="conds">词条对象</button></span>
+        <span><button class="sort-th" data-kind="supporters" data-sort="skill">主动技</button></span>
         <span><button class="sort-th" data-kind="supporters" data-sort="hp">HP 加成</button></span>
         <span><button class="sort-th" data-kind="supporters" data-sort="atk">攻击加成</button></span>
         <span><button class="sort-th" data-kind="supporters" data-sort="route">获取途径</button></span>

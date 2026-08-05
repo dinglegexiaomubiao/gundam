@@ -365,6 +365,16 @@ def api_support_labels() -> list:
     return sorted(labels)
 
 
+def api_supporter_skillnames() -> list:
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT DISTINCT name FROM supporter_skill "
+        "WHERE skill_type = 'active' AND name != '' ORDER BY name"
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
 PICKER_SORT_KEYS = {
     "name": "name",
     "rarity": "rarity",
@@ -556,6 +566,28 @@ def _skill_where(skills: str, skill_mode: str):
     )
 
 
+def _supporter_active_skill_where(alias: str, skills: str, skill_mode: str):
+    """支援角色主动技筛选：技能名称多选（任一 / 全部）。"""
+    names = [s for s in (skills or "").split(",") if s]
+    if not names:
+        return "", []
+    if skill_mode == "all":
+        clauses = [
+            f"EXISTS (SELECT 1 FROM supporter_skill ss{i} "
+            f"WHERE ss{i}.supporter_id = {alias}.id "
+            f"AND ss{i}.skill_type = 'active' AND ss{i}.name = ?)"
+            for i in range(len(names))
+        ]
+        return "(" + " AND ".join(clauses) + ")", names
+    ph = ",".join("?" for _ in names)
+    return (
+        f"EXISTS (SELECT 1 FROM supporter_skill ss "
+        f"WHERE ss.supporter_id = {alias}.id "
+        f"AND ss.skill_type = 'active' AND ss.name IN ({ph}))",
+        names,
+    )
+
+
 def _tag_where(alias: str, tags: str, tag_mode: str):
     tag_list = [t for t in (tags or "").split(",") if t]
     if not tag_list:
@@ -688,7 +720,7 @@ def _wfx_where(wfx: str, wfx_mode: str):
 
 def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
               tags: str, tag_mode: str, match: str, wfx: str, wfx_mode: str,
-              sort: str, order: str, limit: int, offset: int) -> dict:
+              cond: str, sort: str, order: str, limit: int, offset: int) -> dict:
     where, args = [], []
     if q:
         where.append("(u.name LIKE ? OR u.short_name LIKE ?)")
@@ -706,6 +738,10 @@ def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
     if wfx_sql:
         where.append(wfx_sql)
         args += wfx_args
+    cond_sql, cond_args = _cond_where("u", cond)
+    if cond_sql:
+        where.append(cond_sql)
+        args += cond_args
     preds, f_args = _filter_predicates("u", series, type_, tags, tag_mode)
     if preds:
         join = " OR " if match == "or" else " AND "
@@ -893,35 +929,128 @@ def api_character_detail(char_id: int) -> dict | None:
     return c
 
 
-def _build_condition_tags(conditions: list[dict]) -> list[dict]:
+def _cond_mode(series_ids: list[int], tags: list[str]) -> str:
+    """一个条件分支内的组合语义：系列+标签=交集；多个系列/标签=并集。"""
+    if series_ids and tags:
+        return "and"
+    if len(series_ids) >= 2 or len(tags) >= 2:
+        return "or"
+    return "single"
+
+
+def _parse_id_list(raw) -> list[int]:
+    """兼容 JSON 数组（[2300]）与逗号字符串（"2300,2400"）两种形式。"""
+    if isinstance(raw, list):
+        return [int(x) for x in raw if str(x).strip().isdigit()]
+    return [
+        int(x) for x in str(raw or "").split(",")
+        if x.strip().isdigit()
+    ]
+
+
+def _cond_groups_from_conditions(conditions: list[dict], tag_by_id: dict,
+                                 series_by_id: dict) -> list[dict]:
+    """把支援角色队长技能的条件列表整理为“分支组”，保留并集/交集语义。
+
+    每个 condition 记录代表一个可加成分支；多个分支之间取并集（任一满足）。
+    """
     seen: set[tuple] = set()
-    cond_tags: list[dict] = []
+    groups: list[dict] = []
     for c in conditions:
-        for sid, name in zip(c.get("series_ids") or [], c.get("series") or []):
-            key = ("s", sid)
-            if key not in seen:
-                seen.add(key)
-                cond_tags.append({"kind": "series", "name": name, "id": sid})
-        for name in c.get("tags") or []:
-            key = ("t", name)
-            if key not in seen:
-                seen.add(key)
-                cond_tags.append({"kind": "tag", "name": name})
-    return cond_tags
+        series_ids = _parse_id_list(c.get("series_ids"))
+        tags = [t for t in (c.get("tags") or []) if t]
+        key = (tuple(sorted(series_ids)), tuple(sorted(tags)))
+        if key in seen:
+            continue
+        seen.add(key)
+        mode = _cond_mode(series_ids, tags)
+        text = (c.get("text") or "").strip()
+        if not text:
+            parts = []
+            if series_ids:
+                parts.append("系列：" + "、".join(
+                    series_by_id.get(s, f"#{s}") for s in series_ids
+                ))
+            if tags:
+                parts.append("标签：" + "、".join(tags))
+            text = "同组 · " + " · ".join(parts)
+        groups.append({
+            "text": text,
+            "mode": mode,
+            "series": [
+                {"id": s, "name": series_by_id.get(s, f"系列{s}")}
+                for s in series_ids
+            ],
+            "tags": tags,
+        })
+    return groups
+
+
+def _cond_where(alias: str, cond_raw: str):
+    """词条对象分支筛选：多个分支取并集，分支内系列/标签取交集。
+
+    分支格式: {"series": [id...], "tags": [名称...], "tag_mode": "any"|"all"}
+    """
+    try:
+        branches = json.loads(cond_raw or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return "", []
+    if not isinstance(branches, list) or not branches:
+        return "", []
+    ors: list[str] = []
+    args: list = []
+    for br in branches:
+        if not isinstance(br, dict):
+            continue
+        parts: list[str] = []
+        series = [s for s in (br.get("series") or []) if str(s).strip()]
+        if series:
+            ph = ",".join("?" for _ in series)
+            parts.append(
+                f"EXISTS (SELECT 1 FROM json_each({alias}.series_ids) je "
+                f"WHERE je.value IN ({ph}))"
+            )
+            args += [int(s) for s in series]
+        tags = [t for t in (br.get("tags") or []) if str(t).strip()]
+        if tags:
+            if br.get("tag_mode") == "all":
+                clauses = [
+                    f"EXISTS (SELECT 1 FROM json_each({alias}.tags) je{i} "
+                    f"WHERE je{i}.value = ?)"
+                    for i in range(len(tags))
+                ]
+                parts.append("(" + " AND ".join(clauses) + ")")
+                args += tags
+            else:
+                ph = ",".join("?" for _ in tags)
+                parts.append(
+                    f"EXISTS (SELECT 1 FROM json_each({alias}.tags) je "
+                    f"WHERE je.value IN ({ph}))"
+                )
+                args += tags
+        if parts:
+            ors.append("(" + " AND ".join(parts) + ")")
+    if not ors:
+        return "", []
+    return "(" + " OR ".join(ors) + ")", args
 
 
 SUPPORTER_SORT_KEYS = {
     "name": "name",
     "rarity": "rarity",
     "conds": "cond_key",
+    "skill": "active_skill",
     "hp": "hp",
     "atk": "atk",
     "route": "route",
 }
 
 
-def api_supporters(q: str, tags: str, tag_mode: str, sort: str, order: str,
-                   limit: int, offset: int) -> dict:
+def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: str,
+                   sort: str, order: str, limit: int, offset: int) -> dict:
+    conn = _conn()
+    tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
+    series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
     where, args = [], []
     if q:
         where.append("(s.name LIKE ? OR s.tags LIKE ?)")
@@ -930,8 +1059,11 @@ def api_supporters(q: str, tags: str, tag_mode: str, sort: str, order: str,
     if tag_sql:
         where.append(tag_sql)
         args += tag_args
+    skill_sql, skill_args = _supporter_active_skill_where("s", skills, skill_mode)
+    if skill_sql:
+        where.append(skill_sql)
+        args += skill_args
     w = ("WHERE " + " AND ".join(where)) if where else ""
-    conn = _conn()
     rows = _all(
         conn,
         f"""SELECT s.id, s.rarity, s.name, s.tags,
@@ -940,27 +1072,35 @@ def api_supporters(q: str, tags: str, tag_mode: str, sort: str, order: str,
            FROM supporter s {w} ORDER BY s.id""",
         args,
     )
-    conn.close()
     for r in rows:
         try:
             r["tags"] = json.loads(r.get("tags") or "[]")
         except (TypeError, json.JSONDecodeError):
             r["tags"] = []
     conds_by_sup: dict[int, list[dict]] = {}
-    conn = _conn()
     for sid, conds in conn.execute(
         "SELECT supporter_id, conditions FROM supporter_skill WHERE conditions != '[]'"
     ):
         conds_by_sup.setdefault(sid, []).extend(_json_list(conds))
+    active_skills: dict[int, list[str]] = {}
+    for sid, name in conn.execute(
+        "SELECT supporter_id, name FROM supporter_skill "
+        "WHERE skill_type = 'active' AND name != ''"
+    ):
+        if name not in active_skills.setdefault(sid, []):
+            active_skills[sid].append(name)
     conn.close()
     for r in rows:
-        r["condition_tags"] = _build_condition_tags(conds_by_sup.get(r["id"], []))
+        r["condition_tags"] = _cond_groups_from_conditions(
+            conds_by_sup.get(r["id"], []), tag_by_id, series_by_id
+        )
+        r["active_skill"] = "、".join(active_skills.get(r["id"], []))
         r["hp"] = r.get("max_hp_addition_value") or 0
         r["atk"] = r.get("max_attack_addition_value") or 0
         r["route"] = r.get("acquisition_route") or 0
         r["cond_key"] = (
             len(r["condition_tags"]),
-            " ".join(c["name"] for c in r["condition_tags"]),
+            " ".join(c["text"] for c in r["condition_tags"]),
         )
     if sort in SUPPORTER_SORT_KEYS:
         key = SUPPORTER_SORT_KEYS[sort]
@@ -980,22 +1120,93 @@ def api_supporter_detail(sup_id: int) -> dict | None:
     if not s:
         conn.close()
         return None
+    tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
+    series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
     skills = _all(
         conn,
         "SELECT * FROM supporter_skill WHERE supporter_id = ? ORDER BY limit_break_step, skill_type",
         (sup_id,),
     )
-    for sk in skills:
-        sk["conditions"] = _json_list(sk.get("conditions"))
     conn.close()
-    s["skills"] = skills
     s["tags"] = _json_list(s.get("tags"))
+    active: dict[str, dict] = {}
+    leader: dict[int, dict] = {}
     all_conds: list[dict] = []
     for sk in skills:
-        for c in sk.get("conditions") or []:
+        conds = _json_list(sk.get("conditions"))
+        for c in conds:
             all_conds.append(c)
-    s["condition_tags"] = _build_condition_tags(all_conds)
+        if (sk.get("skill_type") or "") == "active":
+            name = (sk.get("name") or "").strip() or "主动技能"
+            active.setdefault(name, {
+                "name": name,
+                "desc": sk.get("desc") or "",
+                "range_type": sk.get("range_type"),
+                "effect_range": sk.get("effect_range"),
+                "is_auto_usage": sk.get("is_auto_usage"),
+            })
+        else:
+            step = sk.get("limit_break_step") or 0
+            branches = _leader_branches(sk, conds, tag_by_id, series_by_id)
+            prev = leader.get(step)
+            if prev is None:
+                leader[step] = {
+                    "step": step,
+                    "desc": sk.get("desc") or "",
+                    "branches": branches,
+                }
+            else:
+                prev["branches"].extend(branches)
+    s["active_skills"] = list(active.values())
+    s["leader_skills"] = [leader[k] for k in sorted(leader)]
+    s["cond_groups"] = _cond_groups_from_conditions(
+        all_conds, tag_by_id, series_by_id
+    )
+    s["condition_tags"] = s["cond_groups"]
     return s
+
+
+def _leader_branches(sk: dict, conds: list[dict], tag_by_id: dict,
+                     series_by_id: dict) -> list[dict]:
+    """解析队长技能 traits → 各加成分支（效果描述 + 词条对象）。"""
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for i, t in enumerate(_json_list(sk.get("traits"))):
+        cond = (t.get("trait_condition") or [{}])[0] or {}
+        series_ids = _parse_id_list(cond.get("unit_series"))
+        tag_ids = [
+            int(x) for x in str(cond.get("unit_tags") or "").split(",")
+            if x.strip().isdigit()
+        ]
+        tags = [tag_by_id[tid] for tid in tag_ids if tid in tag_by_id]
+        key = (tuple(sorted(series_ids)), tuple(sorted(tags)))
+        if key in seen:
+            continue
+        seen.add(key)
+        mode = _cond_mode(series_ids, tags)
+        text = ""
+        if i < len(conds):
+            text = (conds[i].get("text") or "").strip()
+        if not text:
+            parts = []
+            if series_ids:
+                parts.append("系列：" + "、".join(
+                    series_by_id.get(x, f"#{x}") for x in series_ids
+                ))
+            if tags:
+                parts.append("标签：" + "、".join(tags))
+            text = "同组 · " + " · ".join(parts)
+        out.append({
+            "desc": (t.get("desc") or "").strip(),
+            "text": text,
+            "mode": mode,
+            "series": [
+                {"id": x, "name": series_by_id.get(x, f"系列{x}")}
+                for x in series_ids
+            ],
+            "tags": tags,
+        })
+    return out
 
 
 def _like_escape(q: str) -> str:
@@ -1534,6 +1745,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_skillnames())
         if path == "/api/support-labels":
             return self._send_json(api_support_labels())
+        if path == "/api/supporter-skillnames":
+            return self._send_json(api_supporter_skillnames())
         if path == "/api/units":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)
@@ -1542,7 +1755,7 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("acq", [""])[0], q.get("series", [""])[0], q.get("type", [""])[0],
                 q.get("tags", [""])[0], q.get("tag_mode", ["all"])[0],
                 q.get("match", ["and"])[0], q.get("wfx", [""])[0],
-                q.get("wfx_mode", ["any"])[0],
+                q.get("wfx_mode", ["any"])[0], q.get("cond", [""])[0],
                 q.get("sort", [""])[0], q.get("order", ["desc"])[0],
                 limit, offset))
         if path == "/api/characters":
@@ -1562,6 +1775,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_supporters(
                 q.get("q", [""])[0], q.get("tags", [""])[0],
                 q.get("tag_mode", ["any"])[0],
+                q.get("skills", [""])[0], q.get("skill_mode", ["any"])[0],
                 q.get("sort", [""])[0], q.get("order", ["desc"])[0],
                 limit, offset))
         if path == "/api/search":
