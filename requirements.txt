@@ -1,0 +1,1 @@
+# 本项目仅使用 Python 标准库（urllib / sqlite3 / concurrent.futures），无需额外依赖。

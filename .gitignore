@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.tmp
+data/raw/
+data/db/
+data/meta/
+.venv/
