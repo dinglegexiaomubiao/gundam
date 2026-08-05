@@ -18,18 +18,17 @@ body {
   display: flex;
   flex-direction: column;
 }
-html { overflow-y: scroll; }
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding: 14px 28px;
+  gap: 12px;
+  padding: 12px 20px;
   background: linear-gradient(180deg, #101722, #0b0f14);
   border-bottom: 2px solid var(--accent);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
-.brand { display: flex; align-items: center; gap: 14px; }
+.brand { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
 .logo {
   width: 52px; height: 52px;
   display: grid; place-items: center;
@@ -40,11 +39,12 @@ header {
 }
 .title { font-size: 20px; font-weight: 700; letter-spacing: 4px; }
 .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-nav { display: flex; gap: 6px; flex-wrap: wrap; }
+nav { display: flex; gap: 6px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
 nav button {
   background: transparent; color: var(--muted);
   border: 1px solid transparent; border-radius: 8px;
-  padding: 8px 14px; font-size: 14px; cursor: pointer; transition: .15s;
+  padding: 8px 10px; font-size: 14px; cursor: pointer; transition: .15s;
+  white-space: nowrap;
 }
 nav button:hover { color: var(--text); background: var(--panel2); }
 nav button.active {
