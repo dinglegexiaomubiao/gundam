@@ -308,6 +308,8 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 r["series_name"] = ""
                 r["role_label"] = "—"
                 r["role"] = 0
+                r["attack_bonus"] = 0
+                r["defense_bonus"] = 0
         else:
             where = ["u.name LIKE ? ESCAPE '\\'"]
             args: list = [like]
@@ -325,7 +327,7 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 f"""SELECT u.id, u.name, u.rarity,
                            u.role,
                            u.max_attack AS attack, u.max_defense AS defense,
-                           u.tags, s.name AS series_name
+                           u.tags, s.name AS series_name, u.stat_bonuses
                     FROM unit u LEFT JOIN series s ON s.id = u.series_id {w}
                     ORDER BY u.rarity DESC, u.id""",
                 args,
@@ -334,6 +336,11 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 r["source"] = "library"
                 r["tags"] = _json_list(r.get("tags"))
                 r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
+                bonuses = _json_dict(r.pop("stat_bonuses", None))
+                for k in ("attack", "defense"):
+                    v, b = star_value(r.get(k) or 0, bonuses.get(k, 0), 0)
+                    r[k] = v
+                    r[f"{k}_bonus"] = b
     elif kind == "pilots":
         if source == "enemy":
             total = conn.execute(
@@ -362,6 +369,7 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 r["series_name"] = ""
                 r["role_label"] = "—"
                 r["role"] = 0
+                r["defense_bonus"] = 0
         else:
             where = ["c.name LIKE ? ESCAPE '\\'"]
             args: list = [like]
@@ -380,7 +388,7 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                            c.role,
                            c.max_ranged AS ranged, c.max_melee AS melee,
                            c.max_awaken AS awaken, c.max_defense AS defense,
-                           c.tags, s.name AS series_name
+                           c.tags, s.name AS series_name, c.stat_bonuses
                     FROM character c LEFT JOIN series s ON s.id = c.series_id {w}
                     ORDER BY c.rarity DESC, c.id""",
                 args,
@@ -389,6 +397,12 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 r["source"] = "library"
                 r["tags"] = _json_list(r.get("tags"))
                 r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
+                bonuses = _json_dict(r.pop("stat_bonuses", None))
+                for k in ("ranged", "melee", "awaken", "defense"):
+                    v, b = star_value(r.get(k) or 0, bonuses.get(k, 0), 0)
+                    r[k] = v
+                    if k == "defense":
+                        r["defense_bonus"] = b
     conn.close()
     for r in items:
         r["tag_text"] = "、".join(r.get("tags") or [])

@@ -1017,8 +1017,11 @@ async function openPicker(kind, onPick, side) {
   });
   $("#picker-title").textContent =
     kind === "unit" ? "选择机体" : kind === "pilot" ? "选择驾驶员"
-    : kind === "weapon" ? "选择武器" : "选择技能";
-  $("#picker-source").style.display = (kind === "weapon" || kind === "skill") ? "none" : "";
+    : kind === "weapon" ? "选择武器"
+    : kind === "unitability" ? "选择单位能力"
+    : kind === "charability" ? "选择角色能力" : "选择技能";
+  $("#picker-source").style.display =
+    (kind === "weapon" || kind === "skill" || kind === "unitability" || kind === "charability") ? "none" : "";
   $("#picker-source").value = "library";
   $("#picker-q").value = "";
   $("#picker-rarity").value = "";
@@ -1075,23 +1078,27 @@ async function loadPicker(page = pickerState.page) {
     $("#picker-pager").innerHTML = "";
     return;
   }
-  if (s.kind === "skill") {
-    const pilot = s.side === "atk" ? calcSel.atkPilot : calcSel.defPilot;
-    if (!pilot || pilot.source !== "library") {
-      $("#picker-list").innerHTML = `<div class="empty">请先${s.side === "atk" ? "在攻击方" : "在防御方"}「选择驾驶员」选一位机体库驾驶员</div>`;
+  if (s.kind === "skill" || s.kind === "unitability" || s.kind === "charability") {
+    const owner = s.kind === "unitability"
+      ? (s.side === "atk" ? calcSel.atkUnit : calcSel.defUnit)
+      : (s.side === "atk" ? calcSel.atkPilot : calcSel.defPilot);
+    const what = s.kind === "unitability" ? "机体" : "驾驶员";
+    if (!owner || owner.source !== "library") {
+      $("#picker-list").innerHTML = `<div class="empty">请先${s.side === "atk" ? "在攻击方" : "在防御方"}「选择${what}」选${what === "机体" ? "一台" : "一位"}机体库${what}</div>`;
       $("#picker-pager").innerHTML = "";
       return;
     }
-    const d = await api(`/api/characters/${pilot.id}`);
-    const skills = d.skills || [];
-    $("#picker-list").innerHTML = skills.length ? skills.map((sk) => `
+    const ep = s.kind === "unitability" ? "units" : "characters";
+    const d = await api(`/api/${ep}/${owner.id}`);
+    const list = s.kind === "skill" ? (d.skills || []) : (d.abilities || []);
+    $("#picker-list").innerHTML = list.length ? list.map((sk) => `
       <div class="picker-row" data-s="${sk.id}">
         <span class="name">${esc(sk.name)}</span>
         <span class="muted">${esc((sk.effects || []).join("；").slice(0, 80))}</span>
       </div>`).join("") : '<div class="empty">该驾驶员暂无技能</div>';
     $("#picker-list").querySelectorAll(".picker-row").forEach((r) =>
       r.addEventListener("click", () => {
-        const sk = skills.find((x) => String(x.id) === r.dataset.s);
+        const sk = list.find((x) => String(x.id) === r.dataset.s);
         if (pickerState.onPick) pickerState.onPick(sk);
         $("#picker-modal").classList.add("hidden");
       }));
@@ -1125,6 +1132,8 @@ async function loadPicker(page = pickerState.page) {
       const st = { ranged: it.ranged, melee: it.melee, awaken: it.awaken };
       const best = Object.keys(st).reduce((a, b) => (st[a] >= st[b] ? a : b), "ranged");
       atk = `${st[best]}（${statLabel[best]}）`;
+    } else if (it.attack_bonus) {
+      atk = `${it.attack} (+${it.attack_bonus})`;
     }
     const tags = (it.tags || []).slice(0, 3).join("、") || "—";
     return `<div class="picker-row picker-grid" data-i="${it.id}">
@@ -1134,7 +1143,7 @@ async function loadPicker(page = pickerState.page) {
       <span class="muted">${esc(tags)}</span>
       <span class="muted">${esc(it.series_name || "—")}</span>
       <span class="num">${atk}</span>
-      <span class="num">${it.defense ?? "—"}</span>
+      <span class="num">${it.defense ?? "—"}${it.defense_bonus ? ` <span class="add">(+${it.defense_bonus})</span>` : ""}</span>
     </div>`;
   }).join("");
   const head = isEntity
@@ -1164,23 +1173,57 @@ async function loadPicker(page = pickerState.page) {
   pager("picker", d.total, s.page, s.size, loadPicker);
 }
 
-$("#pick-atk-unit").addEventListener("click", () => openPicker("unit", (it) => {
+async function fillAbilities(side, kind, owner) {
+  const el = $({
+    atk_unit: "#d-atk-unitability",
+    def_unit: "#d-def-unitability",
+    atk_char: "#d-atk-charability",
+    def_char: "#d-def-charability",
+  }[side + "_" + kind]);
+  if (!el) return;
+  if (!owner || owner.source !== "library") {
+    el.value = "—";
+    return;
+  }
+  try {
+    const d = await api(`/api/${kind === "unit" ? "units" : "characters"}/${owner.id}`);
+    const list = d.abilities || [];
+    el.value = list.map((a) => a.name).join("、") || "—";
+  } catch {
+    el.value = "—";
+  }
+}
+
+function pickInfoText(it) {
+  const role = it.role_label && it.role_label !== "—" ? " · " + it.role_label : "";
+  return it.name ? `${it.name}${role}` : "";
+}
+
+$("#pick-atk-unit").addEventListener("click", () => openPicker("unit", async (it) => {
   calcSel.atkUnit = it;
   $("#d-aua").value = it.attack ?? "";
+  $("#atk-unit-info").textContent = pickInfoText(it);
+  await fillAbilities("atk", "unit", it);
 }));
-$("#pick-def-unit").addEventListener("click", () => openPicker("unit", (it) => {
+$("#pick-def-unit").addEventListener("click", () => openPicker("unit", async (it) => {
   calcSel.defUnit = it;
   $("#d-dud").value = it.defense ?? "";
+  $("#def-unit-info").textContent = pickInfoText(it);
+  await fillAbilities("def", "unit", it);
 }));
-$("#pick-atk-pilot").addEventListener("click", () => openPicker("pilot", (it) => {
+$("#pick-atk-pilot").addEventListener("click", () => openPicker("pilot", async (it) => {
   calcSel.atkPilot = { id: it.id, source: it.source, ranged: it.ranged, melee: it.melee, awaken: it.awaken, defense: it.defense };
+  $("#atk-pilot-info").textContent = pickInfoText(it);
   const statMap = { 1: "ranged", 2: "melee", 3: "awaken" };
   const key = calcSel.atkWeapon ? statMap[calcSel.atkWeapon.attack_attr] : "ranged";
   $("#d-aca").value = (key && calcSel.atkPilot[key] != null) ? calcSel.atkPilot[key] : (it.ranged ?? "");
+  await fillAbilities("atk", "char", calcSel.atkPilot);
 }));
-$("#pick-def-pilot").addEventListener("click", () => openPicker("pilot", (it) => {
+$("#pick-def-pilot").addEventListener("click", () => openPicker("pilot", async (it) => {
   calcSel.defPilot = { id: it.id, source: it.source, ranged: it.ranged, melee: it.melee, awaken: it.awaken, defense: it.defense };
   $("#d-dcd").value = it.defense ?? "";
+  $("#def-pilot-info").textContent = pickInfoText(it);
+  await fillAbilities("def", "char", calcSel.defPilot);
 }));
 $("#pick-weapon").addEventListener("click", () => openPicker("weapon", null));
 

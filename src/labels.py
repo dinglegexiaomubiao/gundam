@@ -22,6 +22,7 @@ CHAR_STAT_KEYWORDS = {
     "射击值": "ranged",
     "格斗值": "melee",
     "防御力": "defense",
+    "守备值": "defense",
     "反应值": "reaction",
     "觉醒值": "awaken",
 }
