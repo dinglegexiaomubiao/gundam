@@ -233,13 +233,31 @@
       <div class="calc-wrap">
         <div class="calc-side">
           <h3>攻击方</h3>
-          <label>机体攻击 <input id="d-aua" type="number" value="3000"></label>
-          <label>驾驶员攻击 <input id="d-aca" type="number" value="800"></label>
+          <label>机体攻击
+            <span class="pick-row"><input id="d-aua" type="number" value="3000"><button type="button" class="pick-btn" id="pick-atk-unit">选择机体</button></span>
+          </label>
+          <label>驾驶员攻击
+            <span class="pick-row"><input id="d-aca" type="number" value="800"><button type="button" class="pick-btn" id="pick-atk-pilot">选择驾驶员</button></span>
+          </label>
+          <button type="button" class="pick-btn skill-pick" id="pick-atk-skill">选择驾驶员技能</button>
+          <label>武器威力
+            <span class="pick-row"><input id="d-wp" type="number" value="5000"><button type="button" class="pick-btn" id="pick-weapon">选择武器</button></span>
+          </label>
+          <label>武器类型
+            <span class="pick-row"><input id="d-wtype" type="text" value="—" readonly></span>
+          </label>
+          <label>武器依赖属性
+            <span class="pick-row"><input id="d-wstat" type="text" value="—" readonly></span>
+          </label>
           <h3>防御方</h3>
-          <label>机体防御 <input id="d-dud" type="number" value="2800"></label>
-          <label>驾驶员防御 <input id="d-dcd" type="number" value="750"></label>
-          <h3>武器与修正</h3>
-          <label>武器威力 <input id="d-wp" type="number" value="5000"></label>
+          <label>机体防御
+            <span class="pick-row"><input id="d-dud" type="number" value="2800"><button type="button" class="pick-btn" id="pick-def-unit">选择机体</button></span>
+          </label>
+          <label>驾驶员防御
+            <span class="pick-row"><input id="d-dcd" type="number" value="750"><button type="button" class="pick-btn" id="pick-def-pilot">选择驾驶员</button></span>
+          </label>
+          <button type="button" class="pick-btn skill-pick" id="pick-def-skill">选择驾驶员技能</button>
+          <h3>修正</h3>
           <label>地形倍率 <input id="d-terrain" type="number" step="0.1" value="1.0"></label>
           <label>战意
             <select id="d-vigor">
@@ -290,6 +308,47 @@
     <div class="modal-box">
       <div class="modal-head"><span id="modal-title"></span><button id="modal-close">×</button></div>
       <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="picker-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head"><span id="picker-title"></span><button id="picker-close">×</button></div>
+      <div class="toolbar">
+        <select id="picker-source">
+          <option value="library">机体库</option>
+          <option value="enemy">关卡敌人</option>
+        </select>
+        <input id="picker-q" placeholder="搜索名称…">
+        <select id="picker-rarity" class="picker-filter hidden">
+          <option value="">全部稀有度</option>
+          <option value="5">UR</option>
+          <option value="4">SSR</option>
+          <option value="3">SR</option>
+          <option value="2">R</option>
+          <option value="1">N</option>
+        </select>
+        <select id="picker-type" class="picker-filter hidden">
+          <option value="">全部类型</option>
+          <option value="1">攻击型</option>
+          <option value="2">耐久型</option>
+          <option value="3">支援型</option>
+        </select>
+        <div class="sbox picker-filter hidden" id="picker-series-box">
+          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off">
+          <div class="sbox-list hidden"></div>
+          <button class="sbox-clear hidden" type="button" title="清除">×</button>
+        </div>
+        <div class="sbox picker-filter hidden" id="picker-tag-box">
+          <input class="sbox-input" placeholder="搜索标签…" autocomplete="off">
+          <div class="sbox-list hidden"></div>
+          <button class="sbox-clear hidden" type="button" title="清除">×</button>
+        </div>
+        <button id="picker-search">查询</button>
+        <button id="picker-reset" class="reset-btn" title="重置筛选">重置</button>
+      </div>
+      <div id="picker-list" class="list picker-list"></div>
+      <div id="picker-pager" class="pager"></div>
     </div>
   </div>
 

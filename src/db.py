@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS faction (
   name TEXT
 );
 
+CREATE TABLE IF NOT EXISTS tag (
+  id INTEGER PRIMARY KEY,
+  name TEXT
+);
+
 CREATE TABLE IF NOT EXISTS unit (
   id INTEGER PRIMARY KEY,
   rarity INTEGER,
@@ -836,6 +841,10 @@ def build_db() -> None:
     conn.executescript(SCHEMA)
     print("构建 tag_id -> tag_name 映射…")
     tag_map = _build_tag_map()
+    conn.executemany(
+        "INSERT OR REPLACE INTO tag (id, name) VALUES (?,?)",
+        sorted(tag_map.items()),
+    )
     ingest_series_faction(conn)
     ingest_units(conn, tag_map)
     ingest_characters(conn, tag_map)

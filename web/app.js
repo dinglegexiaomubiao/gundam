@@ -77,10 +77,19 @@ function weaponEffects(w) {
     </div>`).join("");
 }
 
-function effectHtml(effects, fallback) {
+function effectHtml(effects, fallback, condEntities) {
   const list = (effects || []).filter(Boolean);
+  const ents = (condEntities || []).slice().sort((a, b) => b.name.length - a.name.length);
   if (!list.length) return esc(fallback || "—");
-  return list.map((e) => `<div class="effect">${esc(e)}</div>`).join("");
+  return list.map((e) => {
+    let html = esc(e);
+    ents.forEach((ent) => {
+      const escName = esc(ent.name);
+      const chip = `<button class="chip entity-chip" data-kind="${ent.kind}" data-id="${ent.id ?? ""}" data-name="${esc(ent.name)}" title="点击查询">${esc(ent.name)}</button>`;
+      html = html.split(escName).join(chip);
+    });
+    return `<div class="effect">${html}</div>`;
+  }).join("");
 }
 
 function condChips(conditions) {
@@ -123,6 +132,20 @@ function bindTagChips(root) {
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       showTagMenu(b.dataset.tag, e.clientX, e.clientY);
+    }));
+  (root || document).querySelectorAll(".cond-tag").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      searchTag(b.dataset.tag, "units");
+    }));
+  (root || document).querySelectorAll(".entity-chip").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const kind = b.dataset.kind;
+      if (kind === "unit") searchUnitsByName(b.dataset.name);
+      else if (kind === "series") searchUnitsBySeries(Number(b.dataset.id));
+      else if (kind === "tag") searchTag(b.dataset.name, "units");
+      else if (kind === "type") searchUnitsByType(b.dataset.id);
     }));
 }
 
@@ -201,6 +224,38 @@ function searchUnitsBySeries(seriesId) {
   state.units.wfx = [];
   $("#unit-q").value = "";
   $("#unit-type").value = "";
+  syncCombobox("#unit-series-box");
+  renderTagChips("unit");
+  renderWfxChips();
+  activateTab("units");
+  loadUnits(0);
+}
+
+function searchUnitsByName(name) {
+  $("#modal").classList.add("hidden");
+  state.units.q = name;
+  state.units.series = "";
+  state.units.type = "";
+  state.units.tags = [];
+  state.units.wfx = [];
+  $("#unit-q").value = name;
+  $("#unit-type").value = "";
+  syncCombobox("#unit-series-box");
+  renderTagChips("unit");
+  renderWfxChips();
+  activateTab("units");
+  loadUnits(0);
+}
+
+function searchUnitsByType(role) {
+  $("#modal").classList.add("hidden");
+  state.units.q = "";
+  state.units.series = "";
+  state.units.type = String(role);
+  state.units.tags = [];
+  state.units.wfx = [];
+  $("#unit-q").value = "";
+  $("#unit-type").value = String(role);
   syncCombobox("#unit-series-box");
   renderTagChips("unit");
   renderWfxChips();
@@ -434,6 +489,8 @@ async function initFilterControls() {
     (v) => addWfxChip(v), false);
   initCombobox("#char-skill-box", tagOpts(skillNames), () => "",
     (v) => addSkillChip(v), false);
+  initCombobox("#picker-series-box", seriesOpts, () => pickerState.series,
+    (v) => { pickerState.series = String(v); }, true);
 }
 
 function wfxLabel(v) {
@@ -577,7 +634,7 @@ async function openUnit(id) {
   const abilities = u.abilities.map((a) => `
     <tr>
       <td><button class="link-name" data-type="ability" data-name="${esc(a.name)}">${esc(a.name)}</button></td>
-      <td class="desc">${effectHtml(a.effects, a.desc)}</td>
+      <td class="desc">${effectHtml(a.effects, a.desc, a.cond_entities)}</td>
     </tr>`).join("");
   const t = u.terrain || {};
   const terrain = Object.entries({ 宇宙: t.space, 大气圈: t.atmospheric, 地面: t.ground, 水面: t.surface, 水中: t.underwater })
@@ -631,10 +688,10 @@ async function openCharacter(id) {
   const c = await api(`/api/characters/${id}`);
   const skills = c.skills.map((sk) => `
     <tr><td><button class="link-name" data-type="skill" data-name="${esc(sk.name)}">${esc(sk.name)}</button></td>
-      <td>${sk.sp ?? "—"}</td><td>${sk.duration ?? "—"}</td><td class="desc">${effectHtml(sk.effects, sk.desc)}</td></tr>`).join("");
+      <td>${sk.sp ?? "—"}</td><td>${sk.duration ?? "—"}</td><td class="desc">${effectHtml(sk.effects, sk.desc, sk.cond_entities)}</td></tr>`).join("");
   const abilities = c.abilities.map((a) => `
     <tr><td><button class="link-name" data-type="ability" data-name="${esc(a.name)}">${esc(a.name)}</button></td>
-      <td class="desc">${effectHtml(a.effects, a.desc)}</td></tr>`).join("");
+      <td class="desc">${effectHtml(a.effects, a.desc, a.cond_entities)}</td></tr>`).join("");
   showModal(c.name,
     `<p class="desc">${roleBadge(c.role, c.role_label)} ${esc(c.desc || "暂无描述")}</p>
      <div id="char-stats"></div>
@@ -935,6 +992,254 @@ async function openStage(id) {
 }
 
 /* ---------- 伤害计算 ---------- */
+const calcSel = { atkUnit: null, atkPilot: null, defUnit: null, defPilot: null };
+const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", sort: "rarity", order: "desc", page: 0, size: 20, onPick: null };
+
+async function initPickerTagBox(kind) {
+  if (kind !== "unit" && kind !== "pilot") return;
+  const t = await api(`/api/tags?kind=${kind === "unit" ? "unit" : "character"}`);
+  initCombobox("#picker-tag-box", t.map((x) => ({ value: x, label: x })),
+    () => pickerState.tags, (v) => { pickerState.tags = String(v); }, true);
+}
+
+function togglePickerFilters() {
+  const show = pickerState.source === "library" && (pickerState.kind === "unit" || pickerState.kind === "pilot");
+  ["#picker-rarity", "#picker-type", "#picker-series-box", "#picker-tag-box"].forEach((sel) => {
+    $(sel).classList.toggle("hidden", !show);
+  });
+}
+
+async function openPicker(kind, onPick, side) {
+  Object.assign(pickerState, {
+    kind, side: side || "", q: "", source: "library",
+    rarity: "", type: "", series: "", tags: "",
+    sort: "rarity", order: "desc", page: 0, onPick,
+  });
+  $("#picker-title").textContent =
+    kind === "unit" ? "选择机体" : kind === "pilot" ? "选择驾驶员"
+    : kind === "weapon" ? "选择武器" : "选择技能";
+  $("#picker-source").style.display = (kind === "weapon" || kind === "skill") ? "none" : "";
+  $("#picker-source").value = "library";
+  $("#picker-q").value = "";
+  $("#picker-rarity").value = "";
+  $("#picker-type").value = "";
+  syncCombobox("#picker-series-box");
+  syncCombobox("#picker-tag-box");
+  $("#picker-modal").classList.remove("hidden");
+  await initPickerTagBox(kind);
+  togglePickerFilters();
+  loadPicker();
+}
+
+function showPickerHint(text) {
+  pickerState.kind = "";
+  $("#picker-title").textContent = "提示";
+  $("#picker-source").style.display = "none";
+  $("#picker-list").innerHTML = `<div class="empty">${esc(text)}</div>`;
+  $("#picker-pager").innerHTML = "";
+  $("#picker-modal").classList.remove("hidden");
+}
+
+async function loadPicker(page = pickerState.page) {
+  pickerState.page = page;
+  const s = pickerState;
+  if (s.kind === "weapon") {
+    const u = calcSel.atkUnit;
+    if (!u || u.source !== "library") {
+      $("#picker-list").innerHTML = '<div class="empty">请先在攻击方「选择机体」选一台机体库中的机体</div>';
+      $("#picker-pager").innerHTML = "";
+      return;
+    }
+    const d = await api(`/api/units/${u.id}`);
+    const weapons = d.weapons || [];
+    $("#picker-list").innerHTML = weapons.length ? weapons.map((w) => `
+      <div class="picker-row" data-w="${w.id}">
+        <span class="name">${esc(w.name)}</span>
+        <span class="muted">威力 ${w.power_lv5 ?? w.power}</span>
+        <span class="muted">${esc(w.weapon_attr_label ?? "")} ${esc(w.pilot_stat ?? "")}</span>
+      </div>`).join("") : '<div class="empty">该机体暂无武器数据</div>';
+    $("#picker-list").querySelectorAll(".picker-row").forEach((r) =>
+      r.addEventListener("click", () => {
+        const w = weapons.find((x) => String(x.id) === r.dataset.w);
+        calcSel.atkWeapon = w;
+        $("#d-wp").value = w.power_lv5 ?? w.power;
+        $("#d-wtype").value = w.weapon_attr_label ?? "—";
+        $("#d-wstat").value = w.pilot_stat ?? "—";
+        const statMap = { 1: "ranged", 2: "melee", 3: "awaken" };
+        const key = statMap[w.attack_attr];
+        if (key && calcSel.atkPilot && calcSel.atkPilot[key] != null) {
+          $("#d-aca").value = calcSel.atkPilot[key];
+        }
+        $("#picker-modal").classList.add("hidden");
+      }));
+    $("#picker-pager").innerHTML = "";
+    return;
+  }
+  if (s.kind === "skill") {
+    const pilot = s.side === "atk" ? calcSel.atkPilot : calcSel.defPilot;
+    if (!pilot || pilot.source !== "library") {
+      $("#picker-list").innerHTML = `<div class="empty">请先${s.side === "atk" ? "在攻击方" : "在防御方"}「选择驾驶员」选一位机体库驾驶员</div>`;
+      $("#picker-pager").innerHTML = "";
+      return;
+    }
+    const d = await api(`/api/characters/${pilot.id}`);
+    const skills = d.skills || [];
+    $("#picker-list").innerHTML = skills.length ? skills.map((sk) => `
+      <div class="picker-row" data-s="${sk.id}">
+        <span class="name">${esc(sk.name)}</span>
+        <span class="muted">${esc((sk.effects || []).join("；").slice(0, 80))}</span>
+      </div>`).join("") : '<div class="empty">该驾驶员暂无技能</div>';
+    $("#picker-list").querySelectorAll(".picker-row").forEach((r) =>
+      r.addEventListener("click", () => {
+        const sk = skills.find((x) => String(x.id) === r.dataset.s);
+        if (pickerState.onPick) pickerState.onPick(sk);
+        $("#picker-modal").classList.add("hidden");
+      }));
+    $("#picker-pager").innerHTML = "";
+    return;
+  }
+  const ep = s.kind === "unit" ? "units" : "pilots";
+  const params = new URLSearchParams({
+    q: s.q, source: s.source, limit: s.size, offset: s.page * s.size,
+  });
+  if (s.source === "library") {
+    params.set("rarity", s.rarity);
+    params.set("type", s.type);
+    params.set("series", s.series);
+    params.set("tags", s.tags);
+  }
+  params.set("sort", s.sort);
+  params.set("order", s.order);
+  const d = await api(`/api/picker/${ep}?` + params);
+  const isEntity = s.kind === "unit" || s.kind === "pilot";
+  const statLabel = { ranged: "射击值", melee: "格斗值", awaken: "觉醒值" };
+  const body = d.items.map((it) => {
+    if (!isEntity) {
+      return `<div class="picker-row" data-i="${it.id}">
+        <span class="name">${esc(it.name)}</span>
+        <span class="muted">${it.level ? "Lv." + it.level : ""}</span>
+      </div>`;
+    }
+    let atk = it.attack ?? "";
+    if (s.kind === "pilot") {
+      const st = { ranged: it.ranged, melee: it.melee, awaken: it.awaken };
+      const best = Object.keys(st).reduce((a, b) => (st[a] >= st[b] ? a : b), "ranged");
+      atk = `${st[best]}（${statLabel[best]}）`;
+    }
+    const tags = (it.tags || []).slice(0, 3).join("、") || "—";
+    return `<div class="picker-row picker-grid" data-i="${it.id}">
+      <span class="name">${esc(it.name)}</span>
+      ${it.rarity ? rarityBadge(it.rarity) : "<span>—</span>"}
+      <span>${it.role_label ? roleBadge(it.role, it.role_label) : "—"}</span>
+      <span class="muted">${esc(tags)}</span>
+      <span class="muted">${esc(it.series_name || "—")}</span>
+      <span class="num">${atk}</span>
+      <span class="num">${it.defense ?? "—"}</span>
+    </div>`;
+  }).join("");
+  const head = isEntity
+    ? '<div class="picker-grid picker-head">' + [
+        ["name", "名称"], ["rarity", "稀有度"], ["type", "类型"], ["tags", "标签"],
+        ["series", "系列"], ["attack", "攻击力"], ["defense", "防御力"],
+      ].map(([k, label]) =>
+        `<span><button class="sort-th picker-sort" data-sort="${k}">${label}${pickerState.sort === k ? (pickerState.order === "asc" ? " ▲" : " ▼") : ""}</button></span>`).join("") + '</div>'
+    : "";
+  $("#picker-list").innerHTML = d.items.length ? head + body : '<div class="empty">无结果</div>';
+  $("#picker-list").querySelectorAll(".picker-sort").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (pickerState.sort === b.dataset.sort) {
+        pickerState.order = pickerState.order === "asc" ? "desc" : "asc";
+      } else {
+        pickerState.sort = b.dataset.sort;
+        pickerState.order = "desc";
+      }
+      loadPicker(0);
+    }));
+  $("#picker-list").querySelectorAll(".picker-row").forEach((r) =>
+    r.addEventListener("click", () => {
+      const it = d.items.find((x) => String(x.id) === r.dataset.i);
+      if (pickerState.onPick) pickerState.onPick(it);
+      $("#picker-modal").classList.add("hidden");
+    }));
+  pager("picker", d.total, s.page, s.size, loadPicker);
+}
+
+$("#pick-atk-unit").addEventListener("click", () => openPicker("unit", (it) => {
+  calcSel.atkUnit = it;
+  $("#d-aua").value = it.attack ?? "";
+}));
+$("#pick-def-unit").addEventListener("click", () => openPicker("unit", (it) => {
+  calcSel.defUnit = it;
+  $("#d-dud").value = it.defense ?? "";
+}));
+$("#pick-atk-pilot").addEventListener("click", () => openPicker("pilot", (it) => {
+  calcSel.atkPilot = { id: it.id, source: it.source, ranged: it.ranged, melee: it.melee, awaken: it.awaken, defense: it.defense };
+  const statMap = { 1: "ranged", 2: "melee", 3: "awaken" };
+  const key = calcSel.atkWeapon ? statMap[calcSel.atkWeapon.attack_attr] : "ranged";
+  $("#d-aca").value = (key && calcSel.atkPilot[key] != null) ? calcSel.atkPilot[key] : (it.ranged ?? "");
+}));
+$("#pick-def-pilot").addEventListener("click", () => openPicker("pilot", (it) => {
+  calcSel.defPilot = { id: it.id, source: it.source, ranged: it.ranged, melee: it.melee, awaken: it.awaken, defense: it.defense };
+  $("#d-dcd").value = it.defense ?? "";
+}));
+$("#pick-weapon").addEventListener("click", () => openPicker("weapon", null));
+
+function pickSkill(side) {
+  const pilot = side === "atk" ? calcSel.atkPilot : calcSel.defPilot;
+  if (!pilot || pilot.source !== "library") {
+    showPickerHint(`请先${side === "atk" ? "在攻击方" : "在防御方"}「选择驾驶员」选一位机体库驾驶员`);
+    return;
+  }
+  openPicker("skill", (sk) => {
+    let buff = 0, debuff = 0;
+    (sk.effects || []).forEach((e) => {
+      const m1 = e.match(/损伤提升\s*(\d+)%/);
+      if (m1) buff += Number(m1[1]);
+      const m2 = e.match(/损伤减轻\s*(\d+)%/);
+      if (m2) debuff += Number(m2[1]);
+    });
+    if (buff && side === "atk") {
+      $("#d-buff").value = Number($("#d-buff").value || 0) + buff;
+    }
+    if (debuff && side === "def") {
+      $("#d-debuff").value = Number($("#d-debuff").value || 0) + debuff;
+    }
+  }, side);
+}
+$("#pick-atk-skill").addEventListener("click", () => pickSkill("atk"));
+$("#pick-def-skill").addEventListener("click", () => pickSkill("def"));
+
+$("#picker-search").addEventListener("click", () => {
+  pickerState.q = $("#picker-q").value;
+  pickerState.source = $("#picker-source").value;
+  pickerState.rarity = $("#picker-rarity").value;
+  pickerState.type = $("#picker-type").value;
+  loadPicker(0);
+});
+$("#picker-reset").addEventListener("click", () => {
+  Object.assign(pickerState, {
+    q: "", rarity: "", type: "", series: "", tags: "",
+    sort: "rarity", order: "desc", page: 0,
+  });
+  $("#picker-q").value = "";
+  $("#picker-rarity").value = "";
+  $("#picker-type").value = "";
+  syncCombobox("#picker-series-box");
+  syncCombobox("#picker-tag-box");
+  loadPicker(0);
+});
+$("#picker-source").addEventListener("change", () => {
+  pickerState.source = $("#picker-source").value;
+  pickerState.page = 0;
+  togglePickerFilters();
+  loadPicker(0);
+});
+$("#picker-q").addEventListener("keydown", (e) => e.key === "Enter" && $("#picker-search").click());
+$("#picker-close").addEventListener("click", () => $("#picker-modal").classList.add("hidden"));
+$("#picker-modal").addEventListener("click", (e) => {
+  if (e.target === $("#picker-modal")) $("#picker-modal").classList.add("hidden");
+});
+
 $("#d-calc").addEventListener("click", async () => {
   const q = new URLSearchParams({
     aua: $("#d-aua").value, aca: $("#d-aca").value,
@@ -1118,7 +1423,10 @@ $("#modal").addEventListener("click", (e) => {
   if (e.target === $("#modal")) $("#modal").classList.add("hidden");
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") $("#modal").classList.add("hidden");
+  if (e.key === "Escape") {
+    $("#modal").classList.add("hidden");
+    $("#picker-modal").classList.add("hidden");
+  }
 });
 
 /* ---------- 配对 ---------- */

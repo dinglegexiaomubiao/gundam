@@ -73,6 +73,9 @@ def _resolve_condition(
         parts.append("系列：" + "、".join(series))
     if not tags and not series:
         return ""
+    role = cond.get("unit_role")
+    if role is not None and str(role).isdigit() and int(role) in UNIT_ROLE_NAMES:
+        parts.append("类型：" + UNIT_ROLE_NAMES[int(role)])
     return " · ".join(parts)
 
 
@@ -115,6 +118,7 @@ def parse_ability_stat_bonuses(
         text = _resolve_condition(active_condition, tag_map, series_by_id)
         if not text:
             text = " · ".join(leading) if leading else clause
+        text, _ = resolve_trait_text(text, active_condition, tag_map, series_by_id)
         for key in keys:
             conds.append({"stat": key, "pct": pct, "condition": text})
     return uncond, conds
@@ -148,6 +152,81 @@ WEAPON_ATTR = {
 SUPPORTER_SKILL_TYPE = {"leader": "队长技", "active": "主动技"}
 ACQUISITION_ROUTE = {1: "扭蛋", 2: "活动", 3: "商店", 4: "其他"}
 TARGET_LABEL = {"Owner": "自身", "SameGroup": "同组"}
+UNIT_ROLE_NAMES = {1: "攻击型", 2: "耐久型", 3: "支援型"}
+
+
+def resolve_trait_text(
+    desc: str, active_condition, tag_by_id, series_by_id, unit_by_id=None
+):
+    """把效果文本里的 上述“类型/标签/系列” 占位符替换为实际指定名称。
+
+    返回 (替换后的文本, 实体列表 [{kind, name, id}])。
+    """
+    cond = active_condition or {}
+    text = desc or ""
+    tag_items: list[tuple] = []
+    series_items: list[tuple] = []
+    type_items: list[tuple] = []
+    unit_items: list[tuple] = []
+
+    for tid in str(cond.get("unit_tags") or "").split(","):
+        tid = tid.strip()
+        if tid and tid.isdigit() and int(tid) in (tag_by_id or {}):
+            name = tag_by_id[int(tid)]
+            if (int(tid), name) not in tag_items:
+                tag_items.append((int(tid), name))
+    series_obj = cond.get("series")
+    if isinstance(series_obj, dict) and series_obj.get("name"):
+        series_items.append((series_obj.get("id"), series_obj["name"]))
+    for sid in str(cond.get("unit_series") or "").split(","):
+        sid = sid.strip()
+        if sid and sid.isdigit() and int(sid) in (series_by_id or {}):
+            name = series_by_id[int(sid)]
+            if (int(sid), name) not in series_items:
+                series_items.append((int(sid), name))
+    role = cond.get("unit_role")
+    if role is not None and str(role).isdigit() and int(role) in UNIT_ROLE_NAMES:
+        type_items.append((int(role), UNIT_ROLE_NAMES[int(role)]))
+    for uid in str(cond.get("unit_ids") or "").split(","):
+        uid = uid.strip()
+        if uid and uid.isdigit() and int(uid) in (unit_by_id or {}):
+            name = unit_by_id[int(uid)]
+            if (int(uid), name) not in unit_items:
+                unit_items.append((int(uid), name))
+
+    tag_names = [n for _, n in tag_items]
+    series_names = [n for _, n in series_items]
+    type_names = [n for _, n in type_items]
+    unit_names = [n for _, n in unit_items]
+
+    def repl(m):
+        kind = m.group(1)
+        if "标签／系列" in kind or "标签/系列" in kind:
+            names = tag_names + series_names
+            return "、".join(names) if names else kind
+        if kind in ("类型", "タイプ"):
+            return "、".join(type_names) if type_names else kind
+        if kind == "标签":
+            return "、".join(tag_names) if tag_names else kind
+        if kind == "系列":
+            return "、".join(series_names) if series_names else kind
+        return kind
+
+    text = re.sub(
+        r"上述[“”‘’\"'『』]?(标签／系列|标签/系列|类型|标签|系列)[“”‘’\"'『』]?",
+        repl,
+        text,
+    )
+    entities: list[dict] = [
+        {"kind": "tag", "name": n, "id": i} for i, n in tag_items
+    ] + [
+        {"kind": "series", "name": n, "id": i} for i, n in series_items
+    ] + [
+        {"kind": "type", "name": n, "id": i} for i, n in type_items
+    ] + [
+        {"kind": "unit", "name": n, "id": i} for i, n in unit_items
+    ]
+    return text, entities
 
 
 def parse_weapon_effects(growth_traits) -> list[dict]:

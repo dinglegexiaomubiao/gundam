@@ -26,6 +26,7 @@ from .labels import (
     SUPPORTER_SKILL_TYPE,
     ULTIMATE_TAG,
     WEAPON_ATTR,
+    resolve_trait_text,
     star_value,
 )
 
@@ -70,6 +71,27 @@ def _trait_descs(traits_raw: str) -> list[str]:
         if d:
             out.append(d)
     return out
+
+
+def _trait_effects(traits_raw: str, tag_by_id: dict, series_by_id: dict, unit_by_id: dict):
+    """解析能力 traits：占位符替换 + 收集实际条件实体（标签/系列/类型/机体）。"""
+    effects: list[str] = []
+    entities: list[dict] = []
+    seen: set[tuple] = set()
+    for t in _json_list(traits_raw):
+        d = (t.get("desc") or "").strip()
+        if not d:
+            continue
+        resolved, ents = resolve_trait_text(
+            d, t.get("active_condition"), tag_by_id, series_by_id, unit_by_id
+        )
+        effects.append(resolved)
+        for ent in ents:
+            key = (ent["kind"], ent.get("id"), ent["name"])
+            if key not in seen:
+                seen.add(key)
+                entities.append(ent)
+    return effects, entities
 
 
 def _json_dict(raw):
@@ -241,6 +263,151 @@ def api_skillnames() -> list:
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+
+PICKER_SORT_KEYS = {
+    "name": "name",
+    "rarity": "rarity",
+    "type": "role",
+    "tags": "tag_text",
+    "series": "series_name",
+    "attack": "atk",
+    "defense": "defense",
+}
+
+
+def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
+               series: str, tags: str, sort: str, order: str,
+               limit: int, offset: int) -> dict:
+    """伤害计算器的机体/驾驶员选择器：机体库 或 关卡敌人。"""
+    like = f"%{_like_escape(q)}%" if q else "%"
+    conn = _conn()
+    items: list[dict] = []
+    total = 0
+    if kind == "units":
+        if source == "enemy":
+            total = conn.execute(
+                "SELECT COUNT(DISTINCT unit_id) FROM stage_map_npc "
+                "WHERE unit_name LIKE ? ESCAPE '\\'", (like,)
+            ).fetchone()[0]
+            items = _all(
+                conn,
+                f"""SELECT n.unit_id AS id, n.unit_name AS name, n.level,
+                           n.attack, n.defense
+                    FROM stage_map_npc n
+                    JOIN (SELECT unit_id, MAX(level) AS ml FROM stage_map_npc
+                          GROUP BY unit_id) m
+                      ON n.unit_id = m.unit_id AND n.level = m.ml
+                    WHERE n.unit_name LIKE ? ESCAPE '\\'
+                    ORDER BY n.unit_name""",
+                (like,),
+            )
+            for r in items:
+                r["source"] = "enemy"
+                r["tags"] = []
+                r["series_name"] = ""
+                r["role_label"] = "—"
+                r["role"] = 0
+        else:
+            where = ["u.name LIKE ? ESCAPE '\\'"]
+            args: list = [like]
+            if rarity:
+                where.append("u.rarity = ?")
+                args.append(int(rarity))
+            preds, f_args = _filter_predicates("u", series, type_, tags, "any")
+            if preds:
+                where.append(" AND ".join(preds))
+                args += f_args
+            w = "WHERE " + " AND ".join(where)
+            total = conn.execute(f"SELECT COUNT(*) FROM unit u {w}", args).fetchone()[0]
+            items = _all(
+                conn,
+                f"""SELECT u.id, u.name, u.rarity,
+                           u.role,
+                           u.max_attack AS attack, u.max_defense AS defense,
+                           u.tags, s.name AS series_name
+                    FROM unit u LEFT JOIN series s ON s.id = u.series_id {w}
+                    ORDER BY u.rarity DESC, u.id""",
+                args,
+            )
+            for r in items:
+                r["source"] = "library"
+                r["tags"] = _json_list(r.get("tags"))
+                r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
+    elif kind == "pilots":
+        if source == "enemy":
+            total = conn.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM stage_map_npc_character "
+                "WHERE IFNULL(character_name,'') LIKE ? ESCAPE '\\' "
+                "GROUP BY character_id, IFNULL(character_name,''))", (like,)
+            ).fetchone()[0]
+            items = _all(
+                conn,
+                f"""SELECT c.character_id AS id, c.character_name AS name, c.level,
+                           c.ranged, c.melee, c.awaken, c.defense
+                    FROM stage_map_npc_character c
+                    JOIN (SELECT character_id, character_name, MAX(level) AS ml
+                          FROM stage_map_npc_character
+                          GROUP BY character_id, IFNULL(character_name,'')) m
+                      ON c.character_id = m.character_id
+                     AND IFNULL(c.character_name,'') = IFNULL(m.character_name,'')
+                     AND c.level = m.ml
+                    WHERE IFNULL(c.character_name,'') LIKE ? ESCAPE '\\'
+                    ORDER BY c.character_name""",
+                (like,),
+            )
+            for r in items:
+                r["source"] = "enemy"
+                r["tags"] = []
+                r["series_name"] = ""
+                r["role_label"] = "—"
+                r["role"] = 0
+        else:
+            where = ["c.name LIKE ? ESCAPE '\\'"]
+            args: list = [like]
+            if rarity:
+                where.append("c.rarity = ?")
+                args.append(int(rarity))
+            preds, f_args = _filter_predicates("c", series, type_, tags, "any")
+            if preds:
+                where.append(" AND ".join(preds))
+                args += f_args
+            w = "WHERE " + " AND ".join(where)
+            total = conn.execute(f"SELECT COUNT(*) FROM character c {w}", args).fetchone()[0]
+            items = _all(
+                conn,
+                f"""SELECT c.id, c.name, c.rarity,
+                           c.role,
+                           c.max_ranged AS ranged, c.max_melee AS melee,
+                           c.max_awaken AS awaken, c.max_defense AS defense,
+                           c.tags, s.name AS series_name
+                    FROM character c LEFT JOIN series s ON s.id = c.series_id {w}
+                    ORDER BY c.rarity DESC, c.id""",
+                args,
+            )
+            for r in items:
+                r["source"] = "library"
+                r["tags"] = _json_list(r.get("tags"))
+                r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
+    conn.close()
+    for r in items:
+        r["tag_text"] = "、".join(r.get("tags") or [])
+        if kind == "pilots":
+            r["atk"] = max(
+                r.get("ranged") or 0, r.get("melee") or 0, r.get("awaken") or 0
+            )
+        else:
+            r["atk"] = r.get("attack") or 0
+    if sort in PICKER_SORT_KEYS:
+        key = PICKER_SORT_KEYS[sort]
+        fallback = 0 if key in ("rarity", "atk", "defense") else ""
+        items.sort(
+            key=lambda x: (x.get(key) or fallback, x.get("id") or 0),
+            reverse=(order != "asc"),
+        )
+    else:
+        items.sort(key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0))
+    return {"total": total, "items": items[offset:offset + limit]}
 
 
 def _skill_where(skills: str, skill_mode: str):
@@ -476,9 +643,14 @@ def api_unit_detail(unit_id: int) -> dict | None:
         "SELECT * FROM unit_ability WHERE unit_id = ? ORDER BY sort",
         (unit_id,),
     )
-    for a in abilities:
-        a["effects"] = _trait_descs(a.get("traits"))
     series = _one(conn, "SELECT name FROM series WHERE id = ?", (u.get("series_id"),))
+    tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
+    series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
+    unit_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM unit")}
+    for a in abilities:
+        a["effects"], a["cond_entities"] = _trait_effects(
+            a.get("traits"), tag_by_id, series_by_id, unit_by_id
+        )
     conn.close()
     u["series_name"] = series["name"] if series else None
     u["role_label"] = ROLE_NAMES.get(u.get("role"), "—")
@@ -560,15 +732,22 @@ def api_character_detail(char_id: int) -> dict | None:
         "SELECT * FROM character_skill WHERE character_id = ? ORDER BY sort",
         (char_id,),
     )
-    for sk in skills:
-        sk["effects"] = _trait_descs(sk.get("traits"))
     abilities = _all(
         conn,
         "SELECT * FROM character_ability WHERE character_id = ? ORDER BY sort",
         (char_id,),
     )
+    tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
+    series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
+    unit_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM unit")}
+    for sk in skills:
+        sk["effects"], sk["cond_entities"] = _trait_effects(
+            sk.get("traits"), tag_by_id, series_by_id, unit_by_id
+        )
     for a in abilities:
-        a["effects"] = _trait_descs(a.get("traits"))
+        a["effects"], a["cond_entities"] = _trait_effects(
+            a.get("traits"), tag_by_id, series_by_id, unit_by_id
+        )
     conn.close()
     c["tags"] = json.loads(c.get("tags") or "[]")
     c["role_label"] = ROLE_NAMES.get(c.get("role"), "—")
@@ -920,6 +1099,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_search(
                 q.get("type", [""])[0], q.get("q", [""])[0],
                 q.get("kind", ["all"])[0],
+                q.get("sort", [""])[0], q.get("order", ["desc"])[0],
+                limit, offset))
+        if path == "/api/picker/units" or path == "/api/picker/pilots":
+            kind = path.split("/")[-1]
+            limit = min(int(q.get("limit", ["20"])[0]), 100)
+            offset = max(int(q.get("offset", ["0"])[0]), 0)
+            return self._send_json(api_picker(
+                kind, q.get("q", [""])[0], q.get("source", ["library"])[0],
+                q.get("rarity", [""])[0], q.get("type", [""])[0],
+                q.get("series", [""])[0], q.get("tags", [""])[0],
                 q.get("sort", [""])[0], q.get("order", ["desc"])[0],
                 limit, offset))
         if path == "/api/stages":
