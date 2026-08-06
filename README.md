@@ -58,6 +58,9 @@ $env:NEON_DB_URL = "postgresql://user:pass@host/db?sslmode=require"
 python scripts/pipeline.py serve          # 本地无库时自动：云端恢复 -> 失败则空库启动
 ```
 
+也可以把连接串写到项目根目录的 `.env` 文件（参考 `.env.example`，`.env` 已被 git 忽略，
+不会提交），启动时自动读取，无需每次手动设置环境变量。
+
 向云端上传本地数据使用迁移脚本（同样依赖 `NEON_DB_URL`）：
 
 ```powershell
