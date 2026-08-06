@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import re
 import subprocess
 import sqlite3
 import sys
@@ -44,6 +45,277 @@ TABLE_ORDER = [
 
 def get_cloud_url() -> str:
     return os.environ.get("NEON_DB_URL", "").strip()
+
+
+def _map_type(t: str) -> str:
+    t = t.upper()
+    if "INT" in t:
+        return "BIGINT"
+    if t.startswith(("REAL", "FLOA", "DOUB")):
+        return "DOUBLE PRECISION"
+    if "BLOB" in t:
+        return "BYTEA"
+    return "TEXT"
+
+
+def _split_top(s: str) -> list[str]:
+    """按顶层逗号拆分 CREATE TABLE 的字段/约束列表。"""
+    parts: list[str] = []
+    depth = 0
+    cur: list[str] = []
+    for ch in s:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        parts.append("".join(cur).strip())
+    return parts
+
+
+def _quote_ids(ids: str) -> str:
+    return ", ".join(f'"{x.strip()}"' for x in ids.split(",") if x.strip())
+
+
+def _translate_ddl(sqlite_sql: str) -> str:
+    m = re.match(
+        r"CREATE\s+TABLE\s+(\w+)\s*\((.*)\)\s*$", sqlite_sql.strip(), re.S | re.I
+    )
+    if not m:
+        raise ValueError(f"无法解析建表语句: {sqlite_sql[:80]}")
+    tname = m.group(1)
+    body = m.group(2)
+    cols: list[str] = []
+    for chunk in _split_top(body):
+        upper = chunk.upper()
+        if upper.startswith("UNIQUE"):
+            um = re.match(r"UNIQUE\s*\((.+)\)", chunk, re.S | re.I)
+            if not um:
+                raise ValueError(f"UNIQUE 解析失败: {chunk}")
+            cols.append(f"UNIQUE ({_quote_ids(um.group(1))})")
+        elif upper.startswith("FOREIGN KEY"):
+            fm = re.match(
+                r"FOREIGN\s+KEY\s*\((.+)\)\s*REFERENCES\s+(\w+)\s*\((.+)\)",
+                chunk, re.S | re.I,
+            )
+            if not fm:
+                raise ValueError(f"FOREIGN KEY 解析失败: {chunk}")
+            cols.append(
+                f"FOREIGN KEY ({_quote_ids(fm.group(1))}) "
+                f'REFERENCES "{fm.group(2)}" ({_quote_ids(fm.group(3))})'
+            )
+        else:
+            cm = re.match(r"^([A-Za-z_][\w]*)\s+(\S+)\s*(.*)$", chunk, re.S)
+            if not cm:
+                raise ValueError(f"字段定义解析失败: {chunk}")
+            cname, ctype, rest = cm.group(1), cm.group(2), cm.group(3).strip()
+            rest = re.sub(r"PRIMARY\s+KEY", "PRIMARY KEY", rest, flags=re.I)
+            rest = rest.replace("AUTOINCREMENT", " ").strip()
+            cols.append(f'"{cname}" {_map_type(ctype)} {rest}'.rstrip())
+    return f'CREATE TABLE "{tname}" (\n  ' + ",\n  ".join(cols) + "\n)"
+
+
+def _translate_index(idx_sql: str) -> str:
+    m = re.match(
+        r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(\w+)\s+ON\s+(\w+)\s*\((.+)\)",
+        idx_sql.strip(), re.S | re.I,
+    )
+    if not m:
+        raise ValueError(f"索引解析失败: {idx_sql[:80]}")
+    return f'CREATE INDEX "{m.group(1)}" ON "{m.group(2)}" ({_quote_ids(m.group(3))})'
+
+
+def _local_schema() -> tuple[dict[str, str], list[str]]:
+    """读取本地 SQLite 的表定义与索引。"""
+    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    try:
+        tables: dict[str, str] = {}
+        indexes: list[str] = []
+        for typ, name, sql in con.execute(
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE sql IS NOT NULL ORDER BY rowid"
+        ):
+            if typ == "table":
+                if name != "sqlite_sequence":
+                    tables[name] = sql
+            elif typ == "index" and not name.startswith("sqlite_autoindex"):
+                indexes.append(sql)
+    finally:
+        con.close()
+    return tables, indexes
+
+
+def _local_counts() -> dict[str, int] | None:
+    """各表行数；数据库缺失或损坏返回 None。"""
+    if not config.DB_PATH.exists():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+        try:
+            return {
+                t: con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                for t in TABLE_ORDER
+            }
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+
+
+def upload_local_db_to_cloud(url: str | None = None) -> dict:
+    """把本地 SQLite 全量重建到云端（覆盖），逐表校验行数后返回结果。"""
+    url = direct_cloud_url(url)
+    if not url:
+        return {"ok": False, "message": "未设置 NEON_DB_URL"}
+    if not config.DB_PATH.exists():
+        return {"ok": False, "message": f"本地数据库不存在: {config.DB_PATH}"}
+    tables, indexes = _local_schema()
+    missing = [t for t in TABLE_ORDER if t not in tables]
+    if missing:
+        return {"ok": False, "message": f"本地缺少表: {missing}"}
+    import psycopg  # 延迟导入
+
+    counts: dict[str, int] = {}
+    try:
+        with psycopg.connect(url, connect_timeout=30) as conn:
+            conn.autocommit = False
+            with conn.cursor() as cur:
+                for tname in reversed(TABLE_ORDER):
+                    cur.execute(f'DROP TABLE IF EXISTS "{tname}" CASCADE')
+                for tname in TABLE_ORDER:
+                    cur.execute(_translate_ddl(tables[tname]))
+                for idx in indexes:
+                    cur.execute(_translate_index(idx))
+            conn.commit()
+            con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+            try:
+                with conn.cursor() as cur:
+                    for tname in TABLE_ORDER:
+                        rows = con.execute(f'SELECT * FROM "{tname}"')
+                        desc = [d[0] for d in rows.description]
+                        ph = ", ".join(["%s"] * len(desc))
+                        cols_sql = ", ".join(f'"{c}"' for c in desc)
+                        insert = (
+                            f'INSERT INTO "{tname}" ({cols_sql}) '
+                            f"VALUES ({ph})"
+                        )
+                        batch: list[tuple] = []
+                        n = 0
+                        for row in rows:
+                            batch.append(tuple(row))
+                            if len(batch) >= 2000:
+                                cur.executemany(insert, batch)
+                                batch = []
+                            n += 1
+                        if batch:
+                            cur.executemany(insert, batch)
+                        counts[tname] = n
+                conn.commit()
+            finally:
+                con.close()
+            mism: list[tuple] = []
+            with conn.cursor() as cur:
+                for tname in TABLE_ORDER:
+                    cur.execute(f'SELECT COUNT(*) FROM "{tname}"')
+                    cloud = cur.fetchone()[0]
+                    if cloud != counts.get(tname, 0):
+                        mism.append((tname, counts.get(tname, 0), cloud))
+        if mism:
+            return {
+                "ok": False,
+                "message": f"上传后校验不一致: {mism}",
+                "counts": counts,
+            }
+        return {"ok": True, "message": "已上传到服务器并校验一致", "counts": counts}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": str(exc), "counts": counts}
+
+
+def cloud_diff(url: str | None = None) -> dict:
+    """对比本地与云端的各表行数、构建时间与本地完整性。"""
+    url = direct_cloud_url(url)
+    if not url:
+        return {"ok": False, "error": "未配置 NEON_DB_URL"}
+    local_counts = _local_counts()
+    local_built = None
+    local_check = None
+    if local_counts is not None:
+        try:
+            con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+            try:
+                row = con.execute(
+                    "SELECT value FROM meta WHERE key='built_at'"
+                ).fetchone()
+                local_built = row[0] if row else None
+                local_check = con.execute("PRAGMA quick_check").fetchone()[0]
+            finally:
+                con.close()
+        except sqlite3.Error:
+            local_check = "error"
+    cloud_counts: dict[str, int] | None = None
+    cloud_built = None
+    cloud_error = None
+    try:
+        with _connect_pg(url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public'"
+                )
+                cloud_tables = {r[0] for r in cur.fetchall()}
+                cloud_counts = {}
+                for t in TABLE_ORDER:
+                    if t in cloud_tables:
+                        cur.execute(f'SELECT COUNT(*) FROM "{t}"')
+                        cloud_counts[t] = cur.fetchone()[0]
+                    else:
+                        cloud_counts[t] = -1
+                if "meta" in cloud_tables:
+                    cur.execute(
+                        "SELECT value FROM meta WHERE key = 'built_at'"
+                    )
+                    crow = cur.fetchone()
+                    cloud_built = crow[0] if crow else None
+    except Exception as exc:  # noqa: BLE001
+        cloud_error = str(exc)
+    if cloud_counts is None:
+        return {"ok": False, "error": f"无法连接云端：{cloud_error}"}
+    rows = []
+    total_local = total_cloud = 0
+    identical = True
+    for t in TABLE_ORDER:
+        loc = local_counts.get(t) if local_counts is not None else None
+        clo = cloud_counts.get(t, -1)
+        same = loc is not None and clo >= 0 and loc == clo
+        if not same:
+            identical = False
+        if loc is not None:
+            total_local += loc
+        if clo >= 0:
+            total_cloud += clo
+        rows.append({
+            "table": t,
+            "local": loc,
+            "cloud": None if clo < 0 else clo,
+            "same": same,
+        })
+    return {
+        "ok": True,
+        "local_exists": local_counts is not None,
+        "local_built_at": local_built,
+        "local_quick_check": local_check,
+        "cloud_exists": all(r["cloud"] is not None for r in rows),
+        "cloud_built_at": cloud_built,
+        "tables": rows,
+        "identical": identical,
+        "total_local": total_local,
+        "total_cloud": total_cloud,
+    }
 
 
 def direct_cloud_url(url: str | None = None) -> str:

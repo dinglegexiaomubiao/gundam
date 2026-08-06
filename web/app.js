@@ -491,6 +491,8 @@ async function loadSummary() {
       <button id="ov-export" class="cond-btn" title="下载当前数据库文件">导出数据库</button>
       <button id="ov-import" class="cond-btn" title="导入数据库备份文件（自动保存到本地）">导入数据库</button>
       <button id="ov-crawl" class="cond-btn" title="从 soshage 全量抓取并构建数据库（仅手动触发）">爬取数据</button>
+      <button id="ov-sync-up" class="cond-btn" title="以本地数据为准，覆盖云端服务器">上传本地到服务器</button>
+      <button id="ov-sync-down" class="cond-btn" title="以云端服务器数据为准，覆盖本地">服务器同步到本地</button>
       <input type="file" id="ov-import-file" accept=".db" class="hidden">
       <span id="ov-msg" class="muted"></span>
     </div>
@@ -500,13 +502,26 @@ async function loadSummary() {
       : "当前没有数据，可通过「导入数据库」恢复本地数据，或点击「爬取数据」全量抓取。"}<br>
     数据来源：soshage.com/gget（zh-CN），仅供个人研究。</p>`;
   bindOverviewActions(d);
-  const st = await api("/api/crawl-status");
-  if (st.running) {
-    $("#ov-export").disabled = true;
-    $("#ov-import").disabled = true;
-    $("#ov-crawl").disabled = true;
-    pollCrawlStatus($("#ov-crawl"), $("#ov-msg"));
+  const [cst, sst] = await Promise.all([
+    api("/api/crawl-status"),
+    api("/api/sync-status"),
+  ]);
+  if (cst.running || sst.running) {
+    disableOverviewButtons(true);
+    if (cst.running) {
+      pollCrawlStatus($("#ov-crawl"), $("#ov-msg"));
+    } else {
+      pollSyncStatus($("#ov-msg"));
+    }
   }
+}
+
+function disableOverviewButtons(disabled) {
+  ["#ov-export", "#ov-import", "#ov-crawl", "#ov-sync-up", "#ov-sync-down"]
+    .forEach((sel) => {
+      const b = $(sel);
+      if (b) b.disabled = disabled;
+    });
 }
 
 function bindOverviewActions(d) {
@@ -514,6 +529,8 @@ function bindOverviewActions(d) {
   const exportBtn = $("#ov-export");
   const importBtn = $("#ov-import");
   const crawlBtn = $("#ov-crawl");
+  const syncUpBtn = $("#ov-sync-up");
+  const syncDownBtn = $("#ov-sync-down");
   const fileInput = $("#ov-import-file");
   exportBtn.addEventListener("click", () => {
     if (!d.db_exists) {
@@ -523,6 +540,8 @@ function bindOverviewActions(d) {
     window.location.href = "/api/export";
   });
   importBtn.addEventListener("click", () => fileInput.click());
+  syncUpBtn.addEventListener("click", () => openSyncDiff("upload"));
+  syncDownBtn.addEventListener("click", () => openSyncDiff("download"));
   crawlBtn.addEventListener("click", async () => {
     if (!confirm("将开始全量爬取数据（耗时较长），确定继续？")) return;
     crawlBtn.disabled = true;
@@ -562,6 +581,96 @@ function bindOverviewActions(d) {
       msg.textContent = "导入失败：" + (e.message || e);
     }
   });
+}
+
+async function openSyncDiff(direction) {
+  const msg = $("#ov-msg");
+  msg.textContent = "正在对比本地与服务器数据…";
+  let res;
+  try {
+    res = await api("/api/sync-diff");
+  } catch (e) {
+    msg.textContent = "获取同步差异失败：" + (e.message || e);
+    return;
+  }
+  if (!res.ok) {
+    msg.textContent = res.error || "无法获取同步差异";
+    return;
+  }
+  const rows = (res.tables || []).map((t) => `
+    <tr>
+      <td>${esc(t.table)}</td>
+      <td class="mono">${t.local == null ? "缺失" : t.local}</td>
+      <td class="mono">${t.cloud == null ? "缺失" : t.cloud}</td>
+      <td>${t.same ? '<span class="chip cond">一致</span>' : '<span class="chip" style="border-color:#e05c5c;color:#ff8f8f">不同</span>'}</td>
+    </tr>`).join("");
+  const diffCount = (res.tables || []).filter((t) => !t.same).length;
+  const localMeta = res.local_built_at ? `构建于 ${esc(res.local_built_at)}` : "无构建记录";
+  const cloudMeta = res.cloud_built_at ? `构建于 ${esc(res.cloud_built_at)}` : "无构建记录";
+  const identicalNote = res.identical
+    ? '<p class="desc" style="color:var(--ok)">本地与服务器数据完全一致，无需同步。</p>'
+    : `<p class="desc">发现 ${diffCount} 张表存在差异。同步为整体覆盖（重建目标端），不会产生重复数据。请选择以哪边数据为准：</p>`;
+  showModal("同步数据",
+    `<div class="sync-info">
+       <div><b>本地</b>：${localMeta}${res.local_quick_check ? `（完整性：${esc(res.local_quick_check)}）` : ""}</div>
+       <div><b>服务器</b>：${cloudMeta}</div>
+       <div>合计：本地 ${res.total_local ?? "—"} 行 / 服务器 ${res.total_cloud ?? "—"} 行</div>
+     </div>
+     ${identicalNote}
+     <table><tr><th>表</th><th>本地行数</th><th>服务器行数</th><th>状态</th></tr>${rows}</table>
+     <div class="calc-actions">
+       ${res.identical ? `<button id="sync-close" class="cond-btn">关闭</button>` : `
+       <button id="sync-local" class="cond-btn" title="以本地为准，覆盖服务器">以本地为准（覆盖服务器）</button>
+       <button id="sync-cloud" class="cond-btn" title="以服务器为准，覆盖本地">以服务器为准（覆盖本地）</button>
+       <button id="sync-close" class="cond-btn">关闭</button>`}
+     </div>`);
+  const close = $("#sync-close");
+  if (close) close.addEventListener("click", () => $("#modal").classList.add("hidden"));
+  if (res.identical) return;
+  $("#sync-local").addEventListener("click", () => runSync("upload"));
+  $("#sync-cloud").addEventListener("click", () => runSync("download"));
+  function runSync(dir) {
+    $("#modal").classList.add("hidden");
+    msg.textContent = "正在开始同步…";
+    fetch("/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ direction: dir }),
+    }).then((r) => r.json()).then((res2) => {
+      if (!res2.ok) {
+        msg.textContent = res2.message || "启动同步失败";
+        return;
+      }
+      disableOverviewButtons(true);
+      pollSyncStatus(msg);
+    }).catch((e) => {
+      msg.textContent = "启动同步失败：" + (e.message || e);
+    });
+  }
+}
+
+function pollSyncStatus(msg) {
+  const tick = async () => {
+    try {
+      const res = await api("/api/sync-status");
+      if (res.running) {
+        msg.textContent = "正在同步中（" + (res.direction === "upload" ? "上传本地到服务器" : "服务器同步到本地") + "）…";
+        setTimeout(tick, 3000);
+        return;
+      }
+      disableOverviewButtons(false);
+      if (res.error) {
+        msg.textContent = "同步失败：" + res.error;
+      } else {
+        msg.textContent = "同步完成，两边数据已保持一致";
+        loadSummary();
+      }
+    } catch (e) {
+      disableOverviewButtons(false);
+      msg.textContent = "查询同步状态失败：" + (e.message || e);
+    }
+  };
+  setTimeout(tick, 2000);
 }
 
 function pollCrawlStatus(btn, msg) {

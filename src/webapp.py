@@ -16,6 +16,11 @@ from urllib.parse import parse_qs, urlparse
 import re
 
 from . import config
+from .cloud import (
+    cloud_diff,
+    restore_local_db_from_cloud,
+    upload_local_db_to_cloud,
+)
 from .damage import CRITICAL_CORRECTION, CombatantStats, DamageContext, calculate_damage
 from . import pairing
 from .db import build_db
@@ -45,6 +50,14 @@ _crawl_state: dict = {
     "started_at": None,
     "error": None,
 }
+_sync_lock = threading.Lock()
+_sync_state: dict = {
+    "running": False,
+    "direction": "",
+    "step": "",
+    "started_at": None,
+    "error": None,
+}
 
 
 def _run_crawl_worker() -> None:
@@ -67,7 +80,7 @@ def _run_crawl_worker() -> None:
 
 def start_crawl() -> dict:
     with _crawl_lock:
-        if _crawl_state["running"]:
+        if _crawl_state["running"] or _sync_state["running"]:
             return {"ok": False, "message": "爬取已在进行中"}
         threading.Thread(target=_run_crawl_worker, daemon=True).start()
         return {"ok": True, "message": "已开始爬取，完成后自动构建数据库"}
@@ -76,6 +89,49 @@ def start_crawl() -> dict:
 def crawl_status() -> dict:
     with _crawl_lock:
         return dict(_crawl_state)
+
+
+def _run_sync_worker(direction: str) -> None:
+    try:
+        _sync_state.update({
+            "running": True,
+            "direction": direction,
+            "step": "working",
+            "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "error": None,
+        })
+        if direction == "upload":
+            res = upload_local_db_to_cloud()
+            if not res.get("ok"):
+                _sync_state["error"] = res.get("message", "上传失败")
+        else:
+            if not restore_local_db_from_cloud():
+                _sync_state["error"] = (
+                    "同步失败（云端不可用或未配置 NEON_DB_URL）"
+                )
+        _sync_state["step"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        _sync_state["error"] = str(exc)
+    finally:
+        _sync_state["running"] = False
+
+
+def start_sync(direction: str) -> dict:
+    if direction not in ("upload", "download"):
+        return {"ok": False, "message": "无效的同步方向"}
+    with _sync_lock:
+        if _sync_state["running"] or _crawl_state["running"]:
+            return {"ok": False, "message": "已有任务在进行中"}
+        threading.Thread(
+            target=_run_sync_worker, args=(direction,), daemon=True
+        ).start()
+        label = "上传本地到服务器" if direction == "upload" else "服务器同步到本地"
+        return {"ok": True, "message": f"已开始同步（{label}）"}
+
+
+def sync_status() -> dict:
+    with _sync_lock:
+        return dict(_sync_state)
 
 UNIT_STAR_STATS = ("hp", "en", "attack", "defense", "mobility")
 CHAR_STAR_STATS = ("ranged", "melee", "defense", "reaction", "awaken")
@@ -1894,6 +1950,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_summary())
         if path == "/api/crawl-status":
             return self._send_json(crawl_status())
+        if path == "/api/sync-diff":
+            return self._send_json(cloud_diff())
+        if path == "/api/sync-status":
+            return self._send_json(sync_status())
         if path == "/api/export":
             if not config.DB_PATH.exists():
                 return self._send_json({"error": "数据库不存在"}, 404)
@@ -2047,6 +2107,17 @@ class Handler(BaseHTTPRequestHandler):
             api_path = self.path.split("?")[0]
             if api_path == "/api/crawl":
                 return self._send_json(start_crawl())
+            if api_path == "/api/sync":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        body = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                return self._send_json(start_sync(body.get("direction", "")))
             if api_path == "/api/import":
                 tmp = self._read_upload(max_bytes=512 * 1024 * 1024)
                 if tmp is None:
