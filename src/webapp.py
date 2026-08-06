@@ -19,6 +19,8 @@ from . import config
 from .cloud import (
     cloud_diff,
     restore_local_db_from_cloud,
+    unit_sync_diff,
+    unit_sync_push,
     upload_local_db_to_cloud,
 )
 from .damage import CRITICAL_CORRECTION, CombatantStats, DamageContext, calculate_damage
@@ -28,7 +30,9 @@ from .fetch import fetch_all
 from .labels import (
     ACQUISITION_ROUTE,
     ATTACK_ATTR,
+    ATTACK_ATTR_DEP_LABEL,
     ATTACK_ATTR_STAT,
+    ATTACK_ATTR_STATS,
     RARITY,
     STAR_LABEL,
     STAR_MULT,
@@ -60,7 +64,7 @@ _sync_state: dict = {
 }
 
 
-def _run_crawl_worker() -> None:
+def _run_crawl_worker(preserve_ids: list[int]) -> None:
     try:
         _crawl_state.update({
             "running": True,
@@ -68,9 +72,22 @@ def _run_crawl_worker() -> None:
             "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "error": None,
         })
+        from .cloud import _unit_local, restore_unit_locally
+
+        snapshots: dict[int, dict] = {}
+        for uid in preserve_ids:
+            snap = _unit_local(uid)
+            if snap:
+                snapshots[uid] = snap
         fetch_all()
         _crawl_state["step"] = "build"
         build_db()
+        for uid, snap in snapshots.items():
+            try:
+                restore_unit_locally(snap)
+                print(f"已保留机体编辑: {uid}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"保留机体 {uid} 失败: {exc}")
         _crawl_state["step"] = "done"
     except Exception as exc:  # noqa: BLE001
         _crawl_state["error"] = str(exc)
@@ -78,17 +95,39 @@ def _run_crawl_worker() -> None:
         _crawl_state["running"] = False
 
 
-def start_crawl() -> dict:
+def start_crawl(preserve: list | None = None) -> dict:
     with _crawl_lock:
         if _crawl_state["running"] or _sync_state["running"]:
             return {"ok": False, "message": "爬取已在进行中"}
-        threading.Thread(target=_run_crawl_worker, daemon=True).start()
-        return {"ok": True, "message": "已开始爬取，完成后自动构建数据库"}
+        preserve_ids = [
+            int(x) for x in (preserve or []) if str(x).strip().isdigit()
+        ]
+        threading.Thread(
+            target=_run_crawl_worker, args=(preserve_ids,), daemon=True
+        ).start()
+        return {
+            "ok": True,
+            "message": "已开始爬取，完成后自动构建数据库"
+            + (f"（保留 {len(preserve_ids)} 台机体的编辑）" if preserve_ids else ""),
+        }
 
 
 def crawl_status() -> dict:
     with _crawl_lock:
         return dict(_crawl_state)
+
+
+def api_crawl_edits() -> list:
+    """有本地编辑记录的机体列表（爬取前供用户勾选保留）。"""
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT u.id AS unit_id, u.name, COUNT(e.id) AS edits, "
+        "MAX(e.edited_at) AS last_edited "
+        "FROM unit_edit_log e JOIN unit u ON u.id = e.unit_id "
+        "GROUP BY u.id ORDER BY last_edited DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def _run_sync_worker(direction: str) -> None:
@@ -200,6 +239,16 @@ def _parse_ability_effects(d: str) -> list[dict]:
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _write_conn() -> sqlite3.Connection:
+    """可写连接（编辑保存等写操作使用，WAL 模式避免读写锁）。"""
+    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -928,9 +977,25 @@ def api_unit_detail(unit_id: int) -> dict | None:
         (unit_id,),
     )
     for w in weapons:
-        w["attack_attr_label"] = ATTACK_ATTR.get(w.get("attack_attr"), "—")
-        w["weapon_attr_label"] = WEAPON_ATTR.get(w.get("weapon_attr"), "—")
-        w["pilot_stat"] = ATTACK_ATTR_STAT.get(w.get("attack_attr"), "—")
+        aattr = w.get("attack_attr")
+        wattr = w.get("weapon_attr")
+        w["attack_attr_label"] = ATTACK_ATTR.get(aattr, "—")
+        w["weapon_attr_label"] = WEAPON_ATTR.get(wattr, "—")
+        w["pilot_stat"] = ATTACK_ATTR_DEP_LABEL.get(aattr, "—")
+        try:
+            raw_attrs = json.loads(w.get("weapon_attrs") or "[]")
+            attrs = (
+                [int(x) for x in raw_attrs]
+                if isinstance(raw_attrs, list) else []
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            attrs = []
+        if not attrs and wattr:
+            attrs = [wattr]
+        w["attrs"] = attrs
+        w["attrs_label"] = "、".join(
+            WEAPON_ATTR.get(x, f"#{x}") for x in attrs
+        ) or "—"
         try:
             w["effects"] = json.loads(w.get("weapon_effects") or "[]")
         except (TypeError, json.JSONDecodeError):
@@ -970,6 +1035,344 @@ def api_unit_detail(unit_id: int) -> dict | None:
     u["abilities"] = abilities
     u["skills"] = skills
     return u
+
+
+def api_weapon_effects() -> list:
+    """全库武器特效去重列表（名称 + 效果文本），供编辑选择器使用。"""
+    conn = _conn()
+    seen: dict[str, dict] = {}
+    for (we,) in conn.execute(
+        "SELECT weapon_effects FROM unit_weapon "
+        "WHERE weapon_effects NOT IN ('', '[]')"
+    ):
+        for e in _json_list(we):
+            name = (e.get("name") or "").strip()
+            if name and name not in seen:
+                seen[name] = {
+                    "name": name,
+                    "desc": (e.get("desc") or "").strip(),
+                }
+    conn.close()
+    return sorted(seen.values(), key=lambda x: x["name"])
+
+
+def api_abilities() -> list:
+    """全库能力去重列表（按 ability_id），供编辑选择器使用。"""
+    conn = _conn()
+    seen: dict[int, dict] = {}
+    for aid, name, desc, atype, traits in conn.execute(
+        "SELECT ability_id, name, desc, ability_type, traits "
+        "FROM unit_ability WHERE ability_id IS NOT NULL "
+        "ORDER BY ability_id"
+    ):
+        if aid not in seen:
+            seen[aid] = {
+                "ability_id": aid,
+                "name": name or "",
+                "desc": desc or "",
+                "ability_type": atype,
+                "traits": traits or "[]",
+            }
+    conn.close()
+    return sorted(seen.values(), key=lambda x: x["name"])
+
+
+_UNIT_STAT_KEYS = ("hp", "en", "attack", "defense", "mobility", "movement")
+_UNIT_STAT_LABELS = {
+    "hp": "HP", "en": "EN", "attack": "攻击", "defense": "防御",
+    "mobility": "机动", "movement": "移动",
+}
+_TERRAIN_KEYS = ("space", "atmospheric", "ground", "surface", "underwater")
+_TERRAIN_LABELS = {
+    "space": "宇宙", "atmospheric": "大气圈", "ground": "地面",
+    "surface": "水面", "underwater": "水中",
+}
+
+
+def _clean_int(value, field: str, minimum=0) -> int:
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} 必须是整数") from None
+    if v < minimum:
+        raise ValueError(f"{field} 不能小于 {minimum}")
+    return v
+
+
+def api_unit_edit(payload: dict, preview: bool = True) -> dict:
+    """机体编辑：校验 + 差异对比；preview=False 时写库并记录 edit_log。"""
+    unit_id = _clean_int(payload.get("unit_id"), "unit_id")
+    conn = _write_conn()
+    row = conn.execute("SELECT * FROM unit WHERE id = ?", (unit_id,)).fetchone()
+    u = dict(row) if row else None
+    if not u:
+        conn.close()
+        return {"ok": False, "error": "机体不存在"}
+    weapons = [dict(w) for w in conn.execute(
+        "SELECT * FROM unit_weapon WHERE unit_id = ? ORDER BY sort",
+        (unit_id,),
+    ).fetchall()]
+    abilities = [dict(a) for a in conn.execute(
+        "SELECT * FROM unit_ability WHERE unit_id = ? ORDER BY sort",
+        (unit_id,),
+    ).fetchall()]
+    tags_now = _json_list(u["tags"])
+    is_ult = ULTIMATE_TAG in tags_now
+    rarity = u["rarity"] or 5
+
+    diff: list[dict] = []
+
+    def add_diff(section: str, field: str, old, new) -> None:
+        diff.append({
+            "section": section,
+            "field": field,
+            "old": old,
+            "new": new,
+        })
+
+    # ---- 类型 ----
+    role = _clean_int(payload.get("role"), "类型")
+    if role not in (1, 2, 3):
+        conn.close()
+        return {"ok": False, "error": "类型只能为 1=攻击型 / 2=耐久型 / 3=支援型"}
+    if role != (u["role"] or 0):
+        add_diff("机体", "类型",
+                 ROLE_NAMES.get(u["role"], u["role"]),
+                 ROLE_NAMES.get(role, role))
+
+    # ---- 0星满级属性 ----
+    max_stats = payload.get("max_stats") or {}
+    stats_new: dict[str, int] = {}
+    for key in _UNIT_STAT_KEYS:
+        if key not in max_stats:
+            conn.close()
+            return {"ok": False, "error": f"缺少属性 {key}"}
+        stats_new[key] = _clean_int(max_stats[key], _UNIT_STAT_LABELS[key])
+    for key in _UNIT_STAT_KEYS:
+        old = u.get(f"max_{key}") or 0
+        if stats_new[key] != old:
+            add_diff("属性", f"{_UNIT_STAT_LABELS[key]}（0星满级）", old, stats_new[key])
+
+    # ---- SP / SSP（仅非 UR 且非终极）----
+    sp_new = ssp_new = None
+    if rarity < 5 and not is_ult:
+        if "sp_stats" in payload:
+            sp_new = {}
+            for key in _UNIT_STAT_KEYS:
+                if key in payload["sp_stats"]:
+                    sp_new[key] = _clean_int(
+                        payload["sp_stats"][key], f"SP {_UNIT_STAT_LABELS[key]}"
+                    )
+                    old = u.get(f"sp_max_{key}")
+                    if sp_new[key] != (old or 0):
+                        add_diff("属性", f"SP {_UNIT_STAT_LABELS[key]}（满级）",
+                                 old or 0, sp_new[key])
+        if "ssp_stats" in payload:
+            ssp_new = {}
+            for key in _UNIT_STAT_KEYS:
+                if key in payload["ssp_stats"]:
+                    ssp_new[key] = _clean_int(
+                        payload["ssp_stats"][key], f"SSP {_UNIT_STAT_LABELS[key]}"
+                    )
+                    old = u.get(f"ssp_max_{key}")
+                    if ssp_new[key] != (old or 0):
+                        add_diff("属性", f"SSP {_UNIT_STAT_LABELS[key]}（满级）",
+                                 old or 0, ssp_new[key])
+
+    # ---- 地形 ----
+    terrain = payload.get("terrain") or {}
+    terrain_new: dict[str, int] = {}
+    for key in _TERRAIN_KEYS:
+        if key not in terrain:
+            conn.close()
+            return {"ok": False, "error": f"缺少地形 {key}"}
+        v = _clean_int(terrain[key], _TERRAIN_LABELS[key])
+        if v > 5:
+            conn.close()
+            return {"ok": False, "error": f"{_TERRAIN_LABELS[key]} 适性不能超过 5"}
+        terrain_new[key] = v
+    terrain_old = _json_dict(u["terrain"])
+    for key in _TERRAIN_KEYS:
+        if terrain_new[key] != (terrain_old.get(key) or 0):
+            add_diff("地形", _TERRAIN_LABELS[key],
+                     terrain_old.get(key) or 0, terrain_new[key])
+
+    # ---- 标签 ----
+    tags_new = [str(t) for t in (payload.get("tags") or []) if str(t).strip()]
+    tags_new = list(dict.fromkeys(tags_new))
+    if is_ult and ULTIMATE_TAG not in tags_new:
+        conn.close()
+        return {"ok": False, "error": "「终极」标签不可删除"}
+    removed = [t for t in tags_now if t not in tags_new]
+    added = [t for t in tags_new if t not in tags_now]
+    if removed:
+        add_diff("标签", "删除", "、".join(removed), "")
+    if added:
+        add_diff("标签", "添加", "", "、".join(added))
+
+    # ---- 武器 ----
+    weapon_payload = {str(w.get("weapon_id")): w for w in (payload.get("weapons") or [])}
+    weapon_rows = {str(w["weapon_id"]): w for w in weapons}
+    missing_w = [wid for wid in weapon_payload if wid not in weapon_rows]
+    if missing_w:
+        conn.close()
+        return {"ok": False, "error": f"包含不存在的武器: {missing_w}"}
+    weapons_new: list[dict] = []
+    for wid, wrow in weapon_rows.items():
+        pw = weapon_payload.get(wid)
+        if not pw:
+            continue
+        attack_attr = _clean_int(pw.get("attack_attr"), "依赖属性", minimum=0)
+        weapon_attr = _clean_int(pw.get("weapon_attr"), "伤害类型", minimum=0)
+        attrs = [int(x) for x in (pw.get("weapon_attrs") or []) if str(x).isdigit()]
+        attrs = list(dict.fromkeys(attrs))
+        if not attrs:
+            attrs = [weapon_attr] if weapon_attr else []
+        if any(x not in (1, 2, 3) for x in attrs):
+            conn.close()
+            return {"ok": False, "error": f"多伤害集合只能包含 实弹/光束/特殊"}
+        rmin = _clean_int(pw.get("range_min"), "射程下限")
+        rmax = _clean_int(pw.get("range_max"), "射程上限")
+        if rmin > rmax:
+            conn.close()
+            return {"ok": False, "error": "射程下限不能大于上限"}
+        fields = {
+            "attack_attr": attack_attr, "weapon_attr": weapon_attr,
+            "weapon_attrs": json.dumps(attrs, ensure_ascii=False),
+            "range_min": rmin, "range_max": rmax,
+        }
+        for base in ("power", "en", "hit", "crit"):
+            lv5 = _clean_int(pw.get(f"{base}_lv5"), f"{base}_lv5")
+            lv9 = None
+            if pw.get(f"{base}_lv9") not in (None, ""):
+                lv9 = _clean_int(pw[f"{base}_lv9"], f"{base}_lv9")
+            fields[f"{base}_lv5"] = lv5
+            if lv9 is not None:
+                fields[f"{base}_lv9"] = lv9
+            if base == "hit" and lv5 > 150:
+                conn.close()
+                return {"ok": False, "error": "命中不能超过 150"}
+            if base == "crit" and lv5 > 100:
+                conn.close()
+                return {"ok": False, "error": "暴击不能超过 100"}
+        effects = payload_effects = pw.get("weapon_effects") or []
+        slots = []
+        for i, e in enumerate(payload_effects, 1):
+            slots.append({
+                "slot": i,
+                "name": (e.get("name") or "").strip(),
+                "desc": (e.get("desc") or "").strip(),
+            })
+        fields["weapon_effects"] = json.dumps(slots, ensure_ascii=False)
+        old_row = {k: wrow[k] for k in fields}
+        old_row["weapon_attrs"] = (
+            wrow["weapon_attrs"] or str([wrow["weapon_attr"]] if wrow["weapon_attr"] else [])
+        )
+        old_effects = _json_list(wrow["weapon_effects"])
+        changed = []
+        for fk, fv in fields.items():
+            ov = old_row.get(fk)
+            if fk == "weapon_effects":
+                ov = json.dumps(old_effects, ensure_ascii=False)
+            elif fk == "weapon_attrs":
+                pass
+            if str(ov) != str(fv):
+                changed.append((fk, ov, fv))
+        if changed:
+            add_diff("武器", f"{wrow['name']}", "、".join(
+                f"{c[0]}: {c[1]}" for c in changed
+            ), "、".join(f"{c[0]}: {c[2]}" for c in changed))
+        weapons_new.append({"weapon_id": wid, **fields})
+
+    # ---- 能力 ----
+    abilities_new = payload.get("abilities") or []
+    seen_aids = set()
+    for a in abilities_new:
+        aid = _clean_int(a.get("ability_id"), "能力", minimum=0)
+        if aid in seen_aids:
+            conn.close()
+            return {"ok": False, "error": f"能力重复: {aid}"}
+        seen_aids.add(aid)
+    old_aids = [a["ability_id"] for a in abilities]
+    new_aids = [int(a["ability_id"]) for a in abilities_new]
+    if set(old_aids) != set(new_aids):
+        add_diff("能力", "列表",
+                 f"{len(old_aids)} 个（{'、'.join(map(str, old_aids))}）",
+                 f"{len(new_aids)} 个（{'、'.join(map(str, new_aids))}）")
+
+    if preview:
+        conn.close()
+        return {"ok": True, "diff": diff, "changed": len(diff) > 0}
+
+    # ---- 写库 ----
+    try:
+        conn.execute(
+            "UPDATE unit SET role=?, max_hp=?, max_en=?, max_attack=?, "
+            "max_defense=?, max_mobility=?, max_movement=?, terrain=?, tags=? "
+            "WHERE id=?",
+            (role, stats_new["hp"], stats_new["en"], stats_new["attack"],
+             stats_new["defense"], stats_new["mobility"], stats_new["movement"],
+             json.dumps(terrain_new, ensure_ascii=False),
+             json.dumps(tags_new, ensure_ascii=False), unit_id),
+        )
+        if sp_new:
+            conn.execute(
+                "UPDATE unit SET sp_max_hp=?, sp_max_en=?, sp_max_attack=?, "
+                "sp_max_defense=?, sp_max_mobility=?, sp_max_movement=? WHERE id=?",
+                (sp_new["hp"], sp_new["en"], sp_new["attack"],
+                 sp_new["defense"], sp_new["mobility"], sp_new["movement"],
+                 unit_id),
+            )
+        if ssp_new:
+            conn.execute(
+                "UPDATE unit SET ssp_max_hp=?, ssp_max_en=?, ssp_max_attack=?, "
+                "ssp_max_defense=?, ssp_max_mobility=?, ssp_max_movement=? WHERE id=?",
+                (ssp_new["hp"], ssp_new["en"], ssp_new["attack"],
+                 ssp_new["defense"], ssp_new["mobility"], ssp_new["movement"],
+                 unit_id),
+            )
+        for w in weapons_new:
+            conn.execute(
+                "UPDATE unit_weapon SET attack_attr=?, weapon_attr=?, "
+                "weapon_attrs=?, range_min=?, range_max=?, power_lv5=?, en_lv5=?, "
+                "hit_lv5=?, crit_lv5=?, power_lv9=?, en_lv9=?, hit_lv9=?, "
+                "crit_lv9=?, weapon_effects=? WHERE weapon_id=?",
+                (w["attack_attr"], w["weapon_attr"], w["weapon_attrs"],
+                 w["range_min"], w["range_max"], w["power_lv5"], w["en_lv5"],
+                 w["hit_lv5"], w["crit_lv5"], w.get("power_lv9"), w.get("en_lv9"),
+                 w.get("hit_lv9"), w.get("crit_lv9"), w["weapon_effects"],
+                 w["weapon_id"]),
+            )
+        conn.execute("DELETE FROM unit_ability WHERE unit_id = ?", (unit_id,))
+        for i, a in enumerate(abilities_new):
+            traits_raw = a.get("traits") or []
+            if isinstance(traits_raw, str):
+                try:
+                    traits_raw = json.loads(traits_raw or "[]")
+                except json.JSONDecodeError:
+                    traits_raw = []
+            conn.execute(
+                "INSERT INTO unit_ability (unit_id, ability_id, sort, name, "
+                "desc, ability_type, traits) VALUES (?,?,?,?,?,?,?)",
+                (unit_id, a["ability_id"], i + 1, a.get("name") or "",
+                 a.get("desc") or "", a.get("ability_type"),
+                 json.dumps(traits_raw, ensure_ascii=False)),
+            )
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        for item in diff:
+            conn.execute(
+                "INSERT INTO unit_edit_log (unit_id, field, old_value, "
+                "new_value, edited_at, source) VALUES (?,?,?,?,?,?)",
+                (unit_id, f"{item['section']}·{item['field']}",
+                 str(item["old"]), str(item["new"]), now, "web"),
+            )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        conn.close()
+        return {"ok": False, "error": f"写入失败: {exc}"}
+    conn.close()
+    return {"ok": True, "diff": diff, "message": "已保存到本地"}
 
 
 def api_characters(q: str, rarity: str, series: str, type_: str,
@@ -1596,8 +1999,8 @@ def api_damage_sim(q: dict) -> dict:
     return {"hits": hits}
 
 
-def _cond_met(cond: dict, own_unit, enemy_unit, weapon_attr, tag_by_id: dict,
-              ignore_unknown: bool = False) -> bool:
+def _cond_met(cond: dict, own_unit, enemy_unit, weapon_attrs,
+              tag_by_id: dict, ignore_unknown: bool = False) -> bool:
     """评估能力条件的类型/标签/系列/武器属性是否满足。"""
     if not cond:
         return True
@@ -1625,7 +2028,9 @@ def _cond_met(cond: dict, own_unit, enemy_unit, weapon_attr, tag_by_id: dict,
             return False
     wa = cond.get("weapon_attribute")
     if wa:
-        if weapon_attr is None or _WA_MAP.get(wa) != weapon_attr:
+        want = _WA_MAP.get(wa)
+        # 多伤害集合：武器任一伤害属性与条件匹配即命中
+        if want is None or not weapon_attrs or want not in weapon_attrs:
             return False
     # 其他无法静态判断的条件（HP阈值/战意/回合/距离等）视为未满足
     unknown = [
@@ -1698,7 +2103,10 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
     def_unit = load_unit(def_uid, def_usrc)
     atk_pilot = load_char(atk_pid, atk_psrc)
     def_pilot = load_char(def_pid, def_psrc)
-    weapon_attr_i = int(weapon_attr) if str(weapon_attr).isdigit() else None
+    weapon_attrs = {
+        int(x) for x in str(weapon_attr or "").split(",")
+        if x.strip().isdigit()
+    }
     attack_attr_i = int(attack_attr) if str(attack_attr).isdigit() else None
     nullify = attr_nullify == "1"
     atk_star_i = int(atk_star) if str(atk_star).isdigit() else 0
@@ -1744,7 +2152,7 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
                     e["kind"] in ("hp_recover", "def_stack") for e in effs
                 )
                 met = _cond_met(
-                    cond, own_unit, enemy_unit, weapon_attr_i, tag_by_id,
+                    cond, own_unit, enemy_unit, weapon_attrs, tag_by_id,
                     ignore_unknown=is_special,
                 )
                 if cond.get("weapon_attribute") and nullify:
@@ -1818,21 +2226,26 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
             def_star_i,
         )[0]
     atk_pilot_attack = None
-    if atk_pilot and attack_attr_i in (1, 2, 3):
-        key = {1: "ranged", 2: "melee", 3: "awaken"}[attack_attr_i]
+    if atk_pilot and attack_attr_i in ATTACK_ATTR_STATS:
         skill_pcts = {
             "ranged": atk_skill_ranged, "melee": atk_skill_melee, "awaken": atk_skill_awaken,
         }
-        try:
-            skill_pct = float(skill_pcts.get(key, 0) or 0)
-        except (TypeError, ValueError):
-            skill_pct = 0
-        ability_pct = sum_stat(atk_pilot_ab, on["atk_p"], key)
-        atk_pilot_attack = star_value(
-            atk_pilot["stats"][key],
-            atk_pilot["bonuses"].get(key, 0) + ability_pct + skill_pct,
-            0,
-        )[0]
+        candidates = []
+        for key in ATTACK_ATTR_STATS[attack_attr_i]:
+            if key not in atk_pilot["stats"]:
+                continue
+            try:
+                skill_pct = float(skill_pcts.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                skill_pct = 0
+            ability_pct = sum_stat(atk_pilot_ab, on["atk_p"], key)
+            candidates.append(star_value(
+                atk_pilot["stats"][key],
+                atk_pilot["bonuses"].get(key, 0) + ability_pct + skill_pct,
+                0,
+            )[0])
+        if candidates:
+            atk_pilot_attack = max(candidates)
     def_pilot_defense = None
     if def_pilot:
         def_pilot_defense = star_value(
@@ -1950,10 +2363,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_summary())
         if path == "/api/crawl-status":
             return self._send_json(crawl_status())
+        if path == "/api/crawl-edits":
+            return self._send_json(api_crawl_edits())
         if path == "/api/sync-diff":
             return self._send_json(cloud_diff())
         if path == "/api/sync-status":
             return self._send_json(sync_status())
+        if path == "/api/weapon-effects":
+            return self._send_json(api_weapon_effects())
+        if path == "/api/abilities":
+            return self._send_json(api_abilities())
+        if path == "/api/unit-sync-diff":
+            try:
+                uid = int(q.get("unit_id", ["0"])[0])
+            except ValueError:
+                uid = 0
+            return self._send_json(unit_sync_diff(uid))
         if path == "/api/export":
             if not config.DB_PATH.exists():
                 return self._send_json({"error": "数据库不存在"}, 404)
@@ -2106,7 +2531,18 @@ class Handler(BaseHTTPRequestHandler):
         try:
             api_path = self.path.split("?")[0]
             if api_path == "/api/crawl":
-                return self._send_json(start_crawl())
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        parsed = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                return self._send_json(start_crawl(body.get("preserve")))
             if api_path == "/api/sync":
                 length = int(self.headers.get("Content-Length") or 0)
                 body = {}
@@ -2118,6 +2554,39 @@ class Handler(BaseHTTPRequestHandler):
                     except (ValueError, UnicodeDecodeError):
                         body = {}
                 return self._send_json(start_sync(body.get("direction", "")))
+            if api_path == "/api/unit-edit":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        parsed = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                preview = parse_qs(urlparse(self.path).query).get(
+                    "preview", ["0"]
+                )[0] == "1"
+                return self._send_json(api_unit_edit(body, preview=preview))
+            if api_path == "/api/unit-sync":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        parsed = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                try:
+                    uid = int(body.get("unit_id") or 0)
+                except (TypeError, ValueError):
+                    uid = 0
+                return self._send_json(unit_sync_push(uid))
             if api_path == "/api/import":
                 tmp = self._read_upload(max_bytes=512 * 1024 * 1024)
                 if tmp is None:

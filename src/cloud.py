@@ -318,6 +318,212 @@ def cloud_diff(url: str | None = None) -> dict:
     }
 
 
+def _ensure_cloud_weapon_columns(conn) -> None:
+    """云端 unit_weapon 补齐 lv9 / 多伤害集合列（幂等）。"""
+    for col, ctype in (
+        ("power_lv9", "BIGINT"), ("en_lv9", "BIGINT"),
+        ("hit_lv9", "BIGINT"), ("crit_lv9", "BIGINT"),
+        ("weapon_attrs", "TEXT"),
+    ):
+        conn.execute(
+            f'ALTER TABLE "unit_weapon" ADD COLUMN IF NOT EXISTS "{col}" {ctype}'
+        )
+
+
+def _row_to_dict(cur, row) -> dict:
+    return {d.name: row[i] for i, d in enumerate(cur.description)}
+
+
+def _unit_local(unit_id: int):
+    """读取本地单机体：unit / weapons / abilities。"""
+    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        u = con.execute("SELECT * FROM unit WHERE id = ?", (unit_id,)).fetchone()
+        if not u:
+            return None
+        u = dict(u)
+        u["weapons"] = [
+            dict(w) for w in con.execute(
+                "SELECT * FROM unit_weapon WHERE unit_id = ? ORDER BY sort",
+                (unit_id,),
+            ).fetchall()
+        ]
+        u["abilities"] = [
+            dict(a) for a in con.execute(
+                "SELECT * FROM unit_ability WHERE unit_id = ? ORDER BY sort",
+                (unit_id,),
+            ).fetchall()
+        ]
+        return u
+    finally:
+        con.close()
+
+
+def unit_sync_diff(unit_id: int) -> dict:
+    """对比本地与云端单机体的差异（机体行 / 武器 / 能力）。"""
+    local = _unit_local(unit_id)
+    if not local:
+        return {"ok": False, "error": "本地不存在该机体"}
+    try:
+        with _connect_pg(direct_cloud_url()) as conn:
+            _ensure_cloud_weapon_columns(conn)
+            conn.commit()
+            with conn.cursor() as cur:
+                cur.execute('SELECT * FROM "unit" WHERE id = %s', (unit_id,))
+                urow = cur.fetchone()
+                cu = _row_to_dict(cur, urow) if urow else None
+                cur.execute(
+                    'SELECT * FROM "unit_weapon" WHERE unit_id = %s ORDER BY sort',
+                    (unit_id,),
+                )
+                cw = {r["weapon_id"]: r for r in (_row_to_dict(cur, x) for x in cur.fetchall())}
+                cur.execute(
+                    'SELECT * FROM "unit_ability" WHERE unit_id = %s ORDER BY sort',
+                    (unit_id,),
+                )
+                ca = {r["ability_id"]: r for r in (_row_to_dict(cur, x) for x in cur.fetchall())}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"云端连接失败：{exc}"}
+    if not cu:
+        return {"ok": False, "error": "云端不存在该机体（可先做全量上传）"}
+
+    diff: list[dict] = []
+    skip_unit = {"id", "raw_path", "weapons", "abilities"}
+    for k, v in local.items():
+        if k in skip_unit:
+            continue
+        cv = cu.get(k)
+        if str(cv) != str(v):
+            diff.append({"section": "机体", "field": k, "old": cv, "new": v})
+    skip_w = {"id", "unit_id", "sort", "raw_path"}
+    for wid, w in enumerate(local["weapons"]):
+        cw_row = cw.get(w["weapon_id"])
+        if cw_row is None:
+            diff.append({"section": "武器", "field": w["name"], "old": "云端缺失", "new": "存在"})
+            continue
+        for k, v in w.items():
+            if k in skip_w:
+                continue
+            if str(cw_row.get(k)) != str(v):
+                diff.append({"section": "武器", "field": f"{w['name']}·{k}", "old": cw_row.get(k), "new": v})
+    local_aids = [a["ability_id"] for a in local["abilities"]]
+    cloud_aids = list(ca.keys())
+    if set(local_aids) != set(cloud_aids):
+        diff.append({
+            "section": "能力", "field": "列表",
+            "old": f"云端 {len(cloud_aids)} 个", "new": f"本地 {len(local_aids)} 个",
+        })
+    else:
+        for a in local["abilities"]:
+            crow = ca.get(a["ability_id"])
+            if crow and (str(crow.get("name")) != str(a.get("name"))
+                         or str(crow.get("traits")) != str(a.get("traits"))):
+                diff.append({
+                    "section": "能力", "field": a.get("name") or str(a["ability_id"]),
+                    "old": "内容不同", "new": "以本地为准",
+                })
+    return {"ok": True, "identical": not diff, "diff": diff}
+
+
+def unit_sync_push(unit_id: int) -> dict:
+    """把本地单机体全量写入云端（该机体 unit / weapons / abilities 覆盖）。"""
+    local = _unit_local(unit_id)
+    if not local:
+        return {"ok": False, "error": "本地不存在该机体"}
+    import psycopg  # noqa: F401
+
+    try:
+        with _connect_pg(direct_cloud_url()) as conn:
+            _ensure_cloud_weapon_columns(conn)
+            with conn.cursor() as cur:
+                # unit 行 UPSERT
+                unit_cols = [c for c in local if c not in ("weapons", "abilities")]
+                ucols_sql = ", ".join(f'"{c}"' for c in unit_cols)
+                uph = ", ".join(["%s"] * len(unit_cols))
+                update_sql = ", ".join(
+                    f'"{c}" = EXCLUDED."{c}"' for c in unit_cols if c != "id"
+                )
+                cur.execute(
+                    f'INSERT INTO "unit" ({ucols_sql}) VALUES ({uph}) '
+                    f'ON CONFLICT ("id") DO UPDATE SET {update_sql}',
+                    [local[c] for c in unit_cols],
+                )
+                # 武器 UPSERT
+                if local["weapons"]:
+                    w_cols = [c for c in local["weapons"][0] if c != "sort"]
+                    wcols_sql = ", ".join(f'"{c}"' for c in w_cols)
+                    wph = ", ".join(["%s"] * len(w_cols))
+                    wupd = ", ".join(
+                        f'"{c}" = EXCLUDED."{c}"'
+                        for c in w_cols if c not in ("weapon_id", "id")
+                    )
+                    for w in local["weapons"]:
+                        cur.execute(
+                            f'INSERT INTO "unit_weapon" ({wcols_sql}) VALUES ({wph}) '
+                            f'ON CONFLICT ("unit_id", "weapon_id") DO UPDATE SET {wupd}',
+                            [w[c] for c in w_cols],
+                        )
+                # 能力整体替换
+                cur.execute('DELETE FROM "unit_ability" WHERE unit_id = %s', (unit_id,))
+                for i, a in enumerate(local["abilities"]):
+                    cur.execute(
+                        'INSERT INTO "unit_ability" '
+                        '(id, unit_id, ability_id, sort, name, "desc", ability_type, traits) '
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (a["id"], unit_id, a["ability_id"], i + 1, a.get("name"),
+                         a.get("desc"), a.get("ability_type"), a.get("traits")),
+                    )
+            conn.commit()
+        return {"ok": True, "message": "该机体已同步到服务器"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"同步失败：{exc}"}
+
+
+def restore_unit_locally(unit: dict) -> None:
+    """把单机体快照整行写回本地库（爬取重建后保留编辑用）。"""
+    con = sqlite3.connect(config.DB_PATH)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA foreign_keys=ON")
+    def cols_sql(keys):
+        return ", ".join(f'"{c}"' for c in keys)
+
+    def ph(n):
+        return ", ".join("?" * n)
+
+    try:
+        con.execute("BEGIN")
+        con.execute("DELETE FROM unit_ability WHERE unit_id = ?", (unit["id"],))
+        con.execute("DELETE FROM unit_weapon WHERE unit_id = ?", (unit["id"],))
+        con.execute("DELETE FROM unit WHERE id = ?", (unit["id"],))
+        cols = [c for c in unit if c not in ("weapons", "abilities")]
+        con.execute(
+            f'INSERT INTO "unit" ({cols_sql(cols)}) VALUES ({ph(len(cols))})',
+            [unit[c] for c in cols],
+        )
+        for w in unit.get("weapons") or []:
+            wcols = [c for c in w if c != "sort"]
+            con.execute(
+                f'INSERT INTO "unit_weapon" ({cols_sql(wcols)}) '
+                f'VALUES ({ph(len(wcols))})',
+                [w[c] for c in wcols],
+            )
+        for i, a in enumerate(unit.get("abilities") or []):
+            acols = [c for c in a if c != "sort"]
+            con.execute(
+                f'INSERT INTO "unit_ability" ({cols_sql(acols)}) '
+                f'VALUES ({ph(len(acols))})',
+                [a[c] for c in acols],
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
 def direct_cloud_url(url: str | None = None) -> str:
     """Neon 池化地址 -> 直连地址（同集群同账号，批量读写快得多）。
 

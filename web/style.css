@@ -224,6 +224,22 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--accent2); border-left: 3p
 }
 .effect-block .effect { color: var(--text); font-size: 13px; font-weight: 600; }
 .effect-block .tags { margin-top: 6px; }
+.unit-edit-btns { display: inline-flex; gap: 6px; margin-left: 10px; flex-wrap: wrap; }
+.unit-edit-btns .cond-btn { margin-left: 0; padding: 3px 10px; font-size: 12px; }
+.edit-input {
+  width: 74px; background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 6px; color: var(--text); padding: 3px 6px; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.edit-input.wide { width: 130px; }
+.edit-select {
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--text); padding: 3px 6px; font-size: 12px;
+}
+.edit-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0; }
+.edit-hint { color: var(--muted); font-size: 11px; margin: 2px 0 8px; }
+.edit-remove { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; }
+.edit-remove:hover { color: #ff8f8f; }
 .ult-tag { border-color: var(--accent); color: var(--accent2); }
 .sbox { position: relative; }
 .sbox-input { padding-right: 26px; }

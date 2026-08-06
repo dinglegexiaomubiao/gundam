@@ -128,7 +128,7 @@ def parse_ability_stat_bonuses(
 ATTACK_ATTR = {
     1: "射击",
     2: "格斗",
-    3: "觉醒",
+    3: "特殊",
     4: "特殊",
     5: "特殊",
     6: "特殊",
@@ -139,6 +139,37 @@ ATTACK_ATTR_STAT = {
     2: "格斗值",
     3: "觉醒值",
 }
+
+# 依赖取值规则：1=射击、2=格斗、3=觉醒、
+# 4=格斗/射击最高值、5=射击/觉醒最高值、6=格斗/觉醒最高值、7=三者最高值
+ATTACK_ATTR_STATS = {
+    1: ("ranged",),
+    2: ("melee",),
+    3: ("awaken",),
+    4: ("melee", "ranged"),
+    5: ("ranged", "awaken"),
+    6: ("melee", "awaken"),
+    7: ("ranged", "melee", "awaken"),
+}
+
+ATTACK_ATTR_DEP_LABEL = {
+    1: "射击值",
+    2: "格斗值",
+    3: "觉醒值",
+    4: "格斗/射击最高值",
+    5: "射击/觉醒最高值",
+    6: "格斗/觉醒最高值",
+    7: "射击/格斗/觉醒最高值",
+}
+
+def attack_attr_value(stats: dict, attack_attr: int):
+    """按攻击属性规则取驾驶员依赖值（射击/格斗/觉醒 单项或最高值）。"""
+    keys = ATTACK_ATTR_STATS.get(attack_attr or 0)
+    if not keys:
+        return None
+    vals = [stats.get(k) for k in keys if stats.get(k) is not None]
+    return max(vals) if vals else None
+
 
 # 武器伤害类型
 WEAPON_ATTR = {

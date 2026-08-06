@@ -9,6 +9,18 @@ const state = {
 let currentSupporter = null;
 const colWidths = {};
 const colFlex = {};
+const ATTACK_ATTR_KEYS = {
+  1: ["ranged"], 2: ["melee"], 3: ["awaken"],
+  4: ["melee", "ranged"], 5: ["ranged", "awaken"], 6: ["melee", "awaken"],
+  7: ["ranged", "melee", "awaken"],
+};
+
+function pilotDepValue(pilot, attackAttr) {
+  if (!pilot) return null;
+  const keys = ATTACK_ATTR_KEYS[attackAttr] || [];
+  const vals = keys.map((k) => pilot[k]).filter((v) => v != null);
+  return vals.length ? Math.max(...vals) : null;
+}
 
 function applyColWidths(kind) {
   const head = document.querySelector(`.list-head.${kind}`);
@@ -543,11 +555,44 @@ function bindOverviewActions(d) {
   syncUpBtn.addEventListener("click", () => openSyncDiff("upload"));
   syncDownBtn.addEventListener("click", () => openSyncDiff("download"));
   crawlBtn.addEventListener("click", async () => {
+    let edits = [];
+    try {
+      edits = await api("/api/crawl-edits");
+    } catch (e) { /* 忽略 */ }
+    if (edits.length) {
+      showModal("爬取数据",
+        `<p class="desc">全量爬取会用原始数据重建数据库，以下机体有本地编辑记录。勾选需要保留的编辑，未勾选的将被新数据覆盖：</p>
+         <div id="crawl-keep-list" class="tags">${edits.map((x) =>
+           `<label class="chip sel-tag"><input type="checkbox" value="${x.unit_id}" checked> ${esc(x.name)}（${x.edits} 项编辑）</label>`).join("")}</div>
+         <div class="calc-actions">
+           <button id="crawl-keep" class="cond-btn">爬取并保留勾选编辑</button>
+           <button id="crawl-overwrite" class="cond-btn">不保留，全部覆盖</button>
+           <button id="crawl-cancel" class="cond-btn">取消</button>
+         </div>`);
+      $("#crawl-keep").addEventListener("click", () => {
+        const keep = [...document.querySelectorAll("#crawl-keep-list input:checked")].map((el) => el.value);
+        $("#modal").classList.add("hidden");
+        doCrawl(keep);
+      });
+      $("#crawl-overwrite").addEventListener("click", () => {
+        $("#modal").classList.add("hidden");
+        doCrawl([]);
+      });
+      $("#crawl-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+      return;
+    }
     if (!confirm("将开始全量爬取数据（耗时较长），确定继续？")) return;
+    doCrawl([]);
+  });
+  async function doCrawl(preserve) {
     crawlBtn.disabled = true;
     msg.textContent = "正在开始爬取…";
     try {
-      const r = await fetch("/api/crawl", { method: "POST" });
+      const r = await fetch("/api/crawl", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preserve }),
+      });
       const res = await r.json();
       if (!res.ok) {
         msg.textContent = res.message || "启动爬取失败";
@@ -560,7 +605,7 @@ function bindOverviewActions(d) {
       msg.textContent = "启动爬取失败：" + (e.message || e);
       crawlBtn.disabled = false;
     }
-  });
+  }
   fileInput.addEventListener("change", async () => {
     const f = fileInput.files && fileInput.files[0];
     if (!f) return;
@@ -946,15 +991,15 @@ async function openUnit(id) {
   const weapons = u.weapons.map((w) => `
     <tr>
       <td>${esc(w.name)} ${lvBadge(w.weapon_max_level)}</td>
-      <td>${esc(w.weapon_attr_label ?? "—")}</td>
+      <td>${esc(`${w.attack_attr_label ?? "—"}/${w.attrs_label ?? w.weapon_attr_label ?? "—"}`)}</td>
       <td>${esc(w.pilot_stat ?? "—")}</td>
       <td class="mono">${w.map_weapon_range
         ? `MAP（${w.range_min ?? "—"}~${w.range_max ?? "—"}）`
         : `${w.range_min ?? "—"}~${w.range_max ?? "—"}`}</td>
-      <td class="mono">${w.power_lv5 ?? w.power}</td>
-      <td class="mono">${w.en_lv5 ?? w.en}</td>
-      <td class="mono">${w.hit_lv5 ?? w.hit_rate ?? "—"}%</td>
-      <td class="mono">${w.crit_lv5 ?? w.critical_rate ?? "—"}%</td>
+      <td class="mono">${w.power_lv9 ?? w.power_lv5 ?? w.power}</td>
+      <td class="mono">${w.en_lv9 ?? w.en_lv5 ?? w.en}</td>
+      <td class="mono">${w.hit_lv9 ?? w.hit_lv5 ?? w.hit_rate ?? "—"}%</td>
+      <td class="mono">${w.crit_lv9 ?? w.crit_lv5 ?? w.critical_rate ?? "—"}%</td>
       <td>${weaponEffects(w)}</td>
     </tr>`).join("");
   const abilities = u.abilities.map((a) => `
@@ -971,19 +1016,395 @@ async function openUnit(id) {
   const t = u.terrain || {};
   const terrain = Object.entries({ 宇宙: t.space, 大气圈: t.atmospheric, 地面: t.ground, 水面: t.surface, 水中: t.underwater })
     .map(([k, v]) => `<span class="chip">${k} ${v ?? "—"}</span>`).join("");
-  showModal(u.name,
+  unitEdit = null;
+  showModal(
+    `${esc(u.name)}<span class="unit-edit-btns">
+       <button id="unit-edit-btn" class="cond-btn" title="进入编辑模式">修改机体数据</button>
+       <button id="unit-save-btn" class="cond-btn" title="保存修改到本地">保存修改到本地</button>
+       <button id="unit-sync-btn" class="cond-btn" title="同步该机体数据到服务器">同步机体数据到服务器</button>
+     </span>`,
     `<p class="desc">${roleBadge(u.role, u.role_label)} ${esc(u.desc || "暂无描述")}</p>
      <div id="unit-stats"></div>
      <h3>地形适性</h3><div class="tags">${terrain}</div>
      ${u.tags.length ? `<h3>标签（点击可搜索）</h3><div class="tags">${u.tags.map((t) => tagChip(t)).join("")}</div>` : ""}
      <h3>武器（${u.weapons.length}）</h3>
-     <table><tr><th>名称</th><th>伤害类型</th><th>依赖属性</th><th>射程</th><th>威力(满级)</th><th>EN(满级)</th><th>命中(满级)</th><th>暴击(满级)</th><th>特效(满级)</th></tr>${weapons || '<tr><td colspan="9" class="empty">暂无武器数据</td></tr>'}</table>
+     <table><tr><th>名称</th><th>类型</th><th>依赖属性</th><th>射程</th><th>威力(满级)</th><th>EN(满级)</th><th>命中(满级)</th><th>暴击(满级)</th><th>特效(满级)</th></tr>${weapons || '<tr><td colspan="9" class="empty">暂无武器数据</td></tr>'}</table>
      ${abilities ? `<h3>能力</h3><table><tr><th>名称</th><th>效果</th></tr>${abilities}</table>` : ""}
      ${unitSkills ? `<h3>单位技能（${(u.skills || []).length}）</h3><table><tr><th>名称</th><th>效果</th><th>持续</th></tr>${unitSkills}</table>` : ""}`);
   renderUnitStats(u, 0, "default");
   bindTagChips();
   bindSearchLinks();
   bindEffectChips();
+  bindUnitEditButtons(u);
+}
+
+/* ---------- 机体数据编辑 ---------- */
+let unitEdit = null;
+
+function bindUnitEditButtons(u) {
+  const editBtn = $("#unit-edit-btn");
+  const saveBtn = $("#unit-save-btn");
+  const syncBtn = $("#unit-sync-btn");
+  if (editBtn) editBtn.addEventListener("click", () => enterUnitEdit(u));
+  if (saveBtn) saveBtn.addEventListener("click", () => saveUnitEdit());
+  if (syncBtn) syncBtn.addEventListener("click", () => {
+    openUnitSync(u.id);
+  });
+}
+
+const EDIT_STAT_KEYS = ["hp", "en", "attack", "defense", "mobility", "movement"];
+const EDIT_STAT_LABELS = { hp: "HP", en: "EN", attack: "攻击", defense: "防御", mobility: "机动", movement: "移动" };
+const EDIT_TERRAIN = [["space", "宇宙"], ["atmospheric", "大气圈"], ["ground", "地面"], ["surface", "水面"], ["underwater", "水中"]];
+
+function enterUnitEdit(u) {
+  const canSp = (u.rarity || 5) < 5 && !(u.tags || []).includes("终极");
+  unitEdit = {
+    id: u.id,
+    role: u.role,
+    canSp,
+    stats: {
+      base: {},
+      sp: canSp ? {} : null,
+      ssp: canSp ? {} : null,
+    },
+    terrain: Object.assign({}, u.terrain || {}),
+    tags: (u.tags || []).slice(),
+    weapons: (u.weapons || []).map((w) => ({
+      weapon_id: w.weapon_id, name: w.name, weapon_max_level: w.weapon_max_level,
+      attack_attr: w.attack_attr, weapon_attr: w.weapon_attr,
+      weapon_attrs: (w.attrs || []).slice(),
+      range_min: w.range_min, range_max: w.range_max,
+      power_lv5: w.power_lv5, en_lv5: w.en_lv5, hit_lv5: w.hit_lv5, crit_lv5: w.crit_lv5,
+      power_lv9: w.power_lv9, en_lv9: w.en_lv9, hit_lv9: w.hit_lv9, crit_lv9: w.crit_lv9,
+      effects: (w.effects || []).map((e) => ({ name: e.name, desc: e.desc })),
+    })),
+    abilities: (u.abilities || []).map((a) => ({
+      ability_id: a.ability_id, name: a.name, desc: a.desc,
+      ability_type: a.ability_type, traits: a.traits,
+    })),
+  };
+  EDIT_STAT_KEYS.forEach((k) => {
+    unitEdit.stats.base[k] = u[`max_${k}`] || 0;
+    if (canSp) {
+      unitEdit.stats.sp[k] = u[`sp_max_${k}`] || 0;
+      unitEdit.stats.ssp[k] = u[`ssp_max_${k}`] || 0;
+    }
+  });
+  renderUnitEditForm();
+}
+
+function renderUnitEditForm() {
+  const s = unitEdit;
+  const roleOpts = [[1, "攻击型"], [2, "耐久型"], [3, "支援型"]];
+  const attrOpts = [[1, "射击"], [2, "格斗"], [3, "特殊"], [7, "EX"]];
+  const dmgOpts = [[1, "实弹"], [2, "光束"], [3, "特殊"], [4, "特殊招式"], [6, "EX"]];
+  const statCell = (prefix) => (k) =>
+    `<td><input class="edit-input" data-stat="${prefix}" data-k="${k}" value="${s.stats[prefix][k] ?? ""}"></td>`;
+  const statRow = (prefix, label) =>
+    `<tr><th>${label}</th>${EDIT_STAT_KEYS.map(statCell(prefix)).join("")}</tr>`;
+  const tagHtml = s.tags.map((t, i) =>
+    `<span class="chip sel-tag">${esc(t)}${t === "终极" ? "" : `<button class="chip-x" data-tag-i="${i}" title="删除">×</button>`}</span>`).join("")
+    || '<span class="muted">无标签</span>';
+  const weaponRows = s.weapons.map((w, wi) => {
+    const lv9 = (w.weapon_max_level || 5) >= 9;
+    const num = (k, val) => `<input class="edit-input" data-wi="${wi}" data-f="${k}" value="${val ?? ""}">`;
+    const attrVal = w.attack_attr in { 4: 1, 5: 1, 6: 1 } ? 3 : w.attack_attr;
+    return `<tr>
+      <td>${esc(w.name)}</td>
+      <td><select class="edit-select" data-wi="${wi}" data-f="attack_attr">${attrOpts.map(([v, lb]) => `<option value="${v}" ${v == (attrVal || 1) ? "selected" : ""}>${lb}</option>`).join("")}</select></td>
+      <td><select class="edit-select" data-wi="${wi}" data-f="weapon_attr">${dmgOpts.map(([v, lb]) => `<option value="${v}" ${v == (w.weapon_attr in { 5: 1 } ? 4 : w.weapon_attr) ? "selected" : ""}>${lb}</option>`).join("")}</select></td>
+      <td class="edit-row">${[1, 2, 3].map((a) => `<label class="chip sel-tag"><input type="checkbox" data-wi="${wi}" data-a="${a}" ${w.weapon_attrs.includes(a) ? "checked" : ""}>${({1:"实弹",2:"光束",3:"特殊"})[a]}</label>`).join("")}</td>
+      <td>${num("range_min", w.range_min)}~${num("range_max", w.range_max)}</td>
+      <td>${num("power_lv5", w.power_lv5)}${lv9 ? `<br>lv9 ${num("power_lv9", w.power_lv9)}` : ""}</td>
+      <td>${num("en_lv5", w.en_lv5)}${lv9 ? `<br>lv9 ${num("en_lv9", w.en_lv9)}` : ""}</td>
+      <td>${num("hit_lv5", w.hit_lv5)}${lv9 ? `<br>lv9 ${num("hit_lv9", w.hit_lv9)}` : ""}</td>
+      <td>${num("crit_lv5", w.crit_lv5)}${lv9 ? `<br>lv9 ${num("crit_lv9", w.crit_lv9)}` : ""}</td>
+      <td><div class="tags">${w.effects.map((e, ei) => `<span class="chip sel-tag">${esc(e.name)}<button class="chip-x" data-wi="${wi}" data-ei="${ei}" title="移除特效">×</button></span>`).join("") || '<span class="muted">无</span>'}</div>
+          <button class="cond-btn" data-add-effect="${wi}" style="margin-left:0">添加特效</button></td>
+    </tr>`;
+  }).join("");
+  const abilityHtml = s.abilities.map((a, i) =>
+    `<div class="edit-row"><span class="chip cond">${esc(a.name)}</span>
+     <button class="edit-remove" data-ability-i="${i}" title="删除能力">×</button></div>`).join("")
+    || '<span class="muted">无能力</span>';
+  const body = `
+    <p class="desc">${esc("编辑基础值后，1~3星按公式自动重算；显示值为 基础值 × 星级倍率 × (1+能力加成%)。")}</p>
+    <h3>类型</h3>
+    <div class="edit-row"><select id="edit-role" class="edit-select">${roleOpts.map(([v, lb]) => `<option value="${v}" ${v == s.role ? "selected" : ""}>${lb}</option>`).join("")}</select></div>
+    <h3>属性（0星满级）</h3>
+    <table><tr><th></th><th>HP</th><th>EN</th><th>攻击</th><th>防御</th><th>机动</th><th>移动</th></tr>
+      ${statRow("base", "0星满级")}
+      ${s.stats.sp ? statRow("sp", "SP 满级") : ""}
+      ${s.stats.ssp ? statRow("ssp", "SSP 满级") : ""}
+    </table>
+    ${s.canSp ? "" : '<p class="edit-hint">UR / 终极标签机体不开放 SP、SSP 编辑。</p>'}
+    <h3>地形适性</h3>
+    <div class="edit-row">${EDIT_TERRAIN.map(([k, lb]) => `<label>${lb} <input class="edit-input" data-terrain="${k}" value="${s.terrain[k] ?? 0}"></label>`).join("")}</div>
+    <h3>标签</h3>
+    <div class="tags" id="edit-tags">${tagHtml}</div>
+    <button id="edit-add-tag" class="cond-btn" style="margin-left:0">添加标签</button>
+    <h3>武器（${s.weapons.length}）</h3>
+    <table><tr><th>名称</th><th>类别</th><th>伤害</th><th>多伤害集合</th><th>射程</th><th>威力</th><th>EN</th><th>命中</th><th>暴击</th><th>特效</th></tr>${weaponRows}</table>
+    <h3>能力（${s.abilities.length}）</h3>
+    <div id="edit-abilities">${abilityHtml}</div>
+    <button id="edit-add-ability" class="cond-btn" style="margin-left:0">添加能力</button>
+    <div class="calc-actions"><button id="edit-cancel" class="cond-btn">取消修改</button></div>
+    <span id="edit-msg" class="muted"></span>`;
+  $("#modal-body").innerHTML = body;
+  bindUnitEditForm();
+}
+
+function bindUnitEditForm() {
+  const body = $("#modal-body");
+  body.querySelectorAll("input[data-stat]").forEach((el) =>
+    el.addEventListener("input", () => {
+      unitEdit.stats[el.dataset.stat][el.dataset.k] = Number(el.value) || 0;
+    }));
+  body.querySelectorAll("input[data-terrain]").forEach((el) =>
+    el.addEventListener("input", () => {
+      unitEdit.terrain[el.dataset.terrain] = Number(el.value) || 0;
+    }));
+  body.querySelectorAll("input[data-wi][data-a]").forEach((el) =>
+    el.addEventListener("change", () => {
+      const w = unitEdit.weapons[Number(el.dataset.wi)];
+      const a = Number(el.dataset.a);
+      if (el.checked) { if (!w.weapon_attrs.includes(a)) w.weapon_attrs.push(a); }
+      else w.weapon_attrs = w.weapon_attrs.filter((x) => x !== a);
+    }));
+  body.querySelectorAll("input[data-wi][data-f]").forEach((el) =>
+    el.addEventListener("input", () => {
+      unitEdit.weapons[Number(el.dataset.wi)][el.dataset.f] =
+        el.value === "" ? null : Number(el.value);
+    }));
+  body.querySelectorAll("select[data-wi][data-f]").forEach((el) =>
+    el.addEventListener("change", () => {
+      unitEdit.weapons[Number(el.dataset.wi)][el.dataset.f] = Number(el.value);
+    }));
+  body.querySelectorAll("[data-ei]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const w = unitEdit.weapons[Number(el.dataset.wi)];
+      w.effects.splice(Number(el.dataset.ei), 1);
+      renderUnitEditForm();
+    }));
+  body.querySelectorAll("[data-add-effect]").forEach((el) =>
+    el.addEventListener("click", () => openUnitEffectPicker(Number(el.dataset.addEffect))));
+  body.querySelectorAll("[data-ability-i]").forEach((el) =>
+    el.addEventListener("click", () => {
+      unitEdit.abilities.splice(Number(el.dataset.abilityI), 1);
+      renderUnitEditForm();
+    }));
+  body.querySelectorAll("[data-tag-i]").forEach((el) =>
+    el.addEventListener("click", () => {
+      unitEdit.tags.splice(Number(el.dataset.tagI), 1);
+      renderUnitEditForm();
+    }));
+  $("#edit-role").addEventListener("change", (e) => { unitEdit.role = Number(e.target.value); });
+  $("#edit-cancel").addEventListener("click", () => {
+    const uid = unitEdit.id;
+    unitEdit = null;
+    openUnit(uid);
+  });
+  $("#edit-add-tag").addEventListener("click", openUnitTagPicker);
+  $("#edit-add-ability").addEventListener("click", openUnitAbilityPicker);
+}
+
+function currentUnitId() {
+  return unitEdit ? unitEdit.id : 0;
+}
+
+function buildEditPayload() {
+  const s = unitEdit;
+  return {
+    unit_id: s.id,
+    role: s.role,
+    max_stats: Object.assign({}, s.stats.base),
+    ...(s.stats.sp ? { sp_stats: Object.assign({}, s.stats.sp) } : {}),
+    ...(s.stats.ssp ? { ssp_stats: Object.assign({}, s.stats.ssp) } : {}),
+    terrain: Object.assign({}, s.terrain),
+    tags: s.tags.slice(),
+    weapons: s.weapons.map((w) => ({
+      weapon_id: w.weapon_id, attack_attr: w.attack_attr,
+      weapon_attr: w.weapon_attr, weapon_attrs: w.weapon_attrs.slice(),
+      range_min: w.range_min, range_max: w.range_max,
+      power_lv5: w.power_lv5, en_lv5: w.en_lv5, hit_lv5: w.hit_lv5, crit_lv5: w.crit_lv5,
+      power_lv9: w.power_lv9, en_lv9: w.en_lv9, hit_lv9: w.hit_lv9, crit_lv9: w.crit_lv9,
+      weapon_effects: w.effects.slice(),
+    })),
+    abilities: s.abilities.map((a) => ({
+      ability_id: a.ability_id, name: a.name, desc: a.desc,
+      ability_type: a.ability_type, traits: a.traits,
+    })),
+  };
+}
+
+async function saveUnitEdit() {
+  const msg = $("#edit-msg");
+  if (!unitEdit) return;
+  const payload = buildEditPayload();
+  try {
+    const r = await fetch("/api/unit-edit?preview=1", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const res = await r.json();
+    if (!res.ok) { if (msg) msg.textContent = res.error || "校验失败"; return; }
+    if (!res.changed) { if (msg) msg.textContent = "没有修改"; return; }
+    showModal("确认保存修改",
+      `<p class="desc">以下为本次修改与本地数据库的差异，确认后将写入本地数据库并记录编辑历史：</p>
+       <table><tr><th>项目</th><th>字段</th><th>原值</th><th>新值</th></tr>
+       ${(res.diff || []).map((x) => `<tr><td>${esc(x.section)}</td><td>${esc(x.field)}</td><td class="desc">${esc(x.old)}</td><td class="desc">${esc(x.new)}</td></tr>`).join("")}</table>
+       <div class="calc-actions"><button id="edit-confirm" class="cond-btn">确认保存</button>
+       <button id="edit-confirm-cancel" class="cond-btn">取消</button></div>`);
+    $("#edit-confirm").addEventListener("click", async () => {
+      $("#modal").classList.add("hidden");
+      const r2 = await fetch("/api/unit-edit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const res2 = await r2.json();
+      if (!res2.ok) { showModal("保存失败", `<p class="desc">${esc(res2.error || "未知错误")}</p>`); return; }
+      const uid = unitEdit.id;
+      unitEdit = null;
+      openUnit(uid);
+    });
+    $("#edit-confirm-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+  } catch (e) {
+    if (msg) msg.textContent = "保存失败：" + (e.message || e);
+  }
+}
+
+async function openUnitSync(unitId) {
+  if (unitEdit) {
+    $("#modal").classList.add("hidden");
+    showModal("提示", '<p class="desc">还有未保存的修改，请先「保存修改到本地」再同步到服务器。</p>');
+    return;
+  }
+  let d;
+  try {
+    d = await api(`/api/unit-sync-diff?unit_id=${unitId}`);
+  } catch (e) {
+    showModal("同步失败", `<p class="desc">${esc(e.message || e)}</p>`);
+    return;
+  }
+  if (!d.ok) {
+    showModal("无法同步", `<p class="desc">${esc(d.error || "云端不可用")}</p>`);
+    return;
+  }
+  if (d.identical) {
+    showModal("同步机体数据到服务器",
+      '<p class="desc" style="color:var(--ok)">本地与服务器该机体数据一致，无需同步。</p>');
+    return;
+  }
+  showModal("同步机体数据到服务器",
+    `<p class="desc">以下为本地与服务器该机体的差异。确认后会把本地数据覆盖到服务器（仅这一台机体，其他数据不变）：</p>
+     <table><tr><th>项目</th><th>字段</th><th>服务器</th><th>本地</th></tr>
+     ${(d.diff || []).map((x) => `<tr><td>${esc(x.section)}</td><td>${esc(x.field)}</td><td class="desc">${esc(x.old)}</td><td class="desc">${esc(x.new)}</td></tr>`).join("")}</table>
+     <div class="calc-actions"><button id="unit-sync-confirm" class="cond-btn">确认同步到服务器</button>
+     <button id="unit-sync-cancel" class="cond-btn">取消</button></div>`);
+  $("#unit-sync-confirm").addEventListener("click", async () => {
+    $("#modal").classList.add("hidden");
+    try {
+      const r = await fetch("/api/unit-sync", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unit_id: unitId }),
+      });
+      const res = await r.json();
+      showModal("同步结果", `<p class="desc">${esc(res.message || res.error || "完成")}</p>`);
+    } catch (e) {
+      showModal("同步失败", `<p class="desc">${esc(e.message || e)}</p>`);
+    }
+  });
+  $("#unit-sync-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+}
+
+async function openUnitTagPicker() {
+  const all = await api("/api/tags?kind=unit");
+  showModal("添加标签",
+    `<p class="desc">当前机体已有标签：${esc(unitEdit.tags.join("、") || "无")}</p>
+     <input id="tag-pick-q" class="edit-input wide" placeholder="搜索标签…">
+     <div id="tag-pick-list" class="tags"></div>
+     <div class="calc-actions"><button id="tag-pick-ok" class="cond-btn">确定</button>
+     <button id="tag-pick-close" class="cond-btn">关闭</button></div>`);
+  const list = $("#tag-pick-list");
+  const render = () => {
+    const kw = $("#tag-pick-q").value.trim();
+    list.innerHTML = all.filter((t) => !kw || t.includes(kw)).map((t) =>
+      `<label class="chip sel-tag"><input type="checkbox" value="${esc(t)}" ${unitEdit.tags.includes(t) ? "checked" : ""}> ${esc(t)}</label>`).join("")
+      || '<div class="empty">无匹配</div>';
+  };
+  render();
+  $("#tag-pick-q").addEventListener("input", render);
+  $("#tag-pick-ok").addEventListener("click", () => {
+    list.querySelectorAll("input:checked").forEach((el) => {
+      const t = el.value;
+      if (!unitEdit.tags.includes(t)) unitEdit.tags.push(t);
+    });
+    renderUnitEditForm();
+  });
+  $("#tag-pick-close").addEventListener("click", () => $("#modal").classList.add("hidden"));
+}
+
+async function openUnitEffectPicker(wi) {
+  const all = await api("/api/weapon-effects");
+  showModal("添加武器特效",
+    `<input id="eff-pick-q" class="edit-input wide" placeholder="搜索特效…">
+     <div id="eff-pick-list" class="tags"></div>
+     <div class="calc-actions"><button id="eff-pick-ok" class="cond-btn">确定</button>
+     <button id="eff-pick-close" class="cond-btn">关闭</button></div>`);
+  const list = $("#eff-pick-list");
+  const render = () => {
+    const kw = $("#eff-pick-q").value.trim();
+    const w = unitEdit.weapons[wi];
+    const have = new Set((w.effects || []).map((e) => e.name));
+    list.innerHTML = all.filter((x) => !kw || x.name.includes(kw)).map((x) =>
+      `<label class="chip sel-tag"><input type="checkbox" value="${esc(x.name)}" ${have.has(x.name) ? "checked" : ""}> ${esc(x.name)}</label>`).join("")
+      || '<div class="empty">无匹配</div>';
+  };
+  render();
+  $("#eff-pick-q").addEventListener("input", render);
+  $("#eff-pick-ok").addEventListener("click", () => {
+    const w = unitEdit.weapons[wi];
+    list.querySelectorAll("input:checked").forEach((el) => {
+      const item = all.find((x) => x.name === el.value);
+      if (item && !w.effects.some((e) => e.name === item.name)) {
+        w.effects.push({ name: item.name, desc: item.desc });
+      }
+    });
+    renderUnitEditForm();
+  });
+  $("#eff-pick-close").addEventListener("click", () => $("#modal").classList.add("hidden"));
+}
+
+async function openUnitAbilityPicker() {
+  const all = await api("/api/abilities");
+  showModal("添加能力",
+    `<input id="ab-pick-q" class="edit-input wide" placeholder="搜索能力…">
+     <div id="ab-pick-list" class="tags"></div>
+     <div class="calc-actions"><button id="ab-pick-ok" class="cond-btn">确定</button>
+     <button id="ab-pick-close" class="cond-btn">关闭</button></div>`);
+  const list = $("#ab-pick-list");
+  const render = () => {
+    const kw = $("#ab-pick-q").value.trim();
+    const have = new Set(unitEdit.abilities.map((a) => String(a.ability_id)));
+    list.innerHTML = all.filter((x) => !kw || x.name.includes(kw)).map((x) =>
+      `<label class="chip sel-tag" ${have.has(String(x.ability_id)) ? 'style="opacity:.5"' : ""}><input type="checkbox" value="${x.ability_id}" ${have.has(String(x.ability_id)) ? "disabled" : ""}> ${esc(x.name)}</label>`).join("")
+      || '<div class="empty">无匹配</div>';
+  };
+  render();
+  $("#ab-pick-q").addEventListener("input", render);
+  $("#ab-pick-ok").addEventListener("click", () => {
+    list.querySelectorAll("input:checked").forEach((el) => {
+      const item = all.find((x) => String(x.ability_id) === el.value);
+      if (item && !unitEdit.abilities.some((a) => String(a.ability_id) === el.value)) {
+        unitEdit.abilities.push({
+          ability_id: item.ability_id, name: item.name, desc: item.desc,
+          ability_type: item.ability_type, traits: item.traits,
+        });
+      }
+    });
+    renderUnitEditForm();
+  });
+  $("#ab-pick-close").addEventListener("click", () => $("#modal").classList.add("hidden"));
 }
 
 /* ---------- 驾驶员 ---------- */
@@ -1448,7 +1869,7 @@ async function loadPicker(page = pickerState.page) {
       <div class="picker-row" data-w="${w.id}">
         <span class="name">${esc(w.name)}</span>
         <span class="muted">威力 ${w.power_lv5 ?? w.power}</span>
-        <span class="muted">${esc(w.weapon_attr_label ?? "")} ${esc(w.pilot_stat ?? "")}</span>
+        <span class="muted">${esc(`${w.attack_attr_label ?? ""}/${w.attrs_label ?? w.weapon_attr_label ?? ""}`)} ${esc(w.pilot_stat ?? "")}</span>
       </div>`).join("") : '<div class="empty">该机体暂无武器数据</div>';
     $("#picker-list").querySelectorAll(".picker-row").forEach((r) =>
       r.addEventListener("click", () => {
@@ -1459,11 +1880,8 @@ async function loadPicker(page = pickerState.page) {
         $("#d-wtype").value = w.weapon_attr_label ?? "—";
         $("#d-wstat").value = w.pilot_stat ?? "—";
         $("#d-wcrit").value = (w.crit_lv5 ?? w.critical_rate ?? 0) + "%";
-        const statMap = { 1: "ranged", 2: "melee", 3: "awaken" };
-        const key = statMap[w.attack_attr];
-        if (key && calcSel.atkPilot && calcSel.atkPilot[key] != null) {
-          $("#d-aca").value = calcSel.atkPilot[key];
-        }
+        const dep = pilotDepValue(calcSel.atkPilot, w.attack_attr);
+        if (dep != null) $("#d-aca").value = dep;
         $("#picker-modal").classList.add("hidden");
         resetAbInit();
         autoCalcBonuses();
@@ -1587,7 +2005,8 @@ async function autoCalcBonuses() {
     atk_pid: ap ? ap.id : "", atk_psrc: ap ? ap.source : "",
     def_uid: du ? du.id : "", def_usrc: du ? du.source : "",
     def_pid: dp ? dp.id : "", def_psrc: dp ? dp.source : "",
-    weapon_attr: w ? w.weapon_attr : "", attack_attr: w ? w.attack_attr : "",
+    weapon_attr: w ? ((w.attrs && w.attrs.length) ? w.attrs.join(",") : (w.weapon_attr ?? "")) : "",
+    attack_attr: w ? w.attack_attr : "",
     attr_nullify: w && (w.effects || []).some((e) =>
       ((e.name || "") + (e.desc || "")).includes("武装属性损伤减轻无效")) ? "1" : "0",
     atk_u_on: calcSel.atkUOn.join(","), atk_p_on: calcSel.atkPOn.join(","),
@@ -1727,9 +2146,9 @@ $("#pick-atk-pilot").addEventListener("click", () => openPicker("pilot", async (
   calcSel.atkPOn = [];
   resetAbInit();
   $("#atk-pilot-info").textContent = pickInfoText(it);
-  const statMap = { 1: "ranged", 2: "melee", 3: "awaken" };
-  const key = calcSel.atkWeapon ? statMap[calcSel.atkWeapon.attack_attr] : "ranged";
-  $("#d-aca").value = (key && calcSel.atkPilot[key] != null) ? calcSel.atkPilot[key] : (it.ranged ?? "");
+  const dep = pilotDepValue(calcSel.atkPilot,
+    calcSel.atkWeapon ? calcSel.atkWeapon.attack_attr : 1);
+  $("#d-aca").value = dep != null ? dep : (it.ranged ?? "");
   await autoCalcBonuses();
 }));
 $("#pick-def-pilot").addEventListener("click", () => openPicker("pilot", async (it) => {

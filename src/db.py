@@ -107,6 +107,11 @@ CREATE TABLE IF NOT EXISTS unit_weapon (
   en_lv5 INTEGER,
   hit_lv5 INTEGER,
   crit_lv5 INTEGER,
+  power_lv9 INTEGER,
+  en_lv9 INTEGER,
+  hit_lv9 INTEGER,
+  crit_lv9 INTEGER,
+  weapon_attrs TEXT,
   weapon_max_level INTEGER,
   map_weapon_range TEXT,
   map_weapon_desc INTEGER,
@@ -351,6 +356,17 @@ CREATE TABLE IF NOT EXISTS tower_stage (
   stage_name TEXT,
   FOREIGN KEY (tower_event_id) REFERENCES tower_event(event_id)
 );
+
+CREATE TABLE IF NOT EXISTS unit_edit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  unit_id INTEGER,
+  field TEXT,
+  old_value TEXT,
+  new_value TEXT,
+  edited_at TEXT,
+  source TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_edit_log_unit ON unit_edit_log(unit_id);
 """
 
 
