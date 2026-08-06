@@ -302,18 +302,49 @@ def _apply_unit_forms(row: dict, bonuses: dict, conditionals: list[dict]):
     return forms, cond_items, cap, has_sp, has_ssp
 
 
+SUMMARY_TABLES = (
+    "unit", "character", "supporter", "stage", "stage_map_npc",
+    "stage_map_npc_character", "unit_weapon", "unit_ability",
+    "character_skill", "character_ability", "story_event",
+    "story_event_boss", "tower_event", "tower_stage",
+)
+
+
 def api_summary() -> dict:
-    conn = _conn()
-    counts = {}
-    for table in ("unit", "character", "supporter", "stage", "stage_map_npc",
-                  "stage_map_npc_character", "unit_weapon", "unit_ability",
-                  "character_skill", "character_ability", "story_event",
-                  "story_event_boss", "tower_event", "tower_stage"):
-        counts[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-    built = conn.execute("SELECT value FROM meta WHERE key='built_at'").fetchone()
-    conn.close()
+    counts = {t: 0 for t in SUMMARY_TABLES}
+    built = None
+    db_ok = False
+    if config.DB_PATH.exists():
+        conn = None
+        try:
+            conn = _conn()
+            for table in SUMMARY_TABLES:
+                counts[table] = conn.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone()[0]
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key='built_at'"
+            ).fetchone()
+            built = row[0] if row else None
+            db_ok = True
+        except sqlite3.Error:
+            db_ok = False
+        finally:
+            if conn is not None:
+                conn.close()
     expected = {"unit": 1210, "stage": 594}
-    return {"counts": counts, "expected": expected, "built_at": built[0] if built else None}
+    return {
+        "counts": counts,
+        "expected": expected,
+        "built_at": built,
+        "db_exists": config.DB_PATH.exists(),
+        "db_has_data": sum(counts.values()) > 0,
+        "db_size_mb": (
+            round(config.DB_PATH.stat().st_size / 1048576, 1)
+            if config.DB_PATH.exists() else None
+        ),
+        "db_ok": db_ok,
+    }
 
 
 def api_series() -> list:
@@ -694,6 +725,9 @@ WFX_FILTERS = {
         "EXISTS (SELECT 1 FROM unit_weapon w WHERE w.unit_id = u.id "
         "AND w.weapon_effects LIKE '%防御力减少%' AND w.range_max >= 5)"
     ),
+    "has_unit_skill": (
+        "EXISTS (SELECT 1 FROM unit_skill us WHERE us.unit_id = u.id)"
+    ),
     "phys": (
         "EXISTS (SELECT 1 FROM unit_weapon w WHERE w.unit_id = u.id "
         "AND w.weapon_effects LIKE '%物理损伤提升%')"
@@ -807,6 +841,11 @@ def api_unit_detail(unit_id: int) -> dict | None:
         "SELECT * FROM unit_ability WHERE unit_id = ? ORDER BY sort",
         (unit_id,),
     )
+    skills = _all(
+        conn,
+        "SELECT * FROM unit_skill WHERE unit_id = ? ORDER BY sort",
+        (unit_id,),
+    )
     series = _one(conn, "SELECT name FROM series WHERE id = ?", (u.get("series_id"),))
     tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
     series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
@@ -830,6 +869,7 @@ def api_unit_detail(unit_id: int) -> dict | None:
     u["stat_bonuses"] = bonuses
     u["weapons"] = weapons
     u["abilities"] = abilities
+    u["skills"] = skills
     return u
 
 
@@ -1719,6 +1759,26 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
     }
 
 
+def _validate_sqlite_db(path: Path) -> bool:
+    """校验上传文件是否为可用的 SQLite 资料库备份。"""
+    try:
+        with path.open("rb") as f:
+            if f.read(16) != b"SQLite format 3\x00":
+                return False
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            tables = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+        finally:
+            conn.close()
+        return {"unit", "character", "supporter", "stage"}.issubset(tables)
+    except (sqlite3.Error, OSError):
+        return False
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "GundamDB/0.1"
 
@@ -1734,9 +1794,65 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_file_download(self, path: Path, filename: str):
+        size = path.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(size))
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{filename}"'
+        )
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with path.open("rb") as f:
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
+    def _read_upload(self, max_bytes: int) -> Path | None:
+        """把上传内容流式写入临时文件；失败返回 None。"""
+        try:
+            content_length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return None
+        if content_length <= 0 or content_length > max_bytes:
+            return None
+        tmp = config.DB_PATH.with_name(config.DB_PATH.name + ".import.tmp")
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        remaining = content_length
+        try:
+            with tmp.open("wb") as out:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(1 << 20, remaining))
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    remaining -= len(chunk)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            return None
+        if remaining > 0:
+            tmp.unlink(missing_ok=True)
+            return None
+        return tmp
+
+    @staticmethod
+    def _cleanup_import_files(tmp: Path):
+        for p in (tmp, Path(str(tmp) + "-shm"), Path(str(tmp) + "-wal")):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _handle_api(self, path: str, q: dict):
         if path == "/api/summary":
             return self._send_json(api_summary())
+        if path == "/api/export":
+            if not config.DB_PATH.exists():
+                return self._send_json({"error": "数据库不存在"}, 404)
+            return self._send_file_download(config.DB_PATH, "gundam.db")
         if path == "/api/series":
             return self._send_json(api_series())
         if path == "/api/tags":
@@ -1881,10 +1997,39 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def do_POST(self):
+        try:
+            if self.path.split("?")[0] == "/api/import":
+                tmp = self._read_upload(max_bytes=512 * 1024 * 1024)
+                if tmp is None:
+                    return self._send_json(
+                        {"error": "上传无效或文件超过 512MB"}, 400
+                    )
+                if not _validate_sqlite_db(tmp):
+                    self._cleanup_import_files(tmp)
+                    return self._send_json(
+                        {"error": "文件不是有效的数据库备份"}, 400
+                    )
+                config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                tmp.replace(config.DB_PATH)
+                self._cleanup_import_files(tmp)
+                info = api_summary()
+                return self._send_json({
+                    "ok": True,
+                    "message": "导入成功，数据库已保存到本地",
+                    "counts": info["counts"],
+                })
+            return self._send_json({"error": "unknown api"}, 404)
+        except Exception as exc:  # 兜底：避免连接挂死
+            try:
+                self._send_json({"error": str(exc)}, 500)
+            except Exception:
+                pass
+
 
 def run_server(port: int = 8765) -> None:
     if not config.DB_PATH.exists():
-        raise SystemExit(f"数据库不存在：{config.DB_PATH}，请先运行 build")
+        print(f"提示：本地数据库不存在（{config.DB_PATH}），概览页可导入数据库文件。")
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.daemon_threads = True
     print(f"GGE 资料库已启动：http://127.0.0.1:{port}")

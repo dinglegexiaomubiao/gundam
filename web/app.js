@@ -461,7 +461,7 @@ $("#tabs").addEventListener("click", (e) => {
 /* ---------- 概览 ---------- */
 async function loadSummary() {
   const d = await api("/api/summary");
-  const c = d.counts;
+  const c = d.counts || {};
   const cards = [
     ["机体", c.unit, d.expected.unit],
     ["驾驶员", c.character, null],
@@ -479,12 +479,61 @@ async function loadSummary() {
       ${pct !== null ? `<div class="progress"><i style="width:${pct}%"></i></div>` : ""}
     </div>`;
   }).join("");
+  const dbStatus = !d.db_exists
+    ? '<span class="chip cond">数据库不存在</span>'
+    : d.db_has_data
+      ? `<span class="chip cond">本地数据库可用（${d.db_size_mb} MB）</span>`
+      : '<span class="chip cond">数据库为空，请导入数据</span>';
   $("#tab-overview").innerHTML = `
     <h3>数据概览</h3>
+    <div class="overview-actions">
+      ${dbStatus}
+      <button id="ov-export" class="cond-btn" title="下载当前数据库文件">导出数据库</button>
+      <button id="ov-import" class="cond-btn" title="导入数据库备份文件（自动保存到本地）">导入数据库</button>
+      <input type="file" id="ov-import-file" accept=".db" class="hidden">
+      <span id="ov-msg" class="muted"></span>
+    </div>
     <div class="stat-grid">${html}</div>
-    <p class="desc">数据库构建时间：${esc(d.built_at)}<br>
-    数据已全量抓取完成（机体 1210 / 关卡 594）。<br>
+    <p class="desc">${d.db_has_data
+      ? `数据库构建时间：${esc(d.built_at)}<br>数据已全量抓取完成（机体 1210 / 关卡 594）。`
+      : "当前没有数据，可通过「导入数据库」恢复本地数据，或运行爬取/云端恢复。"}<br>
     数据来源：soshage.com/gget（zh-CN），仅供个人研究。</p>`;
+  bindOverviewActions(d);
+}
+
+function bindOverviewActions(d) {
+  const msg = $("#ov-msg");
+  const exportBtn = $("#ov-export");
+  const importBtn = $("#ov-import");
+  const fileInput = $("#ov-import-file");
+  exportBtn.addEventListener("click", () => {
+    if (!d.db_exists) {
+      msg.textContent = "没有可导出的数据库";
+      return;
+    }
+    window.location.href = "/api/export";
+  });
+  importBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    if (d.db_has_data && !confirm("导入会覆盖本地现有数据库，确定继续？")) {
+      fileInput.value = "";
+      return;
+    }
+    msg.textContent = "正在导入…";
+    try {
+      const r = await fetch("/api/import", { method: "POST", body: f });
+      const res = await r.json();
+      msg.textContent = res.message || res.error || "导入失败";
+      if (res.ok) {
+        fileInput.value = "";
+        loadSummary();
+      }
+    } catch (e) {
+      msg.textContent = "导入失败：" + (e.message || e);
+    }
+  });
 }
 
 /* ---------- 机体 ---------- */
@@ -504,6 +553,7 @@ const WFX_OPTIONS = [
   { value: "spec_r5", label: "特殊损伤提升特效（射程 5 及以上）" },
   { value: "defdown", label: "防御力减少" },
   { value: "defdown_r5", label: "防御力减少（射程 5 及以上）" },
+  { value: "has_unit_skill", label: "有单位技能" },
 ];
 
 function syncCombobox(boxId) {
@@ -752,6 +802,12 @@ async function openUnit(id) {
       <td><button class="link-name" data-type="ability" data-name="${esc(a.name)}">${esc(a.name)}</button></td>
       <td class="desc">${effectHtml(a.effects, a.desc, a.cond_entities)}</td>
     </tr>`).join("");
+  const unitSkills = (u.skills || []).map((s) => `
+    <tr>
+      <td>${esc(s.name || "单位技能")}</td>
+      <td class="desc">${esc(s.desc || "—")}</td>
+      <td>${s.duration ? `${s.duration} 回合` : "—"}</td>
+    </tr>`).join("");
   const t = u.terrain || {};
   const terrain = Object.entries({ 宇宙: t.space, 大气圈: t.atmospheric, 地面: t.ground, 水面: t.surface, 水中: t.underwater })
     .map(([k, v]) => `<span class="chip">${k} ${v ?? "—"}</span>`).join("");
@@ -762,7 +818,8 @@ async function openUnit(id) {
      ${u.tags.length ? `<h3>标签（点击可搜索）</h3><div class="tags">${u.tags.map((t) => tagChip(t)).join("")}</div>` : ""}
      <h3>武器（${u.weapons.length}）</h3>
      <table><tr><th>名称</th><th>伤害类型</th><th>依赖属性</th><th>射程</th><th>威力(满级)</th><th>EN(满级)</th><th>命中(满级)</th><th>暴击(满级)</th><th>特效(满级)</th></tr>${weapons || '<tr><td colspan="9" class="empty">暂无武器数据</td></tr>'}</table>
-     ${abilities ? `<h3>能力</h3><table><tr><th>名称</th><th>效果</th></tr>${abilities}</table>` : ""}`);
+     ${abilities ? `<h3>能力</h3><table><tr><th>名称</th><th>效果</th></tr>${abilities}</table>` : ""}
+     ${unitSkills ? `<h3>单位技能（${(u.skills || []).length}）</h3><table><tr><th>名称</th><th>效果</th><th>持续</th></tr>${unitSkills}</table>` : ""}`);
   renderUnitStats(u, 0, "default");
   bindTagChips();
   bindSearchLinks();
