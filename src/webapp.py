@@ -9,6 +9,7 @@ import json
 import mimetypes
 import sqlite3
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -17,6 +18,8 @@ import re
 from . import config
 from .damage import CRITICAL_CORRECTION, CombatantStats, DamageContext, calculate_damage
 from . import pairing
+from .db import build_db
+from .fetch import fetch_all
 from .labels import (
     ACQUISITION_ROUTE,
     ATTACK_ATTR,
@@ -33,6 +36,46 @@ from .labels import (
 )
 
 WEB_DIR = config.PROJECT_ROOT / "web"
+
+# 手动爬取任务状态（仅由概览页「爬取数据」按钮触发，禁止自动爬取）
+_crawl_lock = threading.Lock()
+_crawl_state: dict = {
+    "running": False,
+    "step": "",
+    "started_at": None,
+    "error": None,
+}
+
+
+def _run_crawl_worker() -> None:
+    try:
+        _crawl_state.update({
+            "running": True,
+            "step": "fetch",
+            "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "error": None,
+        })
+        fetch_all()
+        _crawl_state["step"] = "build"
+        build_db()
+        _crawl_state["step"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        _crawl_state["error"] = str(exc)
+    finally:
+        _crawl_state["running"] = False
+
+
+def start_crawl() -> dict:
+    with _crawl_lock:
+        if _crawl_state["running"]:
+            return {"ok": False, "message": "爬取已在进行中"}
+        threading.Thread(target=_run_crawl_worker, daemon=True).start()
+        return {"ok": True, "message": "已开始爬取，完成后自动构建数据库"}
+
+
+def crawl_status() -> dict:
+    with _crawl_lock:
+        return dict(_crawl_state)
 
 UNIT_STAR_STATS = ("hp", "en", "attack", "defense", "mobility")
 CHAR_STAR_STATS = ("ranged", "melee", "defense", "reaction", "awaken")
@@ -1849,6 +1892,8 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_api(self, path: str, q: dict):
         if path == "/api/summary":
             return self._send_json(api_summary())
+        if path == "/api/crawl-status":
+            return self._send_json(crawl_status())
         if path == "/api/export":
             if not config.DB_PATH.exists():
                 return self._send_json({"error": "数据库不存在"}, 404)
@@ -1999,7 +2044,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if self.path.split("?")[0] == "/api/import":
+            api_path = self.path.split("?")[0]
+            if api_path == "/api/crawl":
+                return self._send_json(start_crawl())
+            if api_path == "/api/import":
                 tmp = self._read_upload(max_bytes=512 * 1024 * 1024)
                 if tmp is None:
                     return self._send_json(

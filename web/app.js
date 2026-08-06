@@ -490,21 +490,30 @@ async function loadSummary() {
       ${dbStatus}
       <button id="ov-export" class="cond-btn" title="下载当前数据库文件">导出数据库</button>
       <button id="ov-import" class="cond-btn" title="导入数据库备份文件（自动保存到本地）">导入数据库</button>
+      <button id="ov-crawl" class="cond-btn" title="从 soshage 全量抓取并构建数据库（仅手动触发）">爬取数据</button>
       <input type="file" id="ov-import-file" accept=".db" class="hidden">
       <span id="ov-msg" class="muted"></span>
     </div>
     <div class="stat-grid">${html}</div>
     <p class="desc">${d.db_has_data
       ? `数据库构建时间：${esc(d.built_at)}<br>数据已全量抓取完成（机体 1210 / 关卡 594）。`
-      : "当前没有数据，可通过「导入数据库」恢复本地数据，或运行爬取/云端恢复。"}<br>
+      : "当前没有数据，可通过「导入数据库」恢复本地数据，或点击「爬取数据」全量抓取。"}<br>
     数据来源：soshage.com/gget（zh-CN），仅供个人研究。</p>`;
   bindOverviewActions(d);
+  const st = await api("/api/crawl-status");
+  if (st.running) {
+    $("#ov-export").disabled = true;
+    $("#ov-import").disabled = true;
+    $("#ov-crawl").disabled = true;
+    pollCrawlStatus($("#ov-crawl"), $("#ov-msg"));
+  }
 }
 
 function bindOverviewActions(d) {
   const msg = $("#ov-msg");
   const exportBtn = $("#ov-export");
   const importBtn = $("#ov-import");
+  const crawlBtn = $("#ov-crawl");
   const fileInput = $("#ov-import-file");
   exportBtn.addEventListener("click", () => {
     if (!d.db_exists) {
@@ -514,6 +523,25 @@ function bindOverviewActions(d) {
     window.location.href = "/api/export";
   });
   importBtn.addEventListener("click", () => fileInput.click());
+  crawlBtn.addEventListener("click", async () => {
+    if (!confirm("将开始全量爬取数据（耗时较长），确定继续？")) return;
+    crawlBtn.disabled = true;
+    msg.textContent = "正在开始爬取…";
+    try {
+      const r = await fetch("/api/crawl", { method: "POST" });
+      const res = await r.json();
+      if (!res.ok) {
+        msg.textContent = res.message || "启动爬取失败";
+        crawlBtn.disabled = false;
+        return;
+      }
+      msg.textContent = "爬取已启动";
+      pollCrawlStatus(crawlBtn, msg);
+    } catch (e) {
+      msg.textContent = "启动爬取失败：" + (e.message || e);
+      crawlBtn.disabled = false;
+    }
+  });
   fileInput.addEventListener("change", async () => {
     const f = fileInput.files && fileInput.files[0];
     if (!f) return;
@@ -534,6 +562,29 @@ function bindOverviewActions(d) {
       msg.textContent = "导入失败：" + (e.message || e);
     }
   });
+}
+
+function pollCrawlStatus(btn, msg) {
+  const tick = async () => {
+    try {
+      const res = await api("/api/crawl-status");
+      if (res.running) {
+        msg.textContent = "正在爬取中（" + (res.step === "build" ? "构建数据库" : "抓取数据") + "）…";
+        setTimeout(tick, 3000);
+        return;
+      }
+      btn.disabled = false;
+      if (res.error) msg.textContent = "爬取失败：" + res.error;
+      else {
+        msg.textContent = "爬取完成，数据库已更新";
+        loadSummary();
+      }
+    } catch (e) {
+      btn.disabled = false;
+      msg.textContent = "查询爬取状态失败：" + (e.message || e);
+    }
+  };
+  setTimeout(tick, 2000);
 }
 
 /* ---------- 机体 ---------- */

@@ -50,13 +50,12 @@ python scripts/pipeline.py serve --port 8765   # 启动本地 Web 查看器
    `NEON_DB_URL`（例如 `postgresql://user:pass@host/db?sslmode=require`），
    执行 `python scripts/pipeline.py restore` 或直接 `serve`（自动恢复）；
    批量读取会自动走 Neon 直连端点（比池化快），带逐表 180 秒硬超时与最多 3 轮断点续传重试；
-3. **云端也没有/不可用**：`serve` 自动进入 `fetch + build` 爬取（可加 `--no-crawl`
-   禁用自动爬取，改为直接报错）。
+3. **云端也没有/不可用**：不自动爬取，直接在空库状态下启动，可在概览页
+   「导入数据库」恢复，或点击「爬取数据」按钮手动全量抓取。
 
 ```powershell
 $env:NEON_DB_URL = "postgresql://user:pass@host/db?sslmode=require"
-python scripts/pipeline.py serve          # 本地无库时自动：云端恢复 -> 失败则爬取
-python scripts/pipeline.py serve --no-crawl
+python scripts/pipeline.py serve          # 本地无库时自动：云端恢复 -> 失败则空库启动
 ```
 
 向云端上传本地数据使用迁移脚本（同样依赖 `NEON_DB_URL`）：
@@ -72,9 +71,10 @@ python scripts/migrate_cloud.py           # 重建云端表结构并上传全部
 - **导出数据库**：下载当前本地 `gundam.db`（SQLite 文件，可直接再导入）；
 - **导入数据库**：选择一个导出的 `.db` 文件，校验通过后自动替换本地数据库
   （保存到 `data/db/gundam.db`，重启后依然有效）。本地已有数据时会先确认是否覆盖。
+- **爬取数据**：仅手动触发，点击并确认后才会全量抓取并构建数据库（不会自动爬取）。
 
-本地没有数据库时也能启动 Web（`serve --no-crawl`），在概览页直接导入数据，
-不必先爬取或连接云端。
+本地没有数据库时也能启动 Web，在概览页直接导入数据或手动点击「爬取数据」，
+不必先连接云端。
 
 ## 配对功能
 

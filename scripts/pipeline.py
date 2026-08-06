@@ -34,11 +34,6 @@ def main() -> int:
         default=8765,
         help="本地 Web 端口（serve 步骤）",
     )
-    parser.add_argument(
-        "--no-crawl",
-        action="store_true",
-        help="serve 时本地与云端都没有数据库则报错，不自动爬取",
-    )
     args = parser.parse_args()
 
     if args.step in ("fetch", "all"):
@@ -60,13 +55,9 @@ def main() -> int:
             print("本地数据库不存在：先尝试从云端恢复…")
             if restore_local_db_from_cloud():
                 print("云端恢复成功。")
-            elif args.no_crawl:
-                print("云端恢复失败且已指定 --no-crawl，不自动爬取；")
-                print("将在空库状态下启动，可在概览页手动导入数据库文件。")
             else:
-                print("云端不可用，自动开始爬取数据（fetch + build）…")
-                fetch_all(limit=args.limit)
-                build_db()
+                print("云端恢复失败或未配置 NEON_DB_URL，不自动爬取；")
+                print("将在空库状态下启动，可在概览页「导入数据库」或点击「爬取数据」。")
         run_server(port=args.port)
     return 0
 
