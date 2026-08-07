@@ -407,6 +407,7 @@ _SUPPORT_RES = (
 
 
 def _support_info(abilities, skills) -> dict:
+    """支援次数仅从能力（abilities）统计，技能不计入。"""
     info = {
         "defense": {"count": 0, "cond": False},
         "attack": {"count": 0, "cond": False},
@@ -433,8 +434,6 @@ def _support_info(abilities, skills) -> dict:
 
     for ab in abilities or []:
         scan([t.get("trait") or t for t in (ab.get("ability") or {}).get("traits") or []])
-    for sk in skills or []:
-        scan([t.get("trait") or t for t in (sk.get("skill") or {}).get("trait_set") or []])
     return info
 
 

@@ -826,7 +826,9 @@ function initCombobox(boxId, options, getVal, onPick, clearable) {
 
 async function initFilterControls() {
   const series = await api("/api/series");
-  const seriesOpts = series.map((s) => ({ value: s.id, label: s.name }));
+  const seriesOpts = [{ value: "", label: "全部系列" }].concat(
+    series.map((s) => ({ value: s.id, label: s.name }))
+  );
   const [unitTags, charTags, supTags, skillNames, supportLabels, supSkillNames] = await Promise.all([
     api("/api/tags?kind=unit"),
     api("/api/tags?kind=character"),
@@ -1041,9 +1043,11 @@ async function openUnit(id) {
        <button id="unit-sync-btn" class="cond-btn" title="同步该机体数据到服务器">同步机体数据到服务器</button>
      </span>`,
     `<p class="desc">${roleBadge(u.role, u.role_label)} ${esc(u.desc || "暂无描述")}</p>
+     ${(u.series_names || []).length ? `<h3>系列（点击可搜索）</h3><div class="tags">${u.series_names.map((s) => `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : ""}
      <div id="unit-stats"></div>
      <h3>地形适性</h3><div class="tags">${terrain}</div>
      ${u.tags.length ? `<h3>标签（点击可搜索）</h3><div class="tags">${u.tags.map((t) => tagChip(t)).join("")}</div>` : ""}
+     ${(u.wfx_matches || []).length ? `<h3>备注（点击可搜索）</h3><div class="tags">${WFX_OPTIONS.filter((o) => (u.wfx_matches || []).includes(o.value)).map((o) => `<button class="chip wfx-chip" data-wfx="${esc(o.value)}">${esc(o.label)}</button>`).join("")}</div>` : ""}
      <h3>武器（${u.weapons.length}）</h3>
      <table><tr><th>名称</th><th>类型</th><th>依赖属性</th><th>射程</th><th>威力(满级)</th><th>EN(满级)</th><th>命中(满级)</th><th>暴击(满级)</th><th>特效(满级)</th></tr>${weapons || '<tr><td colspan="9" class="empty">暂无武器数据</td></tr>'}</table>
      ${abilities ? `<h3>能力</h3><table><tr><th>名称</th><th>效果</th></tr>${abilities}</table>` : ""}
@@ -1052,7 +1056,34 @@ async function openUnit(id) {
   bindTagChips();
   bindSearchLinks();
   bindEffectChips();
+  bindUnitInfoChips();
   bindUnitEditButtons(u);
+}
+
+function bindUnitInfoChips() {
+  document.querySelectorAll(".series-chip").forEach((b) =>
+    b.addEventListener("click", () => searchUnitsBySeries(Number(b.dataset.seriesId))));
+  document.querySelectorAll(".wfx-chip").forEach((b) =>
+    b.addEventListener("click", () => searchUnitsByWfx(b.dataset.wfx)));
+}
+
+function searchUnitsByWfx(value) {
+  $("#modal").classList.add("hidden");
+  state.units.q = "";
+  state.units.series = "";
+  state.units.type = "";
+  state.units.tags = [];
+  state.units.cond = null;
+  state.units.wfx = [value];
+  state.units.wfx_mode = "any";
+  $("#unit-q").value = "";
+  $("#unit-type").value = "";
+  syncCombobox("#unit-series-box");
+  renderTagChips("unit");
+  renderWfxChips();
+  renderUnitCondBar();
+  activateTab("units");
+  loadUnits(0);
 }
 
 /* ---------- 机体数据编辑 ---------- */
@@ -1466,8 +1497,10 @@ async function openCharacter(id) {
       <td class="desc">${effectHtml(a.effects, a.desc, a.cond_entities)}</td></tr>`).join("");
   showModal(c.name,
     `<p class="desc">${roleBadge(c.role, c.role_label)} ${esc(c.desc || "暂无描述")}</p>
+     ${(c.series_names || []).length ? `<h3>系列（点击可搜索）</h3><div class="tags">${c.series_names.map((s) => `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : ""}
      <div id="char-stats"></div>
      ${c.tags.length ? `<h3>标签（点击可搜索）</h3><div class="tags">${c.tags.map((t) => tagChip(t)).join("")}</div>` : ""}
+     ${c.support_label ? `<h3>备注（点击可搜索）</h3><div class="tags"><button class="chip support-chip" data-support="${esc(c.support_label)}">${esc(c.support_label)}</button></div>` : ""}
      <h3>技能（${c.skills.length}）</h3>
      <table><tr><th>名称</th><th>SP</th><th>持续</th><th>效果</th></tr>${skills || '<tr><td colspan="4" class="empty">无</td></tr>'}</table>
      <h3>能力</h3>
@@ -1475,6 +1508,50 @@ async function openCharacter(id) {
   renderCharStats(c, "default");
   bindTagChips();
   bindSearchLinks();
+  bindCharInfoChips();
+}
+
+function bindCharInfoChips() {
+  document.querySelectorAll(".series-chip").forEach((b) =>
+    b.addEventListener("click", () => searchCharactersBySeries(Number(b.dataset.seriesId))));
+  document.querySelectorAll(".support-chip").forEach((b) =>
+    b.addEventListener("click", () => searchCharactersBySupport(b.dataset.support)));
+}
+
+function searchCharactersBySeries(seriesId) {
+  $("#modal").classList.add("hidden");
+  state.characters.q = "";
+  state.characters.series = String(seriesId);
+  state.characters.type = "";
+  state.characters.tags = [];
+  state.characters.skills = [];
+  state.characters.support = "";
+  $("#char-q").value = "";
+  $("#char-type").value = "";
+  $("#char-support").value = "";
+  syncCombobox("#char-series-box");
+  renderTagChips("char");
+  renderSkillChips();
+  activateTab("characters");
+  loadCharacters(0);
+}
+
+function searchCharactersBySupport(label) {
+  $("#modal").classList.add("hidden");
+  state.characters.q = "";
+  state.characters.series = "";
+  state.characters.type = "";
+  state.characters.tags = [];
+  state.characters.skills = [];
+  state.characters.support = label;
+  $("#char-q").value = "";
+  $("#char-type").value = "";
+  $("#char-support").value = label;
+  syncCombobox("#char-series-box");
+  renderTagChips("char");
+  renderSkillChips();
+  activateTab("characters");
+  loadCharacters(0);
 }
 
 /* ---------- 支援角色 ---------- */
@@ -1555,15 +1632,25 @@ function renderSupporterLeaderStep(step) {
     body.innerHTML = '<div class="empty">暂无队长技能</div>';
     return;
   }
-  body.innerHTML = ls.branches.map((b, i) => `
-    <div class="effect-block">
+  body.innerHTML = ls.branches.map((b, i) => {
+    const subs = (b.subs && b.subs.length)
+      ? b.subs
+      : [{ text: b.text, mode: b.mode, series: b.series, tags: b.tags }];
+    const chips = subs.map((sd, si) =>
+      `<button class="chip sup-branch" data-branch="${i}" data-sub="${si}" title="点击搜索该分支的机体">${esc(sd.text)}${condModeLabel(sd.mode)}</button>`
+    ).join('<span class="cond-or">或</span>');
+    return `<div class="effect-block">
       <div class="effect">${esc(b.desc)}</div>
-      <div class="tags"><button class="chip sup-branch" data-branch="${i}" title="点击搜索该分支的机体">${esc(b.text)}${condModeLabel(b.mode)}</button></div>
-    </div>`).join("") || '<div class="empty">暂无加成分支</div>';
+      <div class="tags">${chips}</div>
+    </div>`;
+  }).join("") || '<div class="empty">暂无加成分支</div>';
   body.querySelectorAll(".sup-branch").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      const g = ls.branches[Number(b.dataset.branch)];
+      const br = ls.branches[Number(b.dataset.branch)];
+      const g = (br && br.subs && br.subs.length)
+        ? br.subs[Number(b.dataset.sub)]
+        : br;
       if (g) searchUnitsByCond([condToBranch(g)]);
     }));
 }

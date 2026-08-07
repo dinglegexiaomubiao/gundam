@@ -536,6 +536,22 @@ def api_skillnames() -> list:
     return [r[0] for r in rows]
 
 
+def _counter_guard_ids(conn) -> set[int]:
+    """有「反击时支援防御」类能力的驾驶员 ID（反击援防）。"""
+    ids: set[int] = set()
+    for cid, name, traits in conn.execute(
+        "SELECT character_id, name, traits FROM character_ability"
+    ):
+        texts = [
+            (t.get("desc") or "") for t in _json_list(traits)
+            if t.get("desc")
+        ]
+        joined = (name or "") + "".join(texts)
+        if "反击" in joined and "支援防御" in joined:
+            ids.add(cid)
+    return ids
+
+
 def api_support_labels() -> list:
     conn = _conn()
     rows = conn.execute("SELECT support_info FROM character").fetchall()
@@ -544,6 +560,8 @@ def api_support_labels() -> list:
         lbl = support_label(_json_dict(si))
         if lbl:
             labels.add(lbl)
+    if _counter_guard_ids(conn):
+        labels.add("反击援防")
     conn.close()
     return sorted(labels)
 
@@ -894,6 +912,16 @@ WFX_FILTERS = {
     ),
 }
 
+# 备注显示优先级：命中了更具体的选项（射程5及以上 / 不含MAP）时，隐藏笼统项
+WFX_SPECIFIC_REMOVE = {
+    "range5_nomap": "range5",
+    "range5plus_nomap": "range5plus",
+    "phys_r5": "phys",
+    "beam_r5": "beam",
+    "spec_r5": "spec",
+    "defdown_r5": "defdown",
+}
+
 
 def _wfx_where(wfx: str, wfx_mode: str):
     keys = [k for k in (wfx or "").split(",") if k in WFX_FILTERS]
@@ -1014,6 +1042,23 @@ def api_unit_detail(unit_id: int) -> dict | None:
         "SELECT * FROM unit_skill WHERE unit_id = ? ORDER BY sort",
         (unit_id,),
     )
+    wfx_matches: list[str] = []
+    for key, pred in WFX_FILTERS.items():
+        sql = (
+            "SELECT EXISTS (SELECT 1 FROM unit u WHERE u.id = ? "
+            f"AND ({pred}))"
+        )
+        try:
+            hit = conn.execute(sql, (unit_id,)).fetchone()[0]
+        except sqlite3.Error:
+            hit = 0
+        if hit:
+            wfx_matches.append(key)
+    matched = set(wfx_matches)
+    for specific, general in WFX_SPECIFIC_REMOVE.items():
+        if specific in matched:
+            matched.discard(general)
+    wfx_matches = [k for k in wfx_matches if k in matched]
     series = _one(conn, "SELECT name FROM series WHERE id = ?", (u.get("series_id"),))
     tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
     series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
@@ -1024,6 +1069,9 @@ def api_unit_detail(unit_id: int) -> dict | None:
         )
     conn.close()
     u["series_name"] = series["name"] if series else None
+    u["series_names"] = _series_names(
+        u.get("series_ids"), u.get("series_id"), series_by_id
+    )
     u["role_label"] = ROLE_NAMES.get(u.get("role"), "—")
     u["terrain"] = json.loads(u.get("terrain") or "{}")
     u["tags"] = json.loads(u.get("tags") or "[]")
@@ -1038,7 +1086,34 @@ def api_unit_detail(unit_id: int) -> dict | None:
     u["weapons"] = weapons
     u["abilities"] = abilities
     u["skills"] = skills
+    u["wfx_matches"] = wfx_matches
     return u
+
+
+def _series_names(series_ids_raw, primary_id, series_by_id) -> list[dict]:
+    """机体/驾驶员所属系列列表（含主系列与多系列归属，按 id 去重）。"""
+    seen: set[int] = set()
+    out: list[dict] = []
+
+    def add(sid):
+        if sid in seen:
+            return
+        seen.add(sid)
+        name = series_by_id.get(sid)
+        if name:
+            out.append({"id": sid, "name": name})
+
+    if primary_id:
+        try:
+            add(int(primary_id))
+        except (TypeError, ValueError):
+            pass
+    for sid in _json_list(series_ids_raw):
+        try:
+            add(int(sid))
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def api_weapon_effects() -> list:
@@ -1461,6 +1536,7 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
         args += skill_args
     w = ("WHERE " + " AND ".join(where)) if where else ""
     conn = _conn()
+    counter_guard = _counter_guard_ids(conn)
     rows = _all(
         conn,
         f"""SELECT c.id, c.rarity, c.name, s.name AS series_name,
@@ -1474,7 +1550,10 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
     conn.close()
     for r in rows:
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
-        r["support_label"] = support_label(_json_dict(r.get("support_info")))
+        lbl = support_label(_json_dict(r.get("support_info")))
+        if r["id"] in counter_guard:
+            lbl = "反击援防"
+        r["support_label"] = lbl
         bonuses = _json_dict(r.get("stat_bonuses"))
         for key in ("ranged", "melee", "defense", "reaction", "awaken"):
             r[f"{key}_f"] = star_value(
@@ -1524,6 +1603,10 @@ def api_character_detail(char_id: int) -> dict | None:
     conn.close()
     c["tags"] = json.loads(c.get("tags") or "[]")
     c["role_label"] = ROLE_NAMES.get(c.get("role"), "—")
+    c["series_names"] = _series_names(
+        c.get("series_ids"), c.get("series_id"), series_by_id
+    )
+    c["support_label"] = support_label(_json_dict(c.get("support_info")))
     bonuses = _json_dict(c.get("stat_bonuses"))
     conditionals = _json_list(c.get("conditional_bonuses"))
     c["forms"], c["conditional_bonuses"], c["level_cap"], c["has_sp"] = (
@@ -1683,11 +1766,12 @@ def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: st
             r["tags"] = json.loads(r.get("tags") or "[]")
         except (TypeError, json.JSONDecodeError):
             r["tags"] = []
-    conds_by_sup: dict[int, list[dict]] = {}
-    for sid, conds in conn.execute(
-        "SELECT supporter_id, conditions FROM supporter_skill WHERE conditions != '[]'"
+    leader_traits: dict[int, list[str]] = {}
+    for sid, traits in conn.execute(
+        "SELECT supporter_id, traits FROM supporter_skill "
+        "WHERE skill_type = 'leader' ORDER BY limit_break_step"
     ):
-        conds_by_sup.setdefault(sid, []).extend(_json_list(conds))
+        leader_traits.setdefault(sid, []).append(traits or "")
     active_skills: dict[int, list[str]] = {}
     for sid, name in conn.execute(
         "SELECT supporter_id, name FROM supporter_skill "
@@ -1696,10 +1780,17 @@ def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: st
         if name not in active_skills.setdefault(sid, []):
             active_skills[sid].append(name)
     conn.close()
+
+    def cond_groups_for(sid: int) -> list[dict]:
+        all_branches: list[list[dict]] = []
+        for traits in leader_traits.get(sid, []):
+            all_branches.append(
+                _leader_branches(traits, tag_by_id, series_by_id)
+            )
+        return _flatten_cond_groups(all_branches)
+
     for r in rows:
-        r["condition_tags"] = _cond_groups_from_conditions(
-            conds_by_sup.get(r["id"], []), tag_by_id, series_by_id
-        )
+        r["condition_tags"] = cond_groups_for(r["id"])
         r["active_skill"] = "、".join(active_skills.get(r["id"], []))
         r["hp"] = r.get("max_hp_addition_value") or 0
         r["atk"] = r.get("max_attack_addition_value") or 0
@@ -1737,11 +1828,7 @@ def api_supporter_detail(sup_id: int) -> dict | None:
     s["tags"] = _json_list(s.get("tags"))
     active: dict[str, dict] = {}
     leader: dict[int, dict] = {}
-    all_conds: list[dict] = []
     for sk in skills:
-        conds = _json_list(sk.get("conditions"))
-        for c in conds:
-            all_conds.append(c)
         if (sk.get("skill_type") or "") == "active":
             name = (sk.get("name") or "").strip() or "主动技能"
             active.setdefault(name, {
@@ -1753,7 +1840,9 @@ def api_supporter_detail(sup_id: int) -> dict | None:
             })
         else:
             step = sk.get("limit_break_step") or 0
-            branches = _leader_branches(sk, conds, tag_by_id, series_by_id)
+            branches = _leader_branches(
+                sk.get("traits"), tag_by_id, series_by_id
+            )
             prev = leader.get(step)
             if prev is None:
                 leader[step] = {
@@ -1765,54 +1854,101 @@ def api_supporter_detail(sup_id: int) -> dict | None:
                 prev["branches"].extend(branches)
     s["active_skills"] = list(active.values())
     s["leader_skills"] = [leader[k] for k in sorted(leader)]
-    s["cond_groups"] = _cond_groups_from_conditions(
-        all_conds, tag_by_id, series_by_id
+    s["cond_groups"] = _flatten_cond_groups(
+        [ls["branches"] for ls in leader.values()]
     )
     s["condition_tags"] = s["cond_groups"]
     return s
 
 
-def _leader_branches(sk: dict, conds: list[dict], tag_by_id: dict,
+def _leader_branches(traits_raw: str, tag_by_id: dict,
                      series_by_id: dict) -> list[dict]:
-    """解析队长技能 traits → 各加成分支（效果描述 + 词条对象）。"""
+    """解析队长技能 traits → 各加成分支（效果描述 + 词条对象子分支）。
+
+    一个 trait 内的 trait_condition 按 group_id 分组：
+      - 共享同一非空 group_id 的多条条件 = 或（并集，各自是子分支）；
+      - group_id 为空 = 且（交集，合并维度）；
+      - 单条条件内的多个系列/多个标签 = 或（任一）。
+    分支结果含 subs（子分支列表），词条对象由 subs 展平得到。
+    """
     out: list[dict] = []
-    seen: set[tuple] = set()
-    for i, t in enumerate(_json_list(sk.get("traits"))):
-        cond = (t.get("trait_condition") or [{}])[0] or {}
-        series_ids = _parse_id_list(cond.get("unit_series"))
-        tag_ids = [
-            int(x) for x in str(cond.get("unit_tags") or "").split(",")
-            if x.strip().isdigit()
+    for t in _json_list(traits_raw):
+        entries = [
+            c for c in (t.get("trait_condition") or [])
+            if isinstance(c, dict)
         ]
-        tags = [tag_by_id[tid] for tid in tag_ids if tid in tag_by_id]
-        key = (tuple(sorted(series_ids)), tuple(sorted(tags)))
-        if key in seen:
+        if not entries:
             continue
-        seen.add(key)
-        mode = _cond_mode(series_ids, tags)
-        text = ""
-        if i < len(conds):
-            text = (conds[i].get("text") or "").strip()
-        if not text:
+        groups: dict[str, list[tuple[list[int], list[str]]]] = {}
+        for idx, c in enumerate(entries):
+            g = (c.get("group_id") or "").strip()
+            key = g if g else f"__and_{idx}"
+            series_ids = _parse_id_list(c.get("unit_series"))
+            tag_ids = [
+                int(x) for x in str(c.get("unit_tags") or "").split(",")
+                if x.strip().isdigit()
+            ]
+            tags = sorted({tag_by_id[tid] for tid in tag_ids if tid in tag_by_id})
+            groups.setdefault(key, []).append((series_ids, tags))
+        # 组间取且（交集），组内取或（并集）
+        subs: list[tuple[set[int], set[str]]] = [(set(), set())]
+        for items in groups.values():
+            new_subs: list[tuple[set[int], set[str]]] = []
+            for sids, tags in items:
+                for a, b in subs:
+                    merged = (a | set(sids), b | set(tags))
+                    if merged not in new_subs:
+                        new_subs.append(merged)
+            subs = new_subs
+        sub_list: list[dict] = []
+        for sids, tags in subs:
+            sids_sorted = sorted(sids)
+            tags_sorted = sorted(tags)
             parts = []
-            if series_ids:
+            if sids_sorted:
                 parts.append("系列：" + "、".join(
-                    series_by_id.get(x, f"#{x}") for x in series_ids
+                    series_by_id.get(x, f"#{x}") for x in sids_sorted
                 ))
-            if tags:
-                parts.append("标签：" + "、".join(tags))
-            text = "同组 · " + " · ".join(parts)
-        out.append({
-            "desc": (t.get("desc") or "").strip(),
-            "text": text,
-            "mode": mode,
-            "series": [
-                {"id": x, "name": series_by_id.get(x, f"系列{x}")}
-                for x in series_ids
-            ],
-            "tags": tags,
-        })
+            if tags_sorted:
+                parts.append("标签：" + "、".join(tags_sorted))
+            sub_list.append({
+                "text": "同组 · " + " · ".join(parts),
+                "mode": _cond_mode(sids_sorted, tags_sorted),
+                "series": [
+                    {"id": x, "name": series_by_id.get(x, f"系列{x}")}
+                    for x in sids_sorted
+                ],
+                "tags": tags_sorted,
+            })
+        branch: dict = {"desc": (t.get("desc") or "").strip(), "subs": sub_list}
+        if len(sub_list) == 1:
+            branch["text"] = sub_list[0]["text"]
+            branch["mode"] = sub_list[0]["mode"]
+            branch["series"] = sub_list[0]["series"]
+            branch["tags"] = sub_list[0]["tags"]
+        out.append(branch)
     return out
+
+
+def _flatten_cond_groups(branches_list: list[list[dict]]) -> list[dict]:
+    """把各分支的 subs 展平成词条对象列表（去重）。"""
+    seen: set[tuple] = set()
+    groups: list[dict] = []
+    for branches in branches_list:
+        for br in branches:
+            subs = br.get("subs") or [{
+                "text": br.get("text"),
+                "mode": br.get("mode"),
+                "series": br.get("series") or [],
+                "tags": br.get("tags") or [],
+            }]
+            for s in subs:
+                key = (tuple(x["id"] for x in s["series"]), tuple(s["tags"]))
+                if key in seen:
+                    continue
+                seen.add(key)
+                groups.append(s)
+    return groups
 
 
 def _like_escape(q: str) -> str:
