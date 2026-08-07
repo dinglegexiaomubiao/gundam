@@ -41,6 +41,7 @@ from .labels import (
     ULTIMATE_TAG,
     WEAPON_ATTR,
     resolve_trait_text,
+    split_trait_stages,
     star_value,
     support_label,
 )
@@ -194,10 +195,14 @@ UNIT_LEVEL_CAPS = {5: 100, 4: 90, 3: 80, 2: 70, 1: 60}
 
 ROLE_NAMES = {1: "攻击型", 2: "耐久型", 3: "支援型"}
 
-_DMG_UP_RE = re.compile(r"(?<!爆击)损伤提升\s*(\d+)%")
+_DMG_UP_RE = re.compile(r"(?<!爆击)损伤(?:再)?提升\s*(\d+)%")
 _DMG_DOWN_RE = re.compile(r"损伤(?:减轻|降低)\s*(\d+)%")
-_DEF_UP_RE = re.compile(r"(?:防御力|守备值)(?:及|与|和)?(?:攻击力)?提升\s*(\d+)%")
-_ATK_UP_RE = re.compile(r"攻击力(?:及|与|和)?(?:防御力)?提升\s*(\d+)%")
+_DEF_UP_RE = re.compile(
+    r"(?:防御力|守备值)(?:及|与|和)?(?:攻击力)?(?:再)?提升\s*(\d+)%"
+)
+_ATK_UP_RE = re.compile(
+    r"攻击力(?:及|与|和)?(?:防御力)?(?:再)?提升\s*(\d+)%"
+)
 _DEF_STACK_RE = re.compile(
     r"每次受到(?:来自敌方的)?损伤时，\s*自身防御力提升(\d+)%（最高(\d+)%）"
 )
@@ -207,9 +212,13 @@ _HP_RECOVER_RE = re.compile(
 _CRIT_DMG_RE = re.compile(r"爆击损伤提升\s*(\d+)%")
 _CRIT_RATE_RE = re.compile(r"爆击率提升\s*(\d+)%")
 _STAT_COMBO_RE = re.compile(
-    r"((?:射击值|格斗值|觉醒值)(?:及|与|和)?(?:射击值|格斗值|觉醒值)?)提升\s*(\d+)%"
+    r"((?:射击值|格斗值|觉醒值|反应值)(?:及|与|和)?"
+    r"(?:射击值|格斗值|觉醒值|反应值)?)(?:再)?提升\s*(\d+)%"
 )
-_STAT_ALIAS = {"射击值": "ranged", "格斗值": "melee", "觉醒值": "awaken"}
+_STAT_ALIAS = {
+    "射击值": "ranged", "格斗值": "melee",
+    "觉醒值": "awaken", "反应值": "reaction",
+}
 _WA_MAP = {"Physical": 1, "Beam": 2, "Special": 3}
 
 
@@ -2205,11 +2214,21 @@ def api_damage_sim(q: dict) -> dict:
             defender_damage_taken_percent=[debuff],
         )
         dmg = calculate_damage(attacker, defender, ctx)["final_damage"]
+        prev = hp
         hp = max(0.0, hp - dmg)
         recover_now = False
         if (
-            not recovered and hp > 0 and hp_recover_pct and hp_recover_threshold
-            and max_hp > 0 and hp / max_hp * 100 <= hp_recover_threshold
+            not recovered and hp_recover_pct and hp_recover_threshold == 0
+            and hp <= 0 and prev > 0 and max_hp > 0
+        ):
+            # 濒死恢复：HP 为 0% 时触发一次（1 次）
+            hp = max_hp * hp_recover_pct / 100
+            recovered = True
+            recover_now = True
+        elif (
+            not recovered and hp > 0 and hp_recover_pct
+            and hp_recover_threshold and max_hp > 0
+            and hp / max_hp * 100 <= hp_recover_threshold
         ):
             hp = min(max_hp, hp + max_hp * hp_recover_pct / 100)
             recovered = True
@@ -2229,7 +2248,8 @@ def api_damage_sim(q: dict) -> dict:
 
 
 def _cond_met(cond: dict, own_unit, enemy_unit, weapon_attrs,
-              tag_by_id: dict, ignore_unknown: bool = False) -> bool:
+              tag_by_id: dict, ignore_unknown: bool = False,
+              vigor: str | None = None) -> bool:
     """评估能力条件的类型/标签/系列/武器属性是否满足。"""
     if not cond:
         return True
@@ -2266,10 +2286,16 @@ def _cond_met(cond: dict, own_unit, enemy_unit, weapon_attrs,
         "hp_type", "hp_rate_lte_threshold", "hp_rate_gte_threshold",
         "en_rate_lte_threshold", "en_rate_gte_threshold",
         "en_value_lte_threshold", "en_value_gte_threshold",
-        "tension", "turn_number", "is_in_one_on_one",
+        "turn_number", "is_in_one_on_one",
         "attack_distance_gte_threshold", "attack_distance_lte_threshold",
         "is_in_chance_step",
     ]
+    tension = cond.get("tension")
+    if tension:
+        if not vigor or vigor.lower() not in (
+            x.lower() for x in str(tension).split(",")
+        ):
+            return False
     if not ignore_unknown and any(
         cond.get(k) not in (None, "", 0, False) for k in unknown
     ):
@@ -2285,7 +2311,8 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
                      atk_unit_skill, def_unit_skill,
                      atk_ship, atk_support, atk_op, atk_fixed,
                      def_ship, def_support, def_op, def_fixed,
-                     atk_skill_ranged, atk_skill_melee, atk_skill_awaken) -> dict:
+                     atk_skill_ranged, atk_skill_melee, atk_skill_awaken,
+                     atk_vigor="normal", def_vigor="normal") -> dict:
     """根据已选机体/驾驶员/武器 + 能力开关，计算加成与数值。"""
     conn = _conn()
     tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
@@ -2350,7 +2377,7 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
         "def_p": set((def_p_on or "").split(",")) if def_p_on else set(),
     }
 
-    def ability_rows(table, owner_id, owner, own_unit, enemy_unit):
+    def ability_rows(table, owner_id, owner, own_unit, enemy_unit, vigor):
         if not owner:
             return [], 0, 0
         rows = conn.execute(
@@ -2362,9 +2389,6 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
         auto_down = 0
         for rid, rname, traits in rows:
             for t in _json_list(traits):
-                effs = _parse_ability_effects(t.get("desc") or "")
-                if not effs:
-                    continue
                 cond = t.get("active_condition") or {}
                 has_cond = any(
                     cond.get(k) not in (None, "", 0, False)
@@ -2374,37 +2398,60 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
                         "hp_rate_lte_threshold", "hp_rate_gte_threshold",
                     )
                 )
-                if not has_cond:
-                    auto_up += sum(e["pct"] for e in effs if e["kind"] == "dmg_up")
-                    auto_down += sum(e["pct"] for e in effs if e["kind"] == "dmg_down")
-                    effs = [e for e in effs if e["kind"] in ("def_stack", "hp_recover")]
+                nullify_cond = bool(cond.get("weapon_attribute")) and nullify
+                for si, seg in enumerate(split_trait_stages(t.get("desc") or "")):
+                    effs = _parse_ability_effects(seg)
                     if not effs:
                         continue
-                is_special = any(
-                    e["kind"] in ("hp_recover", "def_stack") for e in effs
-                )
-                met = _cond_met(
-                    cond, own_unit, enemy_unit, weapon_attrs, tag_by_id,
-                    ignore_unknown=is_special,
-                )
-                if cond.get("weapon_attribute") and nullify:
-                    met = False
-                desc, _ = resolve_trait_text(
-                    t.get("desc") or "", cond, tag_by_id, series_by_id, unit_by_id
-                )
-                out.append({
-                    "row_id": f"{table}:{rid}:{t.get('id')}",
-                    "name": rname or "",
-                    "effects": effs,
-                    "met": met,
-                    "desc": desc.strip().replace("\n", " "),
-                })
+                    if not has_cond:
+                        auto_up += sum(
+                            e["pct"] for e in effs if e["kind"] == "dmg_up"
+                        )
+                        auto_down += sum(
+                            e["pct"] for e in effs if e["kind"] == "dmg_down"
+                        )
+                        effs = [
+                            e for e in effs
+                            if e["kind"] in ("def_stack", "hp_recover")
+                        ]
+                        if not effs:
+                            continue
+                    is_special = any(
+                        e["kind"] in ("hp_recover", "def_stack") for e in effs
+                    )
+                    met = _cond_met(
+                        cond, own_unit, enemy_unit, weapon_attrs, tag_by_id,
+                        ignore_unknown=is_special,
+                        vigor=vigor,
+                    )
+                    if nullify_cond:
+                        met = False
+                    desc, _ = resolve_trait_text(
+                        seg, cond, tag_by_id, series_by_id, unit_by_id
+                    )
+                    out.append({
+                        "row_id": f"{table}:{rid}:{t.get('id')}:{si}",
+                        "name": rname or "",
+                        "effects": effs,
+                        "met": met,
+                        "desc": desc.strip().replace("\n", " "),
+                    })
         return out, auto_up, auto_down
 
-    atk_unit_ab, auto_u_up, _ = ability_rows("unit_ability", "unit_id", atk_unit, atk_unit, def_unit)
-    atk_pilot_ab, auto_p_up, _ = ability_rows("character_ability", "character_id", atk_pilot, atk_unit, def_unit)
-    def_unit_ab, _, auto_u_down = ability_rows("unit_ability", "unit_id", def_unit, def_unit, atk_unit)
-    def_pilot_ab, _, auto_p_down = ability_rows("character_ability", "character_id", def_pilot, def_unit, atk_unit)
+    atk_unit_ab, auto_u_up, _ = ability_rows(
+        "unit_ability", "unit_id", atk_unit, atk_unit, def_unit, atk_vigor
+    )
+    atk_pilot_ab, auto_p_up, _ = ability_rows(
+        "character_ability", "character_id", atk_pilot, atk_unit, def_unit,
+        atk_vigor,
+    )
+    def_unit_ab, _, auto_u_down = ability_rows(
+        "unit_ability", "unit_id", def_unit, def_unit, atk_unit, def_vigor
+    )
+    def_pilot_ab, _, auto_p_down = ability_rows(
+        "character_ability", "character_id", def_pilot, def_unit, atk_unit,
+        def_vigor,
+    )
     conn.close()
 
     def sum_kind(rows, onset, kind):
@@ -2669,6 +2716,37 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_skillnames())
         if path == "/api/support-labels":
             return self._send_json(api_support_labels())
+        if path == "/api/pairing/match":
+            try:
+                unit_id = int(q.get("unit_id", ["0"])[0])
+            except ValueError:
+                unit_id = 0
+            action = q.get("action", ["attack"])[0]
+            weapon_id = q.get("weapon_id", [""])[0]
+            bench = q.get("bench", ["low"])[0]
+            enemy = {}
+            for key, param in (
+                ("vigor", "evigor"), ("terrain", "eterrain"),
+                ("crit_rate", "ecrit"),
+                ("ext_pct", "ext_pct"), ("ext_fixed", "ext_fixed"),
+                ("hp_pct", "hp_pct"), ("hp_fixed", "hp_fixed"),
+                ("atk_us", "atk_us"),
+            ):
+                enemy[key] = q.get(param, [""])[0]
+            if action == "defense":
+                for key, param in (
+                    ("unit_attack", "eua"), ("pilot_attack", "epa"),
+                    ("power", "ewp"), ("weapon_type", "ewt"),
+                    ("weapon_attack", "ewaa"), ("tags", "etags"),
+                    ("series", "eseries"), ("guard", "eguard"),
+                    ("ignore_reduction", "eir"),
+                ):
+                    enemy[key] = q.get(param, [""])[0]
+            return self._send_json(pairing.match_pilot(
+                unit_id, action, weapon_id, bench, enemy
+            ))
+        if path == "/api/pairing/default-enemy":
+            return self._send_json(pairing.default_enemy())
         if path == "/api/supporter-skillnames":
             return self._send_json(api_supporter_skillnames())
         if path == "/api/units":
@@ -2749,20 +2827,10 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("def_fixed", ["0"])[0],
                 q.get("atk_skill_ranged", ["0"])[0],
                 q.get("atk_skill_melee", ["0"])[0],
-                q.get("atk_skill_awaken", ["0"])[0]))
+                q.get("atk_skill_awaken", ["0"])[0],
+                q.get("atk_vigor", ["normal"])[0],
+                q.get("def_vigor", ["normal"])[0]))
         parts = path.split("/")
-        if len(parts) == 5 and parts[1] == "api" and parts[2] == "pairing":
-            kind, item_id = parts[3], parts[4]
-            try:
-                item_id = int(item_id)
-            except ValueError:
-                return self._send_json({"error": "bad id"}, 400)
-            limit = min(int(q.get("limit", ["10"])[0]), 50)
-            if kind == "units":
-                return self._send_json(pairing.recommend_pilots(item_id, limit))
-            if kind == "characters":
-                return self._send_json(pairing.recommend_units(item_id, limit))
-            return self._send_json({"error": "unknown pairing kind"}, 404)
         if len(parts) == 4 and parts[1] == "api":
             kind, item_id = parts[2], parts[3]
             try:

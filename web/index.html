@@ -388,23 +388,124 @@
     </section>
 
     <section id="tab-pairing" class="tab">
-      <div class="toolbar">
-        <button id="pair-mode-unit" class="active">机体 → 驾驶员 / 支援</button>
-        <button id="pair-mode-char">驾驶员 → 机体</button>
-      </div>
-      <div id="pair-unit-form">
-        <div class="toolbar">
-          <input id="pair-unit-q" placeholder="搜索机体名称…">
-          <button id="pair-unit-search">选择机体</button>
+      <div class="pair-panel">
+        <div class="pair-head">
+          <span class="pair-title">机体 → 驾驶员 配对</span>
+          <span id="pair-msg" class="muted"></span>
         </div>
-        <div id="pair-unit-options" class="options"></div>
-      </div>
-      <div id="pair-char-form" class="hidden">
-        <div class="toolbar">
-          <input id="pair-char-q" placeholder="搜索驾驶员名称…">
-          <button id="pair-char-search">选择驾驶员</button>
+        <div class="pair-row">
+          <span class="pair-label">机体</span>
+          <button id="pair-select-unit" class="cond-btn">选择机体</button>
+          <div id="pair-selected" class="pair-selected"><span class="muted">未选择机体</span></div>
         </div>
-        <div id="pair-char-options" class="options"></div>
+        <div class="pair-row">
+          <span class="pair-label">行动</span>
+          <div class="seg">
+            <button id="pair-act-atk" class="seg-btn active">攻击</button>
+            <button id="pair-act-def" class="seg-btn">防御</button>
+          </div>
+          <span id="pair-bench-wrap">
+            <span class="pair-label pair-label-gap">防御基准</span>
+            <span class="seg">
+              <button id="pair-bench-low" class="seg-btn active">低防本</button>
+              <button id="pair-bench-mid" class="seg-btn">中防本</button>
+            </span>
+          </span>
+          <span id="pair-vigor-wrap">
+            <span class="pair-label pair-label-gap">战意</span>
+            <select id="pair-vigor">
+              <option value="normal" selected>一般</option>
+              <option value="high">强势 (+10%)</option>
+              <option value="max">超强势 (+20%)</option>
+              <option value="supercharged">超一击 (+30%)</option>
+            </select>
+          </span>
+          <button id="pair-match" class="cond-btn pair-match-btn" disabled>匹配驾驶员</button>
+        </div>
+        <div id="pair-ext-row" class="pair-row">
+          <span class="pair-label">外部加成</span>
+          <label class="pair-field" id="pair-ext-sup-lbl">支援/船舰%
+            <input id="pair-ext-sup" type="number" value="0" min="0">
+          </label>
+          <label class="pair-field" id="pair-ext-op-lbl">零件攻击%
+            <input id="pair-ext-op" type="number" value="0" min="0">
+          </label>
+          <label class="pair-field">固定值
+            <input id="pair-ext-fixed" type="number" value="0" min="0">
+          </label>
+          <label class="pair-field hidden" id="pair-ext-hp-lbl">零件HP%
+            <input id="pair-ext-hp" type="number" value="0" min="0">
+          </label>
+          <label class="pair-field hidden" id="pair-ext-hpf-lbl">HP固定
+            <input id="pair-ext-hpf" type="number" value="0" min="0">
+          </label>
+        </div>
+        <div id="pair-weapon-row" class="pair-row hidden">
+          <span class="pair-label">武器</span>
+          <button id="pair-select-weapon" class="cond-btn">选择武器</button>
+          <button id="pair-select-uskill" class="cond-btn" title="选择机体单位技能（主动技，可选发动）">选择单位技能</button>
+          <span id="pair-uskill-chips" class="chips"></span>
+          <div id="pair-weapon-info" class="pair-weapon-info"><span class="muted">未选择武器</span></div>
+        </div>
+        <div id="pair-enemy-row" class="pair-row hidden">
+          <span class="pair-label">敌方</span>
+          <label class="pair-field">机体攻击
+            <input id="pair-enemy-ua" type="number" value="15000" min="0">
+          </label>
+          <label class="pair-field">驾驶员攻击
+            <input id="pair-enemy-pa" type="number" value="800" min="0">
+          </label>
+          <label class="pair-field">武器威力
+            <input id="pair-enemy-wp" type="number" value="5000" min="0">
+            <span class="muted">×</span>
+            <input id="pair-enemy-wpboost" type="number" value="0" min="0" title="武装POWER提升 %">
+            <span class="muted">= <b id="pair-enemy-wpeff">5000</b></span>
+          </label>
+          <span id="pair-enemy-wp-fx" class="muted"></span>
+          <label class="pair-field">武器类型
+            <select id="pair-enemy-wt">
+              <option value="1">实弹</option>
+              <option value="2" selected>光束</option>
+              <option value="3">特殊</option>
+              <option value="6">EX（多伤害集合）</option>
+            </select>
+          </label>
+          <label class="pair-field">依赖属性
+            <select id="pair-enemy-waa">
+              <option value="any">任意</option>
+              <option value="Ranged" selected>射击</option>
+              <option value="Melee">格斗</option>
+              <option value="Awaken">觉醒</option>
+            </select>
+          </label>
+          <label class="pair-field">防御状态
+            <select id="pair-enemy-guard">
+              <option value="2" selected>按防御且带盾</option>
+              <option value="1">防御不带盾</option>
+              <option value="0">不防御</option>
+            </select>
+          </label>
+          <label class="pair-field">敌方战意
+            <select id="pair-enemy-vigor">
+              <option value="normal" selected>一般</option>
+              <option value="high">强势 (+10%)</option>
+              <option value="max">超强势 (+20%)</option>
+              <option value="supercharged">超一击 (+30%)</option>
+            </select>
+          </label>
+          <label class="pair-field">地形倍率
+            <input id="pair-enemy-terrain" type="number" step="0.1" value="1.0" min="0">
+          </label>
+          <label class="pair-field">敌方暴击率%
+            <input id="pair-enemy-crit" type="number" value="0" min="0" max="100">
+          </label>
+          <button id="pair-enemy-default" class="cond-btn" title="使用默认敌方：能天使高达(EX) 满星满级 + 刹那·F·清英 + GN剑 EX">默认敌人</button>
+          <button id="pair-enemy-tags-btn" class="cond-btn" title="选择敌方机体标签/系列，用于判定针对敌方的能力">选择敌人标签</button>
+          <span id="pair-enemy-tags" class="chips"></span>
+          <label class="pair-field pair-field-check">
+            <input id="pair-enemy-ir" type="checkbox"> 敌方武器含「武装属性损伤减轻无效」
+          </label>
+        </div>
       </div>
       <div id="pair-result"></div>
     </section>
@@ -416,6 +517,92 @@
     <div class="modal-box">
       <div class="modal-head"><span id="modal-title"></span><button id="modal-close">×</button></div>
       <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="pair-picker-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head"><span>选择机体</span><button id="pair-picker-close">×</button></div>
+      <div class="toolbar">
+        <input id="pp-q" placeholder="搜索机体名称…">
+        <select id="pp-rarity">
+          <option value="">全部稀有度</option>
+          <option value="5">UR</option>
+          <option value="4">SSR</option>
+          <option value="3">SR</option>
+          <option value="2">R</option>
+          <option value="1">N</option>
+        </select>
+        <select id="pp-acq">
+          <option value="">全部获取途径</option>
+          <option value="1">扭蛋</option>
+          <option value="other">其他</option>
+        </select>
+        <div class="sbox" id="pp-series-box">
+          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off">
+          <div class="sbox-list hidden"></div>
+          <button class="sbox-clear hidden" type="button" title="清除">×</button>
+        </div>
+        <select id="pp-type">
+          <option value="">全部类型</option>
+          <option value="1">攻击型</option>
+          <option value="2">耐久型</option>
+          <option value="3">支援型</option>
+        </select>
+        <div class="sbox" id="pp-tag-box">
+          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off">
+          <div class="sbox-list hidden"></div>
+        </div>
+        <select id="pp-tag-mode">
+          <option value="all">含全部标签</option>
+          <option value="any">含任一标签</option>
+        </select>
+        <select id="pp-match">
+          <option value="and">交集（全部满足）</option>
+          <option value="or">并集（任一满足）</option>
+        </select>
+        <div class="sbox" id="pp-wfx-box">
+          <input class="sbox-input" placeholder="搜索/添加武器特效…" autocomplete="off">
+          <div class="sbox-list hidden"></div>
+        </div>
+        <select id="pp-wfx-mode">
+          <option value="any" selected>含任一特效</option>
+          <option value="all">含全部特效</option>
+        </select>
+        <button id="pp-search">查询</button>
+        <button id="pp-reset" class="reset-btn" title="重置筛选">重置</button>
+      </div>
+      <div id="pp-tag-chips" class="tagbar"></div>
+      <div id="pp-wfx-chips" class="tagbar"></div>
+      <div id="pp-count" class="result-count"></div>
+      <div class="list-head units">
+        <span>名称</span><span>稀有度</span><span>类型</span><span>攻击</span><span>防御</span><span>机动</span><span>HP</span><span>EN</span><span>移动</span>
+      </div>
+      <div id="pp-list" class="list units"></div>
+      <div id="pp-pager" class="pager"></div>
+    </div>
+  </div>
+
+  <div id="enemy-picker-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head"><span>选择敌人标签 / 系列</span><button id="enemy-picker-close">×</button></div>
+      <div class="toolbar">
+        <div class="sbox" id="ep-series-box">
+          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off">
+          <div class="sbox-list hidden"></div>
+          <button class="sbox-clear hidden" type="button" title="清除">×</button>
+        </div>
+        <div class="sbox" id="ep-tag-box">
+          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off">
+          <div class="sbox-list hidden"></div>
+        </div>
+      </div>
+      <div id="ep-chips" class="tagbar"></div>
+      <div class="calc-actions">
+        <button id="ep-ok" class="cond-btn">确定</button>
+        <button id="ep-clear" class="cond-btn">清除</button>
+        <button id="ep-cancel" class="cond-btn">取消</button>
+      </div>
     </div>
   </div>
 

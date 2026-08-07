@@ -35,6 +35,15 @@ _CONDITION_HINTS = (
 _PCT_RE = re.compile(r"提升\s*(\d+)\s*%")
 
 
+def split_trait_stages(desc: str) -> list[str]:
+    """把能力描述按「效果结束时」拆成顺序阶段，返回独立段文本列表。"""
+    text = (desc or "").strip()
+    if not text:
+        return []
+    parts = re.split(r"效果结束时[，,]\s*", text)
+    return [p.strip().strip("\n") for p in parts if p.strip()]
+
+
 def star_value(base: int, pct: int, star: int) -> tuple[int, int]:
     """返回 (最终值, 能力加成部分)。"""
     num, den = STAR_MULT.get(star, (1, 1))

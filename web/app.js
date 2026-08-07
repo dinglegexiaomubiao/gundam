@@ -886,6 +886,12 @@ async function initFilterControls() {
     supportLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join("");
   initCombobox("#picker-series-box", seriesOpts, () => pickerState.series,
     (v) => { pickerState.series = String(v); }, true);
+  initCombobox("#pp-series-box", seriesOpts, () => pairUnitState.series,
+    (v) => { pairUnitState.series = String(v); ppLoad(0); }, true);
+  initCombobox("#pp-tag-box", tagOpts(unitTags), () => "",
+    (v) => { if (v) { pairUnitState.tags.push(v); renderPairTagChips(); ppLoad(0); } }, false);
+  initCombobox("#pp-wfx-box", WFX_OPTIONS, () => "",
+    (v) => { pairUnitState.wfx.push(v); renderPairWfxChips(); ppLoad(0); }, false);
 }
 
 function wfxLabel(v) {
@@ -2223,9 +2229,11 @@ async function autoCalcBonuses() {
     atk_support: $("#atk-support").value || 0,
     atk_op: atkOpPct,
     atk_fixed: (Number($("#atk-fixed").value) || 0) + atkOpFixed,
+    atk_vigor: $("#d-vigor-atk").value,
     def_support: $("#def-support").value || 0,
     def_op: defOpPct,
     def_fixed: defOpFixed,
+    def_vigor: $("#d-vigor-def").value,
   });
   const d = await api("/api/damage-bonus?" + q);
   if (seq !== calcSeq.n) return;
@@ -2909,112 +2917,574 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* ---------- 配对 ---------- */
-let pairSelectedUnit = null;
-let pairSelectedChar = null;
+const pairState = {
+  unit: null, unitDetail: null, action: "attack", weapon: null, bench: "low",
+  enemyTags: [], enemySeries: [], atkUs: [],
+};
+const pairUnitState = { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", page: 0, size: 25 };
 
-function setPairMode(mode) {
-  $("#pair-mode-unit").classList.toggle("active", mode === "unit");
-  $("#pair-mode-char").classList.toggle("active", mode === "char");
-  $("#pair-unit-form").classList.toggle("hidden", mode !== "unit");
-  $("#pair-char-form").classList.toggle("hidden", mode !== "char");
-  $("#pair-result").innerHTML = "";
-}
-$("#pair-mode-unit").addEventListener("click", () => setPairMode("unit"));
-$("#pair-mode-char").addEventListener("click", () => setPairMode("char"));
-
-async function pairSearch(what) {
-  const q = what === "unit" ? $("#pair-unit-q").value.trim() : $("#pair-char-q").value.trim();
-  const box = what === "unit" ? "#pair-unit-options" : "#pair-char-options";
-  if (!q) { $(box).innerHTML = ""; return; }
-  const path = what === "unit" ? "units" : "characters";
-  const d = await api(`/api/${path}?q=${encodeURIComponent(q)}&limit=15`);
-  $(box).innerHTML = d.items.length
-    ? d.items.map((x) => `
-      <button class="option" data-id="${x.id}">
-        ${esc(x.name)}（${({ 5: "UR", 4: "SSR", 3: "SR", 2: "R", 1: "N" })[x.rarity] ?? x.rarity}）
-      </button>`).join("")
-    : '<div class="empty">无结果</div>';
-  $(box).querySelectorAll(".option").forEach((b) =>
+function renderPairTagChips() {
+  const box = $("#pp-tag-chips");
+  box.innerHTML = pairUnitState.tags.length
+    ? pairUnitState.tags.map((t) =>
+        `<span class="chip sel-tag">${esc(t)}<button class="chip-x" data-t="${esc(t)}" title="移除">×</button></span>`).join("")
+    : "";
+  box.querySelectorAll(".chip-x").forEach((b) =>
     b.addEventListener("click", () => {
-      if (what === "unit") {
-        pairSelectedUnit = { id: Number(b.dataset.id) };
-        loadPairingUnit(pairSelectedUnit.id);
-      } else {
-        pairSelectedChar = { id: Number(b.dataset.id) };
-        loadPairingChar(pairSelectedChar.id);
-      }
+      pairUnitState.tags = pairUnitState.tags.filter((t) => t !== b.dataset.t);
+      renderPairTagChips();
+      ppLoad(0);
     }));
 }
-$("#pair-unit-search").addEventListener("click", () => pairSearch("unit"));
-$("#pair-unit-q").addEventListener("keydown", (e) => e.key === "Enter" && pairSearch("unit"));
-$("#pair-char-search").addEventListener("click", () => pairSearch("char"));
-$("#pair-char-q").addEventListener("keydown", (e) => e.key === "Enter" && pairSearch("char"));
 
-function pairChips(matched) {
-  if (!matched.length) return '<span>无适用加成</span>';
-  return matched.map((m) =>
-    `<span>${m.kind === "主动" ? "主动" : "被动"} · ${esc(m.skill_name || m.name || "")} · ${esc(m.desc || "")}</span>`
-  ).join("");
+function renderPairWfxChips() {
+  const box = $("#pp-wfx-chips");
+  box.innerHTML = pairUnitState.wfx.length
+    ? pairUnitState.wfx.map((v) =>
+        `<span class="chip sel-tag">${esc(wfxLabel(v))}<button class="chip-x" data-w="${esc(v)}" title="移除">×</button></span>`).join("")
+    : "";
+  box.querySelectorAll(".chip-x").forEach((b) =>
+    b.addEventListener("click", () => {
+      pairUnitState.wfx = pairUnitState.wfx.filter((v) => v !== b.dataset.w);
+      renderPairWfxChips();
+      ppLoad(0);
+    }));
 }
 
-function scoreBar(v, max) {
-  const pct = Math.min(100, Math.round((v / max) * 100));
-  return `<div class="score-bar"><i style="width:${pct}%"></i></div>`;
+function ppLoad(page = pairUnitState.page) {
+  pairUnitState.page = page;
+  pairUnitState.q = $("#pp-q").value.trim();
+  pairUnitState.rarity = $("#pp-rarity").value;
+  pairUnitState.acq = $("#pp-acq").value;
+  pairUnitState.type = $("#pp-type").value;
+  pairUnitState.tag_mode = $("#pp-tag-mode").value;
+  pairUnitState.match = $("#pp-match").value;
+  pairUnitState.wfx_mode = $("#pp-wfx-mode").value;
+  const s = pairUnitState;
+  const q = new URLSearchParams({
+    q: s.q, rarity: s.rarity, acq: s.acq, series: s.series, type: s.type,
+    tags: s.tags.join(","), tag_mode: s.tag_mode,
+    match: s.match, wfx: s.wfx.join(","), wfx_mode: s.wfx_mode,
+    sort: "rarity", order: "desc",
+    limit: s.size, offset: s.page * s.size,
+  });
+  api("/api/units?" + q).then((d) => {
+    $("#pp-count").textContent = `共 ${d.total} 条结果`;
+    $("#pp-list").innerHTML = d.items.length
+      ? d.items.map((u) => `
+        <div class="list-row units" data-id="${u.id}">
+          <span class="name">${esc(u.name)}</span>
+          ${cell(rarityBadge(u.rarity))}
+          ${cell(roleBadge(u.role, u.role_label))}
+          <span class="num">${u.atk_f}</span><span class="num">${u.def_f}</span>
+          <span class="num">${u.mob_f}</span><span class="num">${u.hp_f}</span>
+          <span class="num">${u.en_f}</span><span class="num">${u.mov}</span>
+        </div>`).join("")
+      : '<div class="empty">没有匹配的机体</div>';
+    $("#pp-list").querySelectorAll(".list-row").forEach((r) => {
+      const item = d.items.find((x) => String(x.id) === r.dataset.id);
+      r.addEventListener("click", () => confirmPickUnit(Number(r.dataset.id), item));
+    });
+    pager("pp", d.total, s.page, s.size, ppLoad);
+  });
 }
 
-async function loadPairingUnit(id) {
-  const d = await api(`/api/pairing/units/${id}`);
-  if (d.error) {
-    $("#pair-result").innerHTML = `<div class="empty">${esc(d.error)}</div>`;
+async function confirmPickUnit(id, item) {
+  if (!confirm(`是否选择这个机体：${item ? item.name : id}？`)) return;
+  const detail = await api(`/api/units/${id}`);
+  pairState.unit = {
+    id, name: detail.name, rarity: detail.rarity,
+    role: detail.role, role_label: detail.role_label, tags: detail.tags || [],
+  };
+  pairState.unitDetail = detail;
+  pairState.weapon = null;
+  pairState.atkUs = [];
+  renderUnitSkillChips();
+  $("#pair-picker-modal").classList.add("hidden");
+  $("#pair-result").innerHTML = "";
+  renderPairSelection();
+}
+
+function renderPairSelection() {
+  const u = pairState.unit;
+  const sel = $("#pair-selected");
+  if (!u) {
+    sel.innerHTML = '<span class="muted">未选择机体</span>';
+    updatePairMatchBtn();
     return;
   }
-  const pilots = d.pilots.map((p) => `
-    <div class="pair-card">
-      <div class="head"><span class="name">${esc(p.name)}</span>${rarityBadge(p.rarity)}</div>
-      <div class="score-line">
-        <span>总评 <b>${p.total_score}</b></span>
-        <span>属性 ${p.stat_score}/30</span><span>加成 ${p.bonus_score}/50</span>
-        ${scoreBar(p.stat_score + p.bonus_score, 80)}
-      </div>
-      <div class="chips">${p.series_match ? "<span>同系列</span>" : ""}${pairChips(p.matched)}</div>
-    </div>`).join("");
-  const sups = d.supporters.map((s) => `
-    <div class="pair-card">
-      <div class="head"><span class="name">${esc(s.name)}</span>${rarityBadge(s.rarity)}</div>
-      <div class="score-line">
-        <span>支援评分 ${s.score}/20</span>
-        <span>队长技加成 ${s.bonus}%（突破 ${s.lb ?? "?"}）</span>
-      </div>
-      <div class="chips"><span>${esc(s.desc)}</span></div>
-    </div>`).join("");
-  $("#pair-result").innerHTML = `
-    <h3>${esc(d.unit.name)} 推荐驾驶员（Top ${d.pilots.length}）</h3>
-    ${pilots}
-    <div class="pair-section"><h3>推荐支援角色</h3>${sups || '<div class="empty">无</div>'}</div>`;
+  sel.innerHTML = `
+    <span class="pair-sel-info">${rarityBadge(u.rarity)} <b>${esc(u.name)}</b> ${roleBadge(u.role, u.role_label)} ${(u.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}</span>
+    <button class="pair-sel-clear" id="pair-clear-unit" title="清除机体">×</button>`;
+  $("#pair-clear-unit").addEventListener("click", () => {
+    pairState.unit = null;
+    pairState.unitDetail = null;
+    pairState.weapon = null;
+    renderPairSelection();
+    renderWeaponInfo();
+    updatePairMatchBtn();
+  });
+  updatePairModeUI();
+  renderWeaponInfo();
+  updatePairMatchBtn();
 }
 
-async function loadPairingChar(id) {
-  const d = await api(`/api/pairing/characters/${id}`);
-  if (d.error) {
-    $("#pair-result").innerHTML = `<div class="empty">${esc(d.error)}</div>`;
+function updatePairMatchBtn() {
+  const ok = pairState.unit && (pairState.action === "defense" || pairState.weapon);
+  $("#pair-match").disabled = !ok;
+}
+
+function setPairAction(a) {
+  pairState.action = a;
+  $("#pair-result").innerHTML = "";
+  $("#pair-act-atk").classList.toggle("active", a === "attack");
+  $("#pair-act-def").classList.toggle("active", a === "defense");
+  updatePairModeUI();
+  if (a === "defense") applyDefaultEnemy();
+  renderWeaponInfo();
+  updatePairMatchBtn();
+}
+
+function updatePairModeUI() {
+  const atk = pairState.action === "attack";
+  $("#pair-weapon-row").classList.toggle("hidden", !atk);
+  $("#pair-enemy-row").classList.toggle("hidden", atk);
+  $("#pair-bench-wrap").classList.toggle("hidden", !atk);
+  $("#pair-vigor-wrap").classList.toggle("hidden", !atk);
+  $("#pair-ext-op-lbl").querySelector("span")?.remove();
+  $("#pair-ext-op-lbl").childNodes[0].textContent = atk ? "零件攻击%" : "零件防御%";
+  $("#pair-ext-hp-lbl").classList.toggle("hidden", atk);
+  $("#pair-ext-hpf-lbl").classList.toggle("hidden", atk);
+}
+
+function renderEnemyPower() {
+  const base = Number($("#pair-enemy-wp").value) || 0;
+  const boost = Number($("#pair-enemy-wpboost").value) || 0;
+  const eff = Math.ceil(base * (100 + boost) / 100);
+  $("#pair-enemy-wpeff").textContent = eff;
+  return eff;
+}
+
+let pairDefaultEnemy = null;
+async function applyDefaultEnemy() {
+  if (!pairDefaultEnemy) {
+    try {
+      pairDefaultEnemy = await api("/api/pairing/default-enemy");
+    } catch (e) { return; }
+  }
+  const d = pairDefaultEnemy;
+  $("#pair-enemy-ua").value = d.unit_attack;
+  $("#pair-enemy-pa").value = d.pilot_attack;
+  $("#pair-enemy-wp").value = d.power_base ?? d.power;
+  $("#pair-enemy-wpboost").value = d.power_boost ?? 0;
+  $("#pair-enemy-wp-fx").innerHTML = (d.power_effects || []).map((e) =>
+    `<span class="chip" title="${esc(e.desc || "")}">${esc(e.name || "武装POWER提升")}</span>`).join("");
+  $("#pair-enemy-wt").value = String(d.weapon_type);
+  $("#pair-enemy-waa").value = d.weapon_attack;
+  renderEnemyPower();
+}
+
+function renderUnitSkillChips() {
+  const box = $("#pair-uskill-chips");
+  const u = pairState.unitDetail;
+  const names = (u?.skills || []).filter((s) => pairState.atkUs.includes(String(s.id))).map((s) => s.name);
+  box.innerHTML = names.map((n) =>
+    `<span class="chip sel-tag">${esc(n)}<button class="chip-x" data-n="${esc(n)}" title="移除">×</button></span>`).join("");
+  box.querySelectorAll(".chip-x").forEach((b) =>
+    b.addEventListener("click", () => {
+      const u2 = pairState.unitDetail;
+      const s = (u2?.skills || []).find((x) => x.name === b.dataset.n);
+      if (s) pairState.atkUs = pairState.atkUs.filter((v) => v !== String(s.id));
+      renderUnitSkillChips();
+    }));
+}
+
+function openUnitSkillPicker() {
+  const u = pairState.unitDetail;
+  if (!u || !u.skills || !u.skills.length) return;
+  const rows = u.skills.map((s) => `
+    <label class="ab-row">
+      <span class="ab-main">
+        <span class="ab-name">${esc(s.name || "—")}</span>
+        <span class="muted">${esc(s.desc || "")}</span>
+      </span>
+      <input type="checkbox" class="ab-switch usk" data-id="${s.id}" ${pairState.atkUs.includes(String(s.id)) ? "checked" : ""}>
+    </label>`).join("");
+  showModal("选择机体单位技能",
+    `<div class="ability-list" id="pair-uskill-list">${rows || '<div class="empty">该机体暂无单位技能</div>'}</div>
+     <div class="calc-actions">
+       <button id="pair-uskill-ok" class="cond-btn">确定</button>
+       <button id="pair-uskill-cancel" class="cond-btn">取消</button>
+     </div>`);
+  $("#pair-uskill-list").querySelectorAll(".usk").forEach((cb) =>
+    cb.addEventListener("change", () => {
+      const id = String(cb.dataset.id);
+      if (cb.checked) {
+        if (!pairState.atkUs.includes(id)) pairState.atkUs.push(id);
+      } else {
+        pairState.atkUs = pairState.atkUs.filter((v) => v !== id);
+      }
+      renderUnitSkillChips();
+    }));
+  $("#pair-uskill-ok").addEventListener("click", () => $("#modal").classList.add("hidden"));
+  $("#pair-uskill-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+}
+
+function setPairBench(b) {
+  pairState.bench = b;
+  $("#pair-bench-low").classList.toggle("active", b === "low");
+  $("#pair-bench-mid").classList.toggle("active", b === "mid");
+}
+
+function renderEnemyChips() {
+  const html = []
+    .concat(pairState.enemySeries.map((s) => ({ key: "s", label: s.name, val: s.id, name: "系列" })))
+    .concat(pairState.enemyTags.map((t) => ({ key: "t", label: t, name: "标签" })))
+    .map((x) =>
+      `<span class="chip sel-tag" title="${esc(x.name)}">${esc(x.label)}
+        <button class="chip-x" data-kind="${x.key}" data-v="${esc(x.val ?? x.label)}" title="移除">×</button>
+      </span>`).join("");
+  $("#ep-chips").innerHTML = html || '<span class="muted">未选择（依赖敌方标签/系列的能力将不触发）</span>';
+  $("#pair-enemy-tags").innerHTML = html;
+  ["#ep-chips", "#pair-enemy-tags"].forEach((sel) => {
+    const box = $(sel);
+    box.querySelectorAll(".chip-x").forEach((b) =>
+      b.addEventListener("click", () => {
+        if (b.dataset.kind === "s") {
+          pairState.enemySeries = pairState.enemySeries.filter((v) => v.id !== b.dataset.v);
+        } else {
+          pairState.enemyTags = pairState.enemyTags.filter((v) => v !== b.dataset.v);
+        }
+        renderEnemyChips();
+      }));
+  });
+}
+
+async function openEnemyTagPicker() {
+  try {
+    const [series, tags] = await Promise.all([
+      api("/api/series"),
+      api("/api/tags?kind=unit"),
+    ]);
+    initCombobox("#ep-series-box",
+      [{ value: "", label: "全部系列" }].concat(series.map((s) => ({ value: s.id, label: s.name }))),
+      () => "",
+      (v, label) => { if (v && !pairState.enemySeries.some((x) => x.id === String(v))) {
+        pairState.enemySeries.push({ id: String(v), name: label });
+        renderEnemyChips();
+      } }, false);
+    initCombobox("#ep-tag-box",
+      tags.map((t) => ({ value: t, label: t })),
+      () => "",
+      (v) => { if (v && !pairState.enemyTags.includes(v)) {
+        pairState.enemyTags.push(v);
+        renderEnemyChips();
+      } }, false);
+  } catch (e) { /* 忽略 */ }
+  renderEnemyChips();
+  $("#enemy-picker-modal").classList.remove("hidden");
+}
+
+function openPairUnitPicker() {
+  pairUnitState.page = 0;
+  $("#pair-picker-modal").classList.remove("hidden");
+  ppLoad(0);
+}
+
+function openPairWeaponPicker() {
+  const u = pairState.unitDetail;
+  if (!u || !u.weapons || !u.weapons.length) return;
+  const rows = u.weapons.map((w) => `
+    <div class="picker-row" data-w="${w.id}">
+      <span class="name">${esc(w.name)}</span>
+      <span class="muted">威力 ${w.power_lv9 ?? w.power_lv5 ?? w.power}</span>
+      <span class="muted">${esc(`${w.attack_attr_label ?? "—"}/${w.attrs_label ?? w.weapon_attr_label ?? "—"}`)} ${esc(w.pilot_stat ?? "")}</span>
+    </div>`).join("");
+  showModal("选择武器",
+    `<div id="pair-weapon-list" class="list picker-list">${rows || '<div class="empty">该机体暂无武器数据</div>'}</div>
+     <div class="calc-actions"><button id="pair-wp-close" class="cond-btn">取消</button></div>`);
+  $("#pair-weapon-list").querySelectorAll(".picker-row").forEach((r) =>
+    r.addEventListener("click", () => {
+      const w = u.weapons.find((x) => String(x.id) === r.dataset.w);
+      pairState.weapon = w;
+      $("#modal").classList.add("hidden");
+      renderWeaponInfo();
+      updatePairMatchBtn();
+    }));
+  $("#pair-wp-close").addEventListener("click", () => $("#modal").classList.add("hidden"));
+}
+
+function renderWeaponInfo() {
+  const box = $("#pair-weapon-info");
+  if (pairState.action !== "attack") return;
+  if (!pairState.weapon) {
+    box.innerHTML = '<span class="muted">未选择武器</span>';
     return;
   }
-  const units = d.units.map((u) => `
-    <div class="pair-card">
-      <div class="head"><span class="name">${esc(u.unit_name)}</span>${rarityBadge(u.unit_rarity)}</div>
-      <div class="score-line">
-        <span>总评 <b>${u.total_score}</b></span>
-        <span>属性 ${u.stat_score}/30</span><span>加成 ${u.bonus_score}/50</span><span>支援 ${u.supporter_score}/20</span>
-        ${scoreBar(u.total_score, 100)}
-      </div>
-      <div class="chips">${u.series_match ? "<span>同系列</span>" : ""}${pairChips(u.matched)}</div>
-    </div>`).join("");
+  const w = pairState.weapon;
+  const basePow = w.power_lv9 ?? w.power_lv5 ?? w.power;
+  const pb = weaponPowerBoost(w);
+  const power = pb.boost ? Math.ceil(basePow * (100 + pb.boost) / 100) : basePow;
+  box.innerHTML = `
+    <span>武器：<b>${esc(w.name)}</b></span>
+    <span>类型 ${esc(`${w.attack_attr_label ?? "—"}/${w.attrs_label ?? w.weapon_attr_label ?? "—"}`)}</span>
+    <span>依赖 ${esc(w.pilot_stat ?? "—")}</span>
+    <span>威力 ${power}${pb.effects.length ? `（${pb.effects.map((e) => `${e.name}+${e.pct}%`).join("；")}）` : ""}</span>
+    <span>暴击率 ${w.crit_lv9 ?? w.crit_lv5 ?? w.critical_rate ?? 0}%</span>
+    <button class="pair-sel-clear" id="pair-clear-weapon" title="清除武器">×</button>`;
+  $("#pair-clear-weapon").addEventListener("click", () => {
+    pairState.weapon = null;
+    renderWeaponInfo();
+    updatePairMatchBtn();
+  });
+}
+
+async function runPairMatch() {
+  const msg = $("#pair-msg");
+  const u = pairState.unit;
+  if (!u) { msg.textContent = "请先选择机体"; return; }
+  if (pairState.action === "attack" && !pairState.weapon) { msg.textContent = "请先选择武器"; return; }
+  const q = new URLSearchParams({
+    unit_id: u.id, action: pairState.action,
+    weapon_id: pairState.weapon ? pairState.weapon.id : "",
+    bench: pairState.bench,
+  });
+  if (pairState.action === "attack") {
+    q.set("evigor", $("#pair-vigor").value);
+    q.set("atk_us", pairState.atkUs.join(","));
+    q.set("ext_pct", String((Number($("#pair-ext-sup").value) || 0) + (Number($("#pair-ext-op").value) || 0)));
+    q.set("ext_fixed", $("#pair-ext-fixed").value);
+  } else {
+    q.set("eua", $("#pair-enemy-ua").value);
+    q.set("epa", $("#pair-enemy-pa").value);
+    q.set("ewp", String(renderEnemyPower()));
+    q.set("ewt", $("#pair-enemy-wt").value);
+    q.set("ewaa", $("#pair-enemy-waa").value);
+    q.set("etags", pairState.enemyTags.join(","));
+    q.set("eseries", pairState.enemySeries.map((x) => x.id).join(","));
+    q.set("eguard", $("#pair-enemy-guard").value);
+    q.set("eir", $("#pair-enemy-ir").checked ? "1" : "0");
+    q.set("evigor", $("#pair-enemy-vigor").value);
+    q.set("eterrain", $("#pair-enemy-terrain").value);
+    q.set("ecrit", $("#pair-enemy-crit").value);
+    q.set("ext_pct", String((Number($("#pair-ext-sup").value) || 0) + (Number($("#pair-ext-op").value) || 0)));
+    q.set("ext_fixed", $("#pair-ext-fixed").value);
+    q.set("hp_pct", $("#pair-ext-hp").value);
+    q.set("hp_fixed", $("#pair-ext-hpf").value);
+  }
+  msg.textContent = "正在匹配…";
+  try {
+    const res = await api("/api/pairing/match?" + q);
+    msg.textContent = "";
+    renderPairResult(res);
+  } catch (e) {
+    msg.textContent = "匹配失败：" + (e.message || e);
+  }
+}
+
+function pairMechChips(mechs) {
+  if (!mechs || !mechs.length) return '<span class="muted">—</span>';
+  return mechs.slice(0, 8).map((m) =>
+    `<span class="chip ${m.kind === "enemy_cond" || m.kind === "unverifiable" ? "cond" : ""}" title="${esc(m.label)}">${esc(m.label.length > 16 ? m.label.slice(0, 16) + "…" : m.label)}</span>`).join("") +
+    (mechs.length > 8 ? ` <span class="muted">+${mechs.length - 8}</span>` : "");
+}
+
+function pairTrigChips(trig) {
+  if (!trig || !trig.length) return '<span class="muted">—</span>';
+  return trig.map((t) =>
+    `<span class="chip" title="${esc(`${t.name}：${t.desc}`)}">${esc(t.name || "能力")}</span>`).join("");
+}
+
+function pairClassChips(list) {
+  if (!list || !list.length) return '<span class="muted">—</span>';
+  return list.map((x) =>
+    `<span class="chip" title="${esc(`${x.name}：${x.desc}（${x.reason}）`)}">${esc(x.name || "能力")}</span>`).join("");
+}
+
+function pairSkillChips(skills) {
+  if (!skills || !skills.length) return '<span class="muted">—</span>';
+  return skills.map((s) =>
+    `<span class="chip" title="${esc(s.desc || "")}">${esc(s.name || "—")}</span>`).join("");
+}
+
+function renderPairResult(res) {
+  if (res.error) { $("#pair-msg").textContent = res.error; return; }
+  const isAtk = res.action === "attack";
+  const head = isAtk
+    ? `<tr><th>#</th><th>名称</th><th>稀有度</th><th>类型</th><th>得分（非暴击）</th><th>暴击伤害</th><th>暴击率</th><th>依赖属性</th><th>属性值</th><th>触发的能力</th><th>特殊机制</th><th></th></tr>`
+    : `<tr><th>#</th><th>名称</th><th>稀有度</th><th>类型</th><th>得分（期望抵御）</th><th>非暴击</th><th>暴击</th><th>首次伤害</th><th>驾驶员防御</th><th>减伤%</th><th>触发的能力</th><th>有可能触发</th><th>不能触发</th><th>驾驶员技能</th><th></th></tr>`;
+  const rows = res.pilots.map((p, i) => {
+    const td = isAtk
+      ? `<td class="num">${p.score}</td><td class="num">${p.crit_damage}</td>
+         <td class="num">${p.crit_rate}%</td><td>${esc(p.dep_label)}</td><td class="num">${p.dep_value}</td>`
+      : `<td class="num">${p.score}</td><td class="num">${p.survive}</td><td class="num">${p.survive_crit}</td>
+         <td class="num">${p.first_damage}</td><td class="num">${p.defense}</td><td class="num">${p.dmg_down}%</td>`;
+    const trigCell = isAtk
+      ? pairTrigChips(p.triggered)
+      : (p.support_mech || []).map((m) =>
+          `<span class="chip" title="${esc(m.label)}">${esc(m.label.length > 12 ? m.label.slice(0, 12) + "…" : m.label)}</span>`).join("") + pairTrigChips(p.triggered);
+    return `<tr class="pair-pilot" data-id="${p.id}">
+      <td class="num">${i + 1}</td><td>${esc(p.name)}</td>
+      <td>${rarityBadge(p.rarity)}</td><td>${roleBadge(p.role, p.role_label)}</td>
+      ${td}
+      ${isAtk
+        ? `<td>${pairTrigChips(p.triggered)}</td><td>${pairMechChips(p.mechanics)}</td>`
+        : `<td>${trigCell}</td><td>${pairClassChips(p.potential)}</td><td>${pairClassChips(p.impossible)}</td><td>${pairSkillChips(p.skills)}</td>`}
+      <td><button class="cond-btn pair-to-damage" data-pid="${p.id}" title="把该驾驶员代入伤害计算">代入</button></td>
+    </tr>`;
+  }).join("");
+  const first = res.pilots[0] || {};
+  const unitAb = (pairState.unitDetail?.abilities || []).map((a) =>
+    `<span class="chip" title="${esc(a.desc || "")}">${esc(a.name || "能力")}</span>`).join("");
+  const unitSk = (pairState.unitDetail?.skills || []).map((s) =>
+    `<span class="chip" title="${esc(s.desc || "")}">${esc(s.name || "技能")}</span>`).join("");
+  const headInfo = `
+    <div class="pair-head-unit">${rarityBadge(res.unit.rarity)} <b>${esc(res.unit.name)}</b> <span class="chip">${esc(res.unit.role_label)}</span></div>
+    ${isAtk
+      ? `<div>机体攻击（满星满级）：<b>${res.unit_attack}</b></div>`
+      : `<div>HP <b>${first.unit_hp ?? "—"}</b> · 防御 <b>${first.unit_defense ?? "—"}</b></div>`}
+    ${unitAb ? `<div>单位能力：${unitAb}</div>` : ""}
+    ${unitSk ? `<div>单位技能：${unitSk}</div>` : ""}
+  `;
   $("#pair-result").innerHTML = `
-    <h3>${esc(d.pilot.name)} 推荐机体（Top ${d.units.length}）</h3>
-    ${units}`;
+    <div class="pair-result-panel">
+      ${headInfo}
+      <div style="max-height:60vh;overflow:auto">
+        <table>${head}${rows}</table>
+      </div>
+    </div>`;
+  document.querySelectorAll(".pair-pilot").forEach((r) =>
+    r.addEventListener("click", () => openCharacter(r.dataset.id)));
+  document.querySelectorAll(".pair-to-damage").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pilot = res.pilots.find((x) => String(x.id) === b.dataset.pid);
+      if (pilot) pairToDamageCalc(res, pilot);
+    }));
+  $("#pair-result").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function pairToDamageCalc(res, pilot) {
+  activateTab("damage");
+  $("#modal").classList.add("hidden");
+  const isAtk = res.action === "attack";
+  const u = pairState.unitDetail;
+  const unitInfo = {
+    name: res.unit.name, rarity: res.unit.rarity,
+    role: res.unit.role, role_label: res.unit.role_label,
+  };
+  const pilotInfo = {
+    name: pilot.name, rarity: pilot.rarity,
+    role: pilot.role, role_label: pilot.role_label,
+  };
+  if (isAtk) {
+    calcSel.atkUnit = { id: res.unit.id, source: "library", star: 3,
+      stat_bonuses: (u && u.stat_bonuses) || {}, max_hp: (u && u.max_hp) || 0 };
+    calcSel.atkPilot = { id: pilot.id, source: "library",
+      ranged: pilot.stats.ranged, melee: pilot.stats.melee,
+      awaken: pilot.stats.awaken, defense: pilot.stats.defense };
+    calcSel.atkWeapon = pairState.weapon || null;
+    calcSel.atkUOn = []; calcSel.atkPOn = [];
+    resetAbInit();
+    $("#atk-unit-info").innerHTML = pickInfoText(unitInfo);
+    $("#atk-pilot-info").innerHTML = pickInfoText(pilotInfo);
+    $("#atk-unit-star").classList.remove("hidden");
+    $("#atk-unit-star").value = "3";
+    $("#d-aua").value = res.unit_attack;
+    $("#d-aca").value = pilot.dep_value ?? pilot.stats.melee;
+    if (calcSel.atkWeapon) {
+      const w = calcSel.atkWeapon;
+      $("#d-weapon-name").textContent = w.name || "—";
+      $("#d-wtype").textContent = w.weapon_attr_label ?? "—";
+      $("#d-wstat").textContent = w.pilot_stat ?? "—";
+      $("#d-wp").value = res.weapon ? res.weapon.power : (w.power_lv5 ?? w.power);
+      $("#d-wcrit").textContent = (pilot.crit_rate ?? 0) + "%";
+    }
+    $("#d-vigor-atk").value = res.enemy_cfg?.vigor ?? "normal";
+    $("#d-buff").value = 0;
+  } else {
+    calcSel.defUnit = { id: res.unit.id, source: "library", star: 3,
+      stat_bonuses: (u && u.stat_bonuses) || {}, max_hp: (u && u.max_hp) || 0 };
+    calcSel.defPilot = { id: pilot.id, source: "library",
+      ranged: pilot.stats.ranged, melee: pilot.stats.melee,
+      awaken: pilot.stats.awaken, defense: pilot.stats.defense };
+    calcSel.defUOn = []; calcSel.defPOn = [];
+    resetAbInit();
+    $("#def-unit-info").innerHTML = pickInfoText(unitInfo);
+    $("#def-pilot-info").innerHTML = pickInfoText(pilotInfo);
+    $("#def-unit-star").classList.remove("hidden");
+    $("#def-unit-star").value = "3";
+    $("#d-dud").value = firstUnitDef(res);
+    $("#d-dhp").value = firstUnitHp(res);
+    $("#d-dcd").value = pilot.defense;
+    $("#d-aua").value = res.enemy_cfg.unit_attack;
+    $("#d-aca").value = res.enemy_cfg.pilot_attack;
+    $("#d-wp").value = res.enemy_cfg.power;
+    $("#d-terrain").value = res.enemy_cfg.terrain;
+    $("#d-vigor-atk").value = res.enemy_cfg.vigor;
+    $("#d-crit").checked = (res.enemy_cfg.crit_rate || 0) >= 100;
+    $("#d-defend-state").value = { 0: "none", 1: "defend", 2: "defend_shield" }[res.enemy_cfg.guard] ?? "defend_shield";
+    $("#d-debuff").value = 0;
+  }
+  autoCalcBonuses();
+}
+
+function firstUnitDef(res) {
+  return res.pilots[0] ? res.pilots[0].unit_defense : 0;
+}
+function firstUnitHp(res) {
+  return res.pilots[0] ? res.pilots[0].unit_hp : 0;
+}
+
+function initPairing() {
+  $("#pair-select-unit").addEventListener("click", openPairUnitPicker);
+  $("#pair-match").addEventListener("click", runPairMatch);
+  $("#pair-act-atk").addEventListener("click", () => setPairAction("attack"));
+  $("#pair-act-def").addEventListener("click", () => setPairAction("defense"));
+  $("#pair-bench-low").addEventListener("click", () => setPairBench("low"));
+  $("#pair-bench-mid").addEventListener("click", () => setPairBench("mid"));
+  $("#pair-select-weapon").addEventListener("click", openPairWeaponPicker);
+  $("#pair-select-uskill").addEventListener("click", openUnitSkillPicker);
+  $("#pair-enemy-tags-btn").addEventListener("click", openEnemyTagPicker);
+  $("#pair-enemy-default").addEventListener("click", () => applyDefaultEnemy());
+  $("#pair-enemy-wp").addEventListener("input", renderEnemyPower);
+  $("#pair-enemy-wpboost").addEventListener("input", renderEnemyPower);
+  $("#pair-picker-close").addEventListener("click", () => $("#pair-picker-modal").classList.add("hidden"));
+  $("#pair-picker-modal").addEventListener("click", (e) => {
+    if (e.target === $("#pair-picker-modal")) $("#pair-picker-modal").classList.add("hidden");
+  });
+  $("#enemy-picker-close").addEventListener("click", () => $("#enemy-picker-modal").classList.add("hidden"));
+  $("#enemy-picker-modal").addEventListener("click", (e) => {
+    if (e.target === $("#enemy-picker-modal")) $("#enemy-picker-modal").classList.add("hidden");
+  });
+  $("#ep-ok").addEventListener("click", () => $("#enemy-picker-modal").classList.add("hidden"));
+  $("#ep-cancel").addEventListener("click", () => $("#enemy-picker-modal").classList.add("hidden"));
+  $("#ep-clear").addEventListener("click", () => {
+    pairState.enemyTags = [];
+    pairState.enemySeries = [];
+    renderEnemyChips();
+  });
+  $("#pp-search").addEventListener("click", () => ppLoad(0));
+  $("#pp-q").addEventListener("keydown", (e) => { if (e.key === "Enter") ppLoad(0); });
+  $("#pp-reset").addEventListener("click", () => {
+    pairUnitState.q = ""; pairUnitState.rarity = ""; pairUnitState.acq = "";
+    pairUnitState.series = ""; pairUnitState.type = ""; pairUnitState.tags = [];
+    pairUnitState.tag_mode = "all"; pairUnitState.match = "and";
+    pairUnitState.wfx = []; pairUnitState.wfx_mode = "any"; pairUnitState.page = 0;
+    $("#pp-q").value = ""; $("#pp-rarity").value = ""; $("#pp-acq").value = "";
+    $("#pp-type").value = ""; $("#pp-tag-mode").value = "all"; $("#pp-match").value = "and";
+    $("#pp-wfx-mode").value = "any";
+    syncCombobox("#pp-series-box");
+    renderPairTagChips();
+    renderPairWfxChips();
+    ppLoad(0);
+  });
+  ["#pp-rarity", "#pp-acq", "#pp-type", "#pp-tag-mode", "#pp-match", "#pp-wfx-mode"]
+    .forEach((sel) => $(sel).addEventListener("change", () => ppLoad(0)));
 }
 
 /* ---------- 启动 ---------- */
 initFilterControls();
 initColumnResize();
+initPairing();
 loadSummary();
