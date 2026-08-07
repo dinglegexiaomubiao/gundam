@@ -290,6 +290,9 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--accent2); border-left: 3p
 .calc-wrap { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: 14px; align-items: start; }
 .calc-side { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
 .mods-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; align-items: end; }
+.mods-grid label { flex-direction: row; align-items: center; gap: 6px; margin-bottom: 0; min-width: 0; }
+.mods-grid input, .mods-grid select { min-width: 0; max-width: 100%; }
+.mods-grid input[type="checkbox"] { width: auto; }
 .calc-actions { display: flex; gap: 10px; margin-top: 14px; }
 .calc-side label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
 .calc-side input, .calc-side select { margin-top: 2px; }

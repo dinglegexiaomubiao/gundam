@@ -1114,12 +1114,26 @@ def api_supporter_panel() -> list:
                 last = leader_pcts[i]
             else:
                 leader_pcts[i] = last
+        mstep = max(range(4), key=lambda i: leader_pcts[i])
+        conds: list[str] = []
+        crow = conn.execute(
+            "SELECT conditions FROM supporter_skill "
+            "WHERE supporter_id = ? AND skill_type = 'leader' "
+            "AND limit_break_step = ? LIMIT 1",
+            (s["id"], mstep),
+        ).fetchone()
+        if crow:
+            for c in _json_list(crow["conditions"]):
+                t = (c.get("text") or "").strip()
+                if t and t not in conds:
+                    conds.append(t)
         out.append({
             "id": s["id"],
             "rarity": s["rarity"],
             "name": s["name"],
             "leader_pct": pct,
             "leader_pcts": leader_pcts,
+            "conds": conds,
             "atk_add": s["max_attack_addition_value"] or 0,
             "hp_add": s["max_hp_addition_value"] or 0,
         })

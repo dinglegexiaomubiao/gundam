@@ -1898,7 +1898,7 @@ async function loadPicker(page = pickerState.page) {
     const pb = weaponPowerBoost(w);
     const basePow = w.power_lv9 ?? w.power_lv5 ?? w.power;
     $("#d-wp").value = pb.boost
-      ? Math.floor(basePow * (100 + pb.boost) / 100)
+      ? Math.ceil(basePow * (100 + pb.boost) / 100)
       : basePow;
     $("#d-wfx-power").textContent = pb.effects.length
       ? pb.effects.map((e) => `${e.name}（+${e.pct}%）`).join("；")
@@ -2102,34 +2102,26 @@ async function autoCalcBonuses() {
     atk_skill_awaken: skillStats.awaken,
     atk_unit_skill: atkUSkill.atk,
     def_unit_skill: defUSkill.def,
-    atk_ship: $("#atk-ship").value || 0,
     atk_support: $("#atk-support").value || 0,
     atk_op: atkOpPct,
     atk_fixed: (Number($("#atk-fixed").value) || 0) + atkOpFixed,
-    def_ship: $("#def-ship").value || 0,
     def_support: $("#def-support").value || 0,
     def_op: defOpPct,
-    def_fixed: (Number($("#def-fixed").value) || 0) + defOpFixed,
+    def_fixed: defOpFixed,
   });
   const d = await api("/api/damage-bonus?" + q);
   if (seq !== calcSeq.n) return;
   if (d.atk_unit_attack != null && au) $("#d-aua").value = d.atk_unit_attack;
-  if (d.atk_unit_attack != null && au) $("#atk-panel-val").textContent = d.atk_unit_attack;
   if (d.atk_pilot_attack != null && ap) $("#d-aca").value = d.atk_pilot_attack;
   if (d.def_unit_defense != null && du) $("#d-dud").value = d.def_unit_defense;
-  if (d.def_unit_defense != null && du) $("#def-panel-val").textContent = d.def_unit_defense;
   if (du && du.max_hp != null) {
     const dMult = SUPPORT_STAR_MULT[Number($("#def-unit-star").value || 0)] || 1;
     const passiveHp = (du.stat_bonuses || {}).hp || 0;
-    const dShip = Number($("#def-ship").value) || 0;
     const dSupPct = Number($("#def-support").value) || 0;
-    const supHpFixed = calcSel.defSupport
-      ? Math.floor((calcSel.defSupport.hp_add || 0)
-          * SUPPORT_STAR_MULT[Number($("#def-support-star").value || 0)] / 1.4)
-      : 0;
+    const supHpFixed = Number($("#def-support-hp").value) || 0;
     const hpPanel = Math.floor(
       Math.floor(du.max_hp * dMult)
-      * (100 + passiveHp + dShip + dSupPct + hpOpPct) / 100
+      * (100 + passiveHp + dSupPct + hpOpPct) / 100
     ) + supHpFixed + hpOpFixed;
     $("#d-dhp").value = hpPanel;
   }
@@ -2414,7 +2406,8 @@ $("#pick-atk-uskill").addEventListener("click", () => pickUSkill("atk"));
 $("#pick-def-uskill").addEventListener("click", () => pickUSkill("def"));
 $("#pick-atk-support").addEventListener("click", () => pickSupporter("atk"));
 $("#pick-def-support").addEventListener("click", () => pickSupporter("def"));
-["atk-ship", "atk-fixed", "def-ship", "def-fixed",
+["atk-support", "atk-fixed", "atk-support-hp",
+ "def-support", "def-support-atk", "def-support-hp",
  "atk-op-hp", "atk-op-hp-mode", "atk-op-atk", "atk-op-atk-mode",
  "atk-op-def", "atk-op-def-mode",
  "def-op-hp", "def-op-hp-mode", "def-op-atk", "def-op-atk-mode",
@@ -2435,7 +2428,9 @@ function pickSupporter(side) {
     calcSel[key] = x;
     const p = side === "atk" ? "atk" : "def";
     $(`#${p}-support-star`).value = "3";
-    $(`#${p}-support-name`).textContent = `支援：${x.name}`;
+    $(`#${p}-support-info`).innerHTML =
+      `${rarityBadge(x.rarity)} ${esc(x.name)}` +
+      ((x.conds && x.conds.length) ? ` <span class="muted">｜${esc(x.conds.join("；"))}</span>` : "");
     applySupportPanel(side);
     autoCalcBonuses();
   }, side);
@@ -2450,10 +2445,11 @@ function applySupportPanel(side) {
   const pcts = x.leader_pcts || [];
   const leaderPct = pcts[star] ?? x.leader_pct ?? 0;
   $(`#${side}-support`).value = leaderPct;
-  if (side === "atk") {
-    const atk = x.atk_add || 0;
-    $("#atk-fixed").value = Math.floor(atk * SUPPORT_STAR_MULT[star] / 1.4);
-  }
+  const atk = x.atk_add || 0;
+  const hp = x.hp_add || 0;
+  const atkEl = side === "atk" ? "#atk-fixed" : "#def-support-atk";
+  $(atkEl).value = Math.floor(atk * SUPPORT_STAR_MULT[star] / 1.4);
+  $(`#${side}-support-hp`).value = Math.floor(hp * SUPPORT_STAR_MULT[star] / 1.4);
 }
 
 $("#picker-search").addEventListener("click", () => {
@@ -2528,15 +2524,12 @@ $("#d-calc").addEventListener("click", async () => {
   }
   const hits = d.hits || [];
   const first = hits[0];
-  if (first) {
-    $("#d-summary").innerHTML =
-      `<div class="damage-final">本次攻击伤害 <b>${first.damage}</b></div>` +
-      `<div class="remain-hp">防御方剩余 HP：<b>${first.hp}</b>（${first.hp_pct}%）</div>`;
-  }
   const totalDmg = hits.reduce((s, h) => s + h.damage, 0);
   const avgDmg = hits.length ? Math.round(totalDmg / hits.length) : 0;
   const finalDef = hits.length ? hits[hits.length - 1].defense : 0;
   $("#d-result-body").innerHTML = hits.length ? `
+    ${first ? `<div class="damage-final">本次攻击伤害 <b>${first.damage}</b></div>
+    <div class="remain-hp">防御方剩余 HP：<b>${first.hp}</b>（${first.hp_pct}%）</div>` : ""}
     <div class="sim-summary">
       <span>共 <b>${hits.length}</b> 次攻击</span>
       <span>总伤害 <b>${totalDmg}</b></span>
@@ -2558,48 +2551,6 @@ $("#d-calc").addEventListener("click", async () => {
     </table>` : '<div class="empty">无数据</div>';
 });
 
-function resetDamage() {
-  $("#d-aua").value = 3000;
-  $("#d-aca").value = 800;
-  $("#d-dud").value = 2800;
-  $("#d-dcd").value = 750;
-  $("#d-dhp").value = 0;
-  $("#d-wp").value = 5000;
-  $("#d-wtype").textContent = "—";
-  $("#d-wstat").textContent = "—";
-  $("#d-weapon-name").textContent = "—";
-  $("#d-wcrit").textContent = "—";
-  $("#d-wcritdmg").textContent = "—";
-  $("#d-terrain").value = 1.0;
-  $("#d-vigor-atk").value = "normal";
-  $("#d-vigor-def").value = "normal";
-  $("#d-buff").value = 0;
-  $("#d-debuff").value = 0;
-  $("#d-crit").checked = false;
-  $("#d-defend-state").value = "none";
-  calcSel.atkUnit = calcSel.atkPilot = null;
-  calcSel.defUnit = calcSel.defPilot = null;
-  calcSel.atkWeapon = null;
-  calcSel.atkSkills = [];
-  calcSel.defSkills = [];
-  calcSel.atkUOn = []; calcSel.atkPOn = [];
-  calcSel.defUOn = []; calcSel.defPOn = [];
-  resetAbInit();
-  ["atk-unit-info", "atk-pilot-info", "def-unit-info", "def-pilot-info"].forEach((id) => {
-    $(`#${id}`).textContent = "";
-  });
-  ["#atk-unit-ab", "#atk-pilot-ab", "#def-unit-ab", "#def-pilot-ab"].forEach((id) => {
-    $(id).innerHTML = "";
-  });
-  renderSkills("atk");
-  renderSkills("def");
-  $("#atk-unit-star").classList.add("hidden");
-  $("#def-unit-star").classList.add("hidden");
-  $("#d-result-body").innerHTML = "";
-  $("#d-summary").innerHTML = "";
-}
-$("#d-reset").addEventListener("click", resetDamage);
-
 function resetSide(side) {
   if (side === "atk") {
     calcSel.atkUnit = calcSel.atkPilot = null;
@@ -2620,16 +2571,13 @@ function resetSide(side) {
     $("#d-wfx-power").textContent = "—";
     $("#d-wcrit").textContent = "—";
     $("#d-wcritdmg").textContent = "—";
-    $("#atk-ship").value = 0;
     $("#atk-support").value = 0;
     $("#atk-fixed").value = 0;
+    $("#atk-support-hp").value = 0;
     $("#atk-support-star").value = "3";
     ["atk-op-hp", "atk-op-atk", "atk-op-def"].forEach((id) => { $(`#${id}`).value = 0; });
     ["atk-op-hp-mode", "atk-op-atk-mode", "atk-op-def-mode"].forEach((id) => { $(`#${id}`).value = "pct"; });
-    $("#atk-support-name").textContent = "";
-    $("#atk-panel-bt").textContent = "0%";
-    $("#atk-panel-passive").textContent = "0%";
-    $("#atk-panel-val").textContent = "—";
+    $("#atk-support-info").textContent = "未选择支援角色";
     renderSkills("atk");
     renderUSkills("atk");
     $("#d-buff").value = 0;
@@ -2652,16 +2600,13 @@ function resetSide(side) {
     $("#d-dud").value = 2800;
     $("#d-dhp").value = 0;
     $("#d-dcd").value = 750;
-    $("#def-ship").value = 0;
     $("#def-support").value = 0;
-    $("#def-fixed").value = 0;
+    $("#def-support-atk").value = 0;
+    $("#def-support-hp").value = 0;
     $("#def-support-star").value = "3";
     ["def-op-hp", "def-op-atk", "def-op-def"].forEach((id) => { $(`#${id}`).value = 0; });
     ["def-op-hp-mode", "def-op-atk-mode", "def-op-def-mode"].forEach((id) => { $(`#${id}`).value = "pct"; });
-    $("#def-support-name").textContent = "";
-    $("#def-panel-bt").textContent = "0%";
-    $("#def-panel-passive").textContent = "0%";
-    $("#def-panel-val").textContent = "—";
+    $("#def-support-info").textContent = "未选择支援角色";
     renderSkills("def");
     renderUSkills("def");
     $("#d-debuff").value = 0;

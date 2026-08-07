@@ -269,17 +269,14 @@
             <label>驾驶员攻击 <input id="d-aca" type="number" value="800"></label>
           </div>
           <div class="panel-row">
-            <span>突破 <b id="atk-panel-bt">0%</b></span>
-            <label>船舰% <input id="atk-ship" type="number" value="0"></label>
-            <label>支援% <input id="atk-support" type="number" value="0" readonly></label>
-            <label>支援星级 <select id="atk-support-star">
+            <span id="atk-support-info" class="pick-info">未选择支援角色</span>
+            <label>星级 <select id="atk-support-star">
               <option value="0">0★</option><option value="1">1★</option>
               <option value="2">2★</option><option value="3" selected>3★</option>
             </select></label>
-            <span>被动 <b id="atk-panel-passive">0%</b></span>
-            <label>固定 <input id="atk-fixed" type="number" value="0"></label>
-            <span>面板 <b id="atk-panel-val">—</b></span>
-            <span id="atk-support-name" class="muted"></span>
+            <label>能力提升% <input id="atk-support" type="number" value="0"></label>
+            <label>攻击力提升 <input id="atk-fixed" type="number" value="0"></label>
+            <label>HP提升 <input id="atk-support-hp" type="number" value="0"></label>
           </div>
           <div class="panel-row">
             <span>零件</span>
@@ -337,17 +334,14 @@
             <label>驾驶员防御 <input id="d-dcd" type="number" value="750"></label>
           </div>
           <div class="panel-row">
-            <span>突破 <b id="def-panel-bt">0%</b></span>
-            <label>船舰% <input id="def-ship" type="number" value="0"></label>
-            <label>支援% <input id="def-support" type="number" value="0" readonly></label>
-            <label>支援星级 <select id="def-support-star">
+            <span id="def-support-info" class="pick-info">未选择支援角色</span>
+            <label>星级 <select id="def-support-star">
               <option value="0">0★</option><option value="1">1★</option>
               <option value="2">2★</option><option value="3" selected>3★</option>
             </select></label>
-            <span>被动 <b id="def-panel-passive">0%</b></span>
-            <label>固定 <input id="def-fixed" type="number" value="0"></label>
-            <span>面板 <b id="def-panel-val">—</b></span>
-            <span id="def-support-name" class="muted"></span>
+            <label>能力提升% <input id="def-support" type="number" value="0"></label>
+            <label>攻击力提升 <input id="def-support-atk" type="number" value="0"></label>
+            <label>HP提升 <input id="def-support-hp" type="number" value="0"></label>
           </div>
           <div class="panel-row">
             <span>零件</span>
@@ -374,21 +368,15 @@
             <label>地形倍率 <input id="d-terrain" type="number" step="0.1" value="1.0"></label>
             <label>增伤 % <input id="d-buff" type="number" value="0"></label>
             <label>敌方减伤 % <input id="d-debuff" type="number" value="0"></label>
-            <div class="checks">
-              <label><input id="d-crit" type="checkbox"> 暴击</label>
-              <label>防御状态
-                <select id="d-defend-state">
-                  <option value="none" selected>无防御 (×1.0)</option>
-                  <option value="defend">防御·无盾 (×0.8)</option>
-                  <option value="defend_shield">防御·有盾 (×0.6)</option>
-                </select>
-              </label>
-            </div>
+            <label>暴击 <input id="d-crit" type="checkbox"></label>
+            <label>防御状态
+              <select id="d-defend-state">
+                <option value="none" selected>无防御 (×1.0)</option>
+                <option value="defend">防御·无盾 (×0.8)</option>
+                <option value="defend_shield">防御·有盾 (×0.6)</option>
+              </select>
+            </label>
           </div>
-          <div class="calc-actions">
-            <button id="d-reset" class="reset-btn">重置</button>
-          </div>
-          <div id="d-summary"></div>
         </div>
         <div id="d-result" class="calc-result">
           <div class="calc-result-head">
