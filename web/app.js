@@ -882,6 +882,8 @@ async function initFilterControls() {
     (v) => addSkillChip(v), false);
   initCombobox("#sup-skill-box", tagOpts(supSkillNames), () => "",
     (v) => addSupSkillChip(v), false);
+  pairFilterData = { seriesOpts, charTags: tagOpts(charTags),
+    skillNames: tagOpts(skillNames), supportLabels };
   $("#char-support").innerHTML = '<option value="">全部支援次数</option>' +
     supportLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join("");
   initCombobox("#picker-series-box", seriesOpts, () => pickerState.series,
@@ -2917,6 +2919,9 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* ---------- 配对 ---------- */
+const pairFilterState = { q:"", rarity:"", series:"", type:"", tags: [], tag_mode: "all", skills: [], skill_mode: "any", support: "", match: "and", sort: "score", order: "desc" };
+let pairFilterData = null;
+let pairLastQuery = "";
 const pairState = {
   unit: null, unitDetail: null, action: "attack", weapon: null, bench: "low",
   enemyTags: [], enemySeries: [], atkUs: [],
@@ -3225,12 +3230,14 @@ function renderWeaponInfo() {
   const basePow = w.power_lv9 ?? w.power_lv5 ?? w.power;
   const pb = weaponPowerBoost(w);
   const power = pb.boost ? Math.ceil(basePow * (100 + pb.boost) / 100) : basePow;
+  const wcrit = w.crit_lv9 ?? w.crit_lv5 ?? w.critical_rate ?? 0;
   box.innerHTML = `
     <span>武器：<b>${esc(w.name)}</b></span>
     <span>类型 ${esc(`${w.attack_attr_label ?? "—"}/${w.attrs_label ?? w.weapon_attr_label ?? "—"}`)}</span>
     <span>依赖 ${esc(w.pilot_stat ?? "—")}</span>
-    <span>威力 ${power}${pb.effects.length ? `（${pb.effects.map((e) => `${e.name}+${e.pct}%`).join("；")}）` : ""}</span>
-    <span>暴击率 ${w.crit_lv9 ?? w.crit_lv5 ?? w.critical_rate ?? 0}%</span>
+    <span>威力 <input id="pair-wp-input" type="number" value="${power}" min="0">${pb.effects.length ? `<span class="muted" title="${esc(pb.effects.map((e) => `${e.name}+${e.pct}%`).join("；"))}">（含特效）</span>` : ""}</span>
+    <span>暴击率 <input id="pair-crit-input" type="number" value="${wcrit}" min="0" max="100">%</span>
+    <span>暴击伤害 <input id="pair-critdmg-input" type="number" value="0" min="0">%</span>
     <button class="pair-sel-clear" id="pair-clear-weapon" title="清除武器">×</button>`;
   $("#pair-clear-weapon").addEventListener("click", () => {
     pairState.weapon = null;
@@ -3254,6 +3261,9 @@ async function runPairMatch() {
     q.set("atk_us", pairState.atkUs.join(","));
     q.set("ext_pct", String((Number($("#pair-ext-sup").value) || 0) + (Number($("#pair-ext-op").value) || 0)));
     q.set("ext_fixed", $("#pair-ext-fixed").value);
+    q.set("wp_ov", $("#pair-wp-input")?.value ?? "");
+    q.set("crit_ov", $("#pair-crit-input")?.value ?? "");
+    q.set("critdmg_ov", $("#pair-critdmg-input")?.value ?? "");
   } else {
     q.set("eua", $("#pair-enemy-ua").value);
     q.set("epa", $("#pair-enemy-pa").value);
@@ -3272,6 +3282,7 @@ async function runPairMatch() {
     q.set("hp_pct", $("#pair-ext-hp").value);
     q.set("hp_fixed", $("#pair-ext-hpf").value);
   }
+  pairLastQuery = q.toString();
   msg.textContent = "正在匹配…";
   try {
     const res = await api("/api/pairing/match?" + q);
@@ -3310,9 +3321,7 @@ function pairSkillChips(skills) {
 function renderPairResult(res) {
   if (res.error) { $("#pair-msg").textContent = res.error; return; }
   const isAtk = res.action === "attack";
-  const head = isAtk
-    ? `<tr><th>#</th><th>名称</th><th>稀有度</th><th>类型</th><th>得分（非暴击）</th><th>暴击伤害</th><th>暴击率</th><th>依赖属性</th><th>属性值</th><th>触发的能力</th><th>特殊机制</th><th></th></tr>`
-    : `<tr><th>#</th><th>名称</th><th>稀有度</th><th>类型</th><th>得分（期望抵御）</th><th>非暴击</th><th>暴击</th><th>首次伤害</th><th>驾驶员防御</th><th>减伤%</th><th>触发的能力</th><th>有可能触发</th><th>不能触发</th><th>驾驶员技能</th><th></th></tr>`;
+  const head = buildPairHead(isAtk);
   const rows = res.pilots.map((p, i) => {
     const td = isAtk
       ? `<td class="num">${p.score}</td><td class="num">${p.crit_damage}</td>
@@ -3320,7 +3329,8 @@ function renderPairResult(res) {
       : `<td class="num">${p.score}</td><td class="num">${p.survive}</td><td class="num">${p.survive_crit}</td>
          <td class="num">${p.first_damage}</td><td class="num">${p.defense}</td><td class="num">${p.dmg_down}%</td>`;
     const trigCell = isAtk
-      ? pairTrigChips(p.triggered)
+      ? (p.support_mech || []).map((m) =>
+          `<span class="chip" title="${esc(m.label)}">${esc(m.label.length > 12 ? m.label.slice(0, 12) + "…" : m.label)}</span>`).join("") + pairTrigChips(p.triggered)
       : (p.support_mech || []).map((m) =>
           `<span class="chip" title="${esc(m.label)}">${esc(m.label.length > 12 ? m.label.slice(0, 12) + "…" : m.label)}</span>`).join("") + pairTrigChips(p.triggered);
     return `<tr class="pair-pilot" data-id="${p.id}">
@@ -3328,7 +3338,7 @@ function renderPairResult(res) {
       <td>${rarityBadge(p.rarity)}</td><td>${roleBadge(p.role, p.role_label)}</td>
       ${td}
       ${isAtk
-        ? `<td>${pairTrigChips(p.triggered)}</td><td>${pairMechChips(p.mechanics)}</td>`
+        ? `<td>${trigCell}</td><td>${pairClassChips(p.potential)}</td><td>${pairClassChips(p.impossible)}</td><td>${pairSkillChips(p.skills)}</td>`
         : `<td>${trigCell}</td><td>${pairClassChips(p.potential)}</td><td>${pairClassChips(p.impossible)}</td><td>${pairSkillChips(p.skills)}</td>`}
       <td><button class="cond-btn pair-to-damage" data-pid="${p.id}" title="把该驾驶员代入伤害计算">代入</button></td>
     </tr>`;
@@ -3346,13 +3356,57 @@ function renderPairResult(res) {
     ${unitAb ? `<div>单位能力：${unitAb}</div>` : ""}
     ${unitSk ? `<div>单位技能：${unitSk}</div>` : ""}
   `;
+  const filterBar = `
+    <div class="toolbar pair-filter-bar">
+      <input id="pr-q" placeholder="搜索驾驶员名称…" autocomplete="off">
+      <select id="pr-rarity">
+        <option value="">全部稀有度</option>
+        <option value="5">UR</option><option value="4">SSR</option>
+        <option value="3">SR</option><option value="2">R</option><option value="1">N</option>
+      </select>
+      <div class="sbox" id="pr-series-box">
+        <input class="sbox-input" placeholder="搜索系列…" autocomplete="off">
+        <div class="sbox-list hidden"></div>
+        <button class="sbox-clear hidden" type="button" title="清除">×</button>
+      </div>
+      <select id="pr-type">
+        <option value="">全部类型</option>
+        <option value="1">攻击型</option><option value="2">耐久型</option><option value="3">支援型</option>
+      </select>
+      <div class="sbox" id="pr-tag-box">
+        <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off">
+        <div class="sbox-list hidden"></div>
+      </div>
+      <select id="pr-tag-mode">
+        <option value="all">含全部标签</option><option value="any">含任一标签</option>
+      </select>
+      <div class="sbox" id="pr-skill-box">
+        <input class="sbox-input" placeholder="搜索/添加人物技能…" autocomplete="off">
+        <div class="sbox-list hidden"></div>
+      </div>
+      <select id="pr-skill-mode">
+        <option value="any" selected>含任一技能</option><option value="all">含全部技能</option>
+      </select>
+      <select id="pr-support"><option value="">全部支援次数</option></select>
+      <select id="pr-match">
+        <option value="and">交集（全部满足）</option><option value="or">并集（任一满足）</option>
+      </select>
+      <button id="pr-search">查询</button>
+      <button id="pr-reset" class="reset-btn" title="重置筛选">重置</button>
+    </div>
+    <div id="pr-tag-chips" class="tagbar"></div>
+    <div id="pr-skill-chips" class="tagbar"></div>
+    <div id="pr-count" class="result-count">共 ${res.total ?? res.pilots.length} 条结果</div>`;
   $("#pair-result").innerHTML = `
     <div class="pair-result-panel">
       ${headInfo}
+      ${filterBar}
       <div style="max-height:60vh;overflow:auto">
         <table>${head}${rows}</table>
       </div>
     </div>`;
+  bindPairFilterBar();
+  renderPairFilterChips();
   document.querySelectorAll(".pair-pilot").forEach((r) =>
     r.addEventListener("click", () => openCharacter(r.dataset.id)));
   document.querySelectorAll(".pair-to-damage").forEach((b) =>
@@ -3361,7 +3415,120 @@ function renderPairResult(res) {
       const pilot = res.pilots.find((x) => String(x.id) === b.dataset.pid);
       if (pilot) pairToDamageCalc(res, pilot);
     }));
-  $("#pair-result").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#pair-result").scrollIntoView({ behavior: "auto", block: "start" });
+}
+
+function sortTh(sort, label) {
+  const active = pairFilterState.sort === sort;
+  const arrow = active ? (pairFilterState.order === "asc" ? " ▲" : " ▼") : "";
+  return `<th><button class="sort-th" data-sort="${sort}">${label}${arrow}</button></th>`;
+}
+
+function buildPairHead(isAtk) {
+  const t = (s, l) => sortTh(s, l);
+  return isAtk
+    ? `<tr><th>#</th>${t("name","名称")}${t("rarity","稀有度")}${t("role","类型")}${t("score","得分（非暴击）")}${t("crit_damage","暴击伤害")}${t("crit_rate","暴击率")}<th>依赖属性</th>${t("dep_value","属性值")}<th>触发的能力</th><th>有可能触发</th><th>不能触发</th><th>驾驶员技能</th><th></th></tr>`
+    : `<tr><th>#</th>${t("name","名称")}${t("rarity","稀有度")}${t("role","类型")}${t("score","得分（期望抵御）")}${t("survive","非暴击")}${t("survive_crit","暴击")}${t("first_damage","首次伤害")}${t("defense","驾驶员防御")}${t("dmg_down","减伤%")}<th>触发的能力</th><th>有可能触发</th><th>不能触发</th><th>驾驶员技能</th><th></th></tr>`;
+}
+
+function renderPairFilterChips() {
+  const tagsHtml = pairFilterState.tags.map((t) =>
+    `<span class="chip sel-tag">${esc(t)}<button class="chip-x" data-t="${esc(t)}" title="移除">×</button></span>`).join("");
+  const skillsHtml = pairFilterState.skills.map((s) =>
+    `<span class="chip sel-tag">${esc(s)}<button class="chip-x" data-s="${esc(s)}" title="移除">×</button></span>`).join("");
+  $("#pr-tag-chips").innerHTML = tagsHtml;
+  $("#pr-skill-chips").innerHTML = skillsHtml;
+  $("#pr-tag-chips").querySelectorAll(".chip-x").forEach((b) =>
+    b.addEventListener("click", () => {
+      pairFilterState.tags = pairFilterState.tags.filter((t) => t !== b.dataset.t);
+      renderPairFilterChips();
+    }));
+  $("#pr-skill-chips").querySelectorAll(".chip-x").forEach((b) =>
+    b.addEventListener("click", () => {
+      pairFilterState.skills = pairFilterState.skills.filter((s) => s !== b.dataset.s);
+      renderPairFilterChips();
+    }));
+}
+
+function bindPairFilterBar() {
+  if (!pairFilterData) {
+    setTimeout(bindPairFilterBar, 300);
+    return;
+  }
+  $("#pr-q").value = pairFilterState.q;
+  $("#pr-rarity").value = pairFilterState.rarity;
+  $("#pr-type").value = pairFilterState.type;
+  $("#pr-tag-mode").value = pairFilterState.tag_mode;
+  $("#pr-skill-mode").value = pairFilterState.skill_mode;
+  $("#pr-support").value = pairFilterState.support;
+  $("#pr-match").value = pairFilterState.match;
+  $("#pr-support").innerHTML = '<option value="">全部支援次数</option>' +
+    pairFilterData.supportLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join("");
+  $("#pr-support").value = pairFilterState.support;
+  initCombobox("#pr-series-box", pairFilterData.seriesOpts, () => pairFilterState.series,
+    (v) => { pairFilterState.series = String(v); }, true);
+  initCombobox("#pr-tag-box", pairFilterData.charTags, () => "",
+    (v) => { if (v && !pairFilterState.tags.includes(v)) { pairFilterState.tags.push(v); renderPairFilterChips(); } }, false);
+  initCombobox("#pr-skill-box", pairFilterData.skillNames, () => "",
+    (v) => { if (v && !pairFilterState.skills.includes(v)) { pairFilterState.skills.push(v); renderPairFilterChips(); } }, false);
+  $("#pr-q").addEventListener("keydown", (e) => { if (e.key === "Enter") refreshPairResult(); });
+  $("#pr-search").addEventListener("click", refreshPairResult);
+  $("#pr-reset").addEventListener("click", () => {
+    pairFilterState.q = ""; pairFilterState.rarity = ""; pairFilterState.series = "";
+    pairFilterState.type = ""; pairFilterState.tags = []; pairFilterState.tag_mode = "all";
+    pairFilterState.skills = []; pairFilterState.skill_mode = "any";
+    pairFilterState.support = ""; pairFilterState.match = "and";
+    pairFilterState.sort = "score"; pairFilterState.order = "desc";
+    $("#pr-q").value = ""; $("#pr-rarity").value = ""; $("#pr-type").value = "";
+    $("#pr-tag-mode").value = "all"; $("#pr-skill-mode").value = "any";
+    $("#pr-support").value = ""; $("#pr-match").value = "and";
+    syncCombobox("#pr-series-box");
+    renderPairFilterChips();
+    refreshPairResult();
+  });
+  ["#pr-rarity", "#pr-type", "#pr-tag-mode", "#pr-skill-mode", "#pr-support", "#pr-match"]
+    .forEach((sel) => $(sel).addEventListener("change", refreshPairResult));
+  document.querySelectorAll(".pair-result-panel .sort-th").forEach((b) =>
+    b.addEventListener("click", () => {
+      const sort = b.dataset.sort;
+      if (pairFilterState.sort === sort) {
+        pairFilterState.order = pairFilterState.order === "asc" ? "desc" : "asc";
+      } else {
+        pairFilterState.sort = sort;
+        pairFilterState.order = "desc";
+      }
+      refreshPairResult();
+    }));
+}
+
+async function refreshPairResult() {
+  if (!pairLastQuery) return;
+  pairFilterState.q = $("#pr-q").value.trim();
+  pairFilterState.rarity = $("#pr-rarity").value;
+  pairFilterState.type = $("#pr-type").value;
+  pairFilterState.tag_mode = $("#pr-tag-mode").value;
+  pairFilterState.skill_mode = $("#pr-skill-mode").value;
+  pairFilterState.support = $("#pr-support").value;
+  pairFilterState.match = $("#pr-match").value;
+  const q = new URLSearchParams(pairLastQuery);
+  q.set("pq", pairFilterState.q);
+  q.set("prarity", pairFilterState.rarity);
+  q.set("pseries", pairFilterState.series);
+  q.set("ptype", pairFilterState.type);
+  q.set("ptags", pairFilterState.tags.join(","));
+  q.set("ptag_mode", pairFilterState.tag_mode);
+  q.set("pskills", pairFilterState.skills.join(","));
+  q.set("pskill_mode", pairFilterState.skill_mode);
+  q.set("psupport", pairFilterState.support);
+  q.set("pmatch", pairFilterState.match);
+  q.set("sort", pairFilterState.sort);
+  q.set("order", pairFilterState.order);
+  try {
+    const res = await api("/api/pairing/match?" + q);
+    renderPairResult(res);
+  } catch (e) {
+    $("#pair-msg").textContent = "筛选失败：" + (e.message || e);
+  }
 }
 
 function pairToDamageCalc(res, pilot) {

@@ -564,6 +564,21 @@ def _counter_guard_ids(conn) -> set[int]:
     return ids
 
 
+def _pilot_series_ids(row: dict) -> set[int]:
+    ids: set[int] = set()
+    if row.get("series_id"):
+        try:
+            ids.add(int(row["series_id"]))
+        except (TypeError, ValueError):
+            pass
+    for x in _json_list(row.get("series_ids")):
+        try:
+            ids.add(int(x))
+        except (TypeError, ValueError):
+            pass
+    return ids
+
+
 _pilots: list | None = None
 _pilots_lock = threading.Lock()
 _TAG_ID: dict | None = None
@@ -644,6 +659,9 @@ def _build_pilots() -> list:
                 "rarity": rarity,
                 "role": row.get("role") or 0,
                 "role_label": ROLE_NAMES.get(row.get("role"), "—"),
+                "series_ids": _pilot_series_ids(row),
+                "tags": set(_json_list(row.get("tags"))),
+                "support_label": lbl,
                 "stats": stats,
                 "abilities": abilities,
                 "skills": skills,
@@ -778,21 +796,14 @@ def _score_attack(
 ) -> dict:
     tot = _zero_eff()
     triggered: list[dict] = []
-    mechanics = [dict(m) for m in pilot["base_mech"]]
+    potential: list[dict] = []
+    impossible: list[dict] = []
     for ab in pilot["abilities"]:
         t, trig, pot, imp = _apply_ability(ab, unit_ctx, "attack")
         _add_eff(tot, t)
         triggered.extend(trig)
-        for item in pot:
-            mechanics.append({
-                "label": f"「{ab['name']}」{item['reason']}",
-                "kind": "potential",
-            })
-        for item in imp:
-            mechanics.append({
-                "label": f"「{ab['name']}」{item['reason']}",
-                "kind": "impossible",
-            })
+        potential.extend(pot)
+        impossible.extend(imp)
     dep_keys = ATTACK_ATTR_KEYS.get(int(weapon_row.get("attack_attr") or 1)) \
         or ["ranged"]
     dep_val = max(
@@ -814,13 +825,24 @@ def _score_attack(
             unit_tot["dmg_up"], cfg.get("us_buff", 0.0), tot["dmg_up"],
         ) if pct
     ]
-    power = _weapon_power(weapon_row)
+    if str(cfg.get("wp_ov") or "").strip():
+        power = float(cfg["wp_ov"])
+    else:
+        power = _weapon_power(weapon_row)
     base_crit = int(
         weapon_row.get("crit_lv9") or weapon_row.get("crit_lv5")
         or weapon_row.get("critical_rate") or 0
     )
-    crit_rate = int(base_crit + unit_tot["crit_rate"]
+    weapon_crit = (
+        float(cfg["crit_ov"]) if str(cfg.get("crit_ov") or "").strip()
+        else base_crit
+    )
+    crit_rate = int(weapon_crit + unit_tot["crit_rate"]
                     + tot["crit_rate"] + cfg.get("us_crit_rate", 0.0))
+    weapon_crit_dmg = (
+        float(cfg["critdmg_ov"]) if str(cfg.get("critdmg_ov") or "").strip()
+        else 0.0
+    )
     vigor = cfg.get("vigor", "normal")
     common = dict(
         weapon_power=power,
@@ -833,7 +855,7 @@ def _score_attack(
     crit_bonus = (
         CRITICAL_CORRECTION.get(vigor, 0.0)
         + unit_tot["crit_dmg"] + tot["crit_dmg"]
-        + cfg.get("us_crit_dmg", 0.0)
+        + cfg.get("us_crit_dmg", 0.0) + weapon_crit_dmg
     )
     ctx_crit = DamageContext(
         critical=True, critical_correction_percent=crit_bonus, **common
@@ -868,7 +890,16 @@ def _score_attack(
         ),
         "dep_value": dep_val,
         "triggered": triggered[:8],
-        "mechanics": mechanics,
+        "potential": potential[:8],
+        "impossible": impossible[:8],
+        "support_mech": [
+            dict(m) for m in pilot["base_mech"]
+            if m["kind"] in ("support", "counter_guard", "extra_action")
+        ],
+        "skills": [dict(s) for s in pilot["skills"]],
+        "series_ids": sorted(pilot["series_ids"]),
+        "tags": sorted(pilot["tags"]),
+        "support_label": pilot["support_label"],
         "stats": dict(pilot["stats"]),
     }
 
@@ -1034,13 +1065,16 @@ def _score_defense(
             if m["kind"] in ("support", "counter_guard", "extra_action")
         ],
         "skills": [dict(s) for s in pilot["skills"]],
+        "series_ids": sorted(pilot["series_ids"]),
+        "tags": sorted(pilot["tags"]),
+        "support_label": pilot["support_label"],
         "stats": dict(pilot["stats"]),
     }
 
 
 def match_pilot(
     unit_id: int, action: str = "attack",
-    weapon_id=None, bench: str = "low", enemy=None,
+    weapon_id=None, bench: str = "low", enemy=None, filters=None,
 ) -> dict:
     bench_cfg = PAIR_BENCH.get(bench or "low", PAIR_BENCH["low"])
     enemy = enemy or {}
@@ -1162,6 +1196,9 @@ def match_pilot(
             "us_buff": us_cfg["buff"],
             "us_crit_rate": us_cfg["crit_rate"],
             "us_crit_dmg": us_cfg["crit_dmg"],
+            "wp_ov": str(enemy.get("wp_ov") or "").strip(),
+            "crit_ov": str(enemy.get("crit_ov") or "").strip(),
+            "critdmg_ov": str(enemy.get("critdmg_ov") or "").strip(),
         }
         for p in _pilots:
             rows.append(_score_attack(
@@ -1174,6 +1211,8 @@ def match_pilot(
                 p, unit_ctx, unit_row, enemy_cfg, unit_abilities, ext
             ))
         rows.sort(key=lambda x: x["score"], reverse=True)
+    rows = rows[:50]
+    rows = _apply_pair_filters(rows, filters or {}, action)
 
     tag_names = sorted(_json_list(unit_row.get("tags")))
     role_label = ROLE_NAMES.get(unit_row.get("role"), "—")
@@ -1223,16 +1262,27 @@ def match_pilot(
             "ignore_reduction": enemy_cfg["ignore_reduction"],
         },
         "weapon": None,
-        "pilots": rows[:50],
+        "pilots": rows,
+        "total": len(rows),
     }
     if weapon_row:
         info["weapon"] = {
             "id": weapon_row["id"],
             "name": weapon_row.get("name"),
-            "power": _weapon_power(weapon_row),
-            "crit_rate": int(
-                weapon_row.get("crit_lv9") or weapon_row.get("crit_lv5")
-                or weapon_row.get("critical_rate") or 0
+            "power": (
+                float(cfg["wp_ov"]) if str(cfg.get("wp_ov") or "").strip()
+                else _weapon_power(weapon_row)
+            ),
+            "crit_rate": (
+                float(cfg["crit_ov"]) if str(cfg.get("crit_ov") or "").strip()
+                else int(
+                    weapon_row.get("crit_lv9") or weapon_row.get("crit_lv5")
+                    or weapon_row.get("critical_rate") or 0
+                )
+            ),
+            "crit_dmg": (
+                float(cfg["critdmg_ov"])
+                if str(cfg.get("critdmg_ov") or "").strip() else 0.0
             ),
             "dep_label": ATTACK_ATTR_DEP_LABEL.get(
                 int(weapon_row.get("attack_attr") or 1), "—"
@@ -1287,3 +1337,66 @@ def default_enemy() -> dict:
         "weapon_type": 6,
         "weapon_attack": "any",
     }
+
+
+def _apply_pair_filters(rows: list, f: dict, action: str) -> list:
+    """对匹配结果应用驾驶员搜索筛选与排序。"""
+    q = (f.get("q") or "").strip()
+    if q:
+        rows = [r for r in rows if q in (r.get("name") or "")]
+    rarity = f.get("rarity") or ""
+    if rarity:
+        rows = [r for r in rows if str(r.get("rarity")) == rarity]
+    ptype = f.get("type") or ""
+    if ptype:
+        rows = [r for r in rows if str(r.get("role")) == ptype]
+    series = f.get("series") or ""
+    if series and series.isdigit():
+        sid = int(series)
+        rows = [r for r in rows if sid in (r.get("series_ids") or set())]
+    tags = [t for t in str(f.get("tags") or "").split(",") if t]
+    skills = [s for s in str(f.get("skills") or "").split(",") if s]
+    if tags or skills:
+        match_and = (f.get("match") or "and") == "and"
+        tag_all = (f.get("tag_mode") or "all") == "all"
+        skill_any = (f.get("skill_mode") or "any") == "any"
+
+        def pred(r):
+            conds = []
+            if tags:
+                rt = set(r.get("tags") or [])
+                conds.append(
+                    all(t in rt for t in tags) if tag_all
+                    else any(t in rt for t in tags)
+                )
+            if skills:
+                rs = {s.get("name") for s in (r.get("skills") or [])}
+                conds.append(
+                    any(s in rs for s in skills) if skill_any
+                    else all(s in rs for s in skills)
+                )
+            return all(conds) if match_and else any(conds)
+
+        rows = [r for r in rows if pred(r)]
+    support = f.get("support") or ""
+    if support:
+        rows = [r for r in rows if (r.get("support_label") or "") == support]
+    sort = f.get("sort") or "score"
+    order_desc = (f.get("order") or "desc") != "asc"
+
+    def key(r):
+        if sort == "name":
+            return (r.get("name") or "").lower()
+        if sort == "rarity":
+            return r.get("rarity") or 0
+        if sort == "role":
+            return r.get("role") or 0
+        if sort in (
+            "score", "damage", "crit_damage", "crit_rate", "dep_value",
+            "survive", "survive_crit", "first_damage", "defense", "dmg_down",
+        ):
+            return r.get(sort) or 0
+        return r.get("score") or 0
+
+    rows.sort(key=key, reverse=order_desc)
+    return rows

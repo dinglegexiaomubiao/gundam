@@ -2731,8 +2731,19 @@ class Handler(BaseHTTPRequestHandler):
                 ("ext_pct", "ext_pct"), ("ext_fixed", "ext_fixed"),
                 ("hp_pct", "hp_pct"), ("hp_fixed", "hp_fixed"),
                 ("atk_us", "atk_us"),
+                ("wp_ov", "wp_ov"), ("crit_ov", "crit_ov"),
+                ("critdmg_ov", "critdmg_ov"),
             ):
                 enemy[key] = q.get(param, [""])[0]
+            filters = {}
+            for key, param in (
+                ("q", "pq"), ("rarity", "prarity"), ("series", "pseries"),
+                ("type", "ptype"), ("tags", "ptags"),
+                ("tag_mode", "ptag_mode"), ("skills", "pskills"),
+                ("skill_mode", "pskill_mode"), ("support", "psupport"),
+                ("match", "pmatch"), ("sort", "sort"), ("order", "order"),
+            ):
+                filters[key] = q.get(param, [""])[0]
             if action == "defense":
                 for key, param in (
                     ("unit_attack", "eua"), ("pilot_attack", "epa"),
@@ -2743,7 +2754,7 @@ class Handler(BaseHTTPRequestHandler):
                 ):
                     enemy[key] = q.get(param, [""])[0]
             return self._send_json(pairing.match_pilot(
-                unit_id, action, weapon_id, bench, enemy
+                unit_id, action, weapon_id, bench, enemy, filters
             ))
         if path == "/api/pairing/default-enemy":
             return self._send_json(pairing.default_enemy())

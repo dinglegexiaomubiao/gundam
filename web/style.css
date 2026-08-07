@@ -446,6 +446,16 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--accent2); border-left: 3p
   flex-wrap: wrap;
   font-size: 15px;
 }
+.pair-result-panel .pair-filter-bar { margin: 12px 0 6px; }
+.pair-result-panel table .sort-th {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0;
+}
+.pair-result-panel table .sort-th:hover { color: var(--accent2); }
 .pair-head {
   display: flex;
   justify-content: space-between;
