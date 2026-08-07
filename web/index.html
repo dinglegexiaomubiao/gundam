@@ -246,84 +246,127 @@
       <div class="calc-wrap">
         <div class="calc-side">
           <h3 class="side-title">攻击方 <button type="button" class="reset-btn small" id="reset-atk">重置</button></h3>
-          <label>机体攻击
-            <span class="pick-row"><input id="d-aua" type="number" value="3000"><button type="button" class="pick-btn" id="pick-atk-unit">选择机体</button></span>
-          </label>
-          <div class="pick-info" id="atk-unit-info"></div>
+          <div class="pick-btns">
+            <button type="button" class="pick-btn" id="pick-atk-unit">选择机体</button>
+            <button type="button" class="pick-btn" id="pick-atk-uskill">选择机体单位技能</button>
+            <button type="button" class="pick-btn" id="pick-weapon">选择武器</button>
+            <button type="button" class="pick-btn" id="pick-atk-pilot">选择驾驶员</button>
+            <button type="button" class="pick-btn" id="pick-atk-skill">选择驾驶员技能</button>
+            <button type="button" class="pick-btn" id="pick-atk-support">选择支援角色</button>
+          </div>
+          <div class="pick-infos">
+            <div class="pick-info" id="atk-unit-info"></div>
+            <div class="pick-info" id="atk-pilot-info"></div>
+          </div>
           <select id="atk-unit-star" class="star-select hidden">
             <option value="0">0★</option>
             <option value="1">1★</option>
             <option value="2">2★</option>
             <option value="3">3★</option>
           </select>
-          <label>驾驶员攻击
-            <span class="pick-row"><input id="d-aca" type="number" value="800"><button type="button" class="pick-btn" id="pick-atk-pilot">选择驾驶员</button></span>
-          </label>
-          <div class="pick-info" id="atk-pilot-info"></div>
+          <div class="stat-row">
+            <label>机体攻击 <input id="d-aua" type="number" value="3000"></label>
+            <label>驾驶员攻击 <input id="d-aca" type="number" value="800"></label>
+          </div>
+          <div class="panel-row">
+            <span>突破 <b id="atk-panel-bt">0%</b></span>
+            <label>船舰% <input id="atk-ship" type="number" value="0"></label>
+            <label>支援% <input id="atk-support" type="number" value="0" readonly></label>
+            <label>支援星级 <select id="atk-support-star">
+              <option value="0">0★</option><option value="1">1★</option>
+              <option value="2">2★</option><option value="3" selected>3★</option>
+            </select></label>
+            <span>被动 <b id="atk-panel-passive">0%</b></span>
+            <label>固定 <input id="atk-fixed" type="number" value="0"></label>
+            <span>面板 <b id="atk-panel-val">—</b></span>
+            <span id="atk-support-name" class="muted"></span>
+          </div>
+          <div class="panel-row">
+            <span>零件</span>
+            <label>HP <input id="atk-op-hp" type="number" value="0"><select id="atk-op-hp-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
+            <label>攻击 <input id="atk-op-atk" type="number" value="0"><select id="atk-op-atk-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
+            <label>防御 <input id="atk-op-def" type="number" value="0"><select id="atk-op-def-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
+          </div>
           <label class="ab-head">机体的单位能力</label>
           <div id="atk-unit-ab" class="ability-list"></div>
           <label class="ab-head">驾驶员的角色能力</label>
           <div id="atk-pilot-ab" class="ability-list"></div>
-          <button type="button" class="pick-btn skill-pick" id="pick-atk-skill">选择驾驶员技能</button>
+          <div id="d-atk-uskills" class="tagbar"></div>
           <div id="d-atk-skills" class="tagbar"></div>
-          <label>武器威力
-            <span class="pick-row"><input id="d-wp" type="number" value="5000"><button type="button" class="pick-btn" id="pick-weapon">选择武器</button></span>
-          </label>
-          <label>已选武器
-            <span class="pick-row"><input id="d-weapon-name" type="text" readonly value="—"></span>
-          </label>
-          <label>武器类型
-            <span class="pick-row"><input id="d-wtype" type="text" value="—" readonly></span>
-          </label>
-          <label>武器依赖属性
-            <span class="pick-row"><input id="d-wstat" type="text" value="—" readonly></span>
-          </label>
-          <label>武器暴击率
-            <span class="pick-row"><input id="d-wcrit" type="text" value="—" readonly></span>
-          </label>
-          <label>武器暴击伤害
-            <span class="pick-row"><input id="d-wcritdmg" type="text" value="—" readonly></span>
-          </label>
+          <label class="ab-head">武器</label>
+          <div class="weapon-info">
+            <span>已选 <b id="d-weapon-name">—</b></span>
+            <span>威力 <input id="d-wp" type="number" value="5000"></span>
+            <span>威力特效 <span id="d-wfx-power">—</span></span>
+            <span>类型 <span id="d-wtype">—</span></span>
+            <span>依赖 <span id="d-wstat">—</span></span>
+            <span>暴击率 <span id="d-wcrit">—</span></span>
+            <span>暴击伤害 <span id="d-wcritdmg">—</span></span>
+          </div>
           <label>战意
             <select id="d-vigor-atk">
               <option value="normal" selected>一般</option>
-              <option value="high">超强势</option>
-              <option value="max">最高</option>
-              <option value="supercharged">超一击</option>
+              <option value="high">强势 (+10%)</option>
+              <option value="max">超强势 (+20%)</option>
+              <option value="supercharged">超一击 (+30%)</option>
             </select>
           </label>
         </div>
         <div class="calc-side">
           <h3 class="side-title">防御方 <button type="button" class="reset-btn small" id="reset-def">重置</button></h3>
-          <label>机体防御
-            <span class="pick-row"><input id="d-dud" type="number" value="2800"><button type="button" class="pick-btn" id="pick-def-unit">选择机体</button></span>
-          </label>
-          <label>机体HP
-            <span class="pick-row"><input id="d-dhp" type="number" value="0"></span>
-          </label>
-          <div class="pick-info" id="def-unit-info"></div>
+          <div class="pick-btns">
+            <button type="button" class="pick-btn" id="pick-def-unit">选择机体</button>
+            <button type="button" class="pick-btn" id="pick-def-uskill">选择机体单位技能</button>
+            <button type="button" class="pick-btn" id="pick-def-pilot">选择驾驶员</button>
+            <button type="button" class="pick-btn" id="pick-def-skill">选择驾驶员技能</button>
+            <button type="button" class="pick-btn" id="pick-def-support">选择支援角色</button>
+          </div>
+          <div class="pick-infos">
+            <div class="pick-info" id="def-unit-info"></div>
+            <div class="pick-info" id="def-pilot-info"></div>
+          </div>
           <select id="def-unit-star" class="star-select hidden">
             <option value="0">0★</option>
             <option value="1">1★</option>
             <option value="2">2★</option>
             <option value="3">3★</option>
           </select>
-          <label>驾驶员防御
-            <span class="pick-row"><input id="d-dcd" type="number" value="750"><button type="button" class="pick-btn" id="pick-def-pilot">选择驾驶员</button></span>
-          </label>
-          <div class="pick-info" id="def-pilot-info"></div>
+          <div class="stat-row">
+            <label>机体防御 <input id="d-dud" type="number" value="2800"></label>
+            <label>机体HP <input id="d-dhp" type="number" value="0"></label>
+            <label>驾驶员防御 <input id="d-dcd" type="number" value="750"></label>
+          </div>
+          <div class="panel-row">
+            <span>突破 <b id="def-panel-bt">0%</b></span>
+            <label>船舰% <input id="def-ship" type="number" value="0"></label>
+            <label>支援% <input id="def-support" type="number" value="0" readonly></label>
+            <label>支援星级 <select id="def-support-star">
+              <option value="0">0★</option><option value="1">1★</option>
+              <option value="2">2★</option><option value="3" selected>3★</option>
+            </select></label>
+            <span>被动 <b id="def-panel-passive">0%</b></span>
+            <label>固定 <input id="def-fixed" type="number" value="0"></label>
+            <span>面板 <b id="def-panel-val">—</b></span>
+            <span id="def-support-name" class="muted"></span>
+          </div>
+          <div class="panel-row">
+            <span>零件</span>
+            <label>HP <input id="def-op-hp" type="number" value="0"><select id="def-op-hp-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
+            <label>攻击 <input id="def-op-atk" type="number" value="0"><select id="def-op-atk-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
+            <label>防御 <input id="def-op-def" type="number" value="0"><select id="def-op-def-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
+          </div>
           <label class="ab-head">机体的单位能力</label>
           <div id="def-unit-ab" class="ability-list"></div>
           <label class="ab-head">驾驶员的角色能力</label>
           <div id="def-pilot-ab" class="ability-list"></div>
-          <button type="button" class="pick-btn skill-pick" id="pick-def-skill">选择驾驶员技能</button>
+          <div id="d-def-uskills" class="tagbar"></div>
           <div id="d-def-skills" class="tagbar"></div>
           <label>战意
             <select id="d-vigor-def">
               <option value="normal" selected>一般</option>
-              <option value="high">超强势</option>
-              <option value="max">最高</option>
-              <option value="supercharged">超一击</option>
+              <option value="high">强势 (+10%)</option>
+              <option value="max">超强势 (+20%)</option>
+              <option value="supercharged">超一击 (+30%)</option>
             </select>
           </label>
           <h3>修正</h3>
@@ -333,7 +376,13 @@
             <label>敌方减伤 % <input id="d-debuff" type="number" value="0"></label>
             <div class="checks">
               <label><input id="d-crit" type="checkbox"> 暴击</label>
-              <label><input id="d-shield" type="checkbox"> 有护盾</label>
+              <label>防御状态
+                <select id="d-defend-state">
+                  <option value="none" selected>无防御 (×1.0)</option>
+                  <option value="defend">防御·无盾 (×0.8)</option>
+                  <option value="defend_shield">防御·有盾 (×0.6)</option>
+                </select>
+              </label>
             </div>
           </div>
           <div class="calc-actions">

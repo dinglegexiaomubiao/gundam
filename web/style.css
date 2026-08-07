@@ -295,6 +295,29 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--accent2); border-left: 3p
 .calc-side input, .calc-side select { margin-top: 2px; }
 .pick-row { display: flex; gap: 6px; }
 .pick-row input { flex: 1; }
+.pick-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.pick-btns .pick-btn { margin: 0; padding: 8px 16px; font-size: 14px; }
+.pick-infos { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 6px; }
+.pick-infos .pick-info { display: inline-flex; align-items: center; gap: 6px; }
+.stat-row { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 8px; }
+.stat-row label { flex-direction: row; align-items: center; gap: 6px; margin-bottom: 0; }
+.stat-row input { width: 110px; }
+.weapon-info {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+  background: var(--panel2); font-size: 12px; margin-bottom: 10px;
+}
+.weapon-info b { color: var(--accent2); }
+.weapon-info input { width: 80px; padding: 2px 6px; }
+.panel-row {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+  background: var(--panel2); font-size: 12px; margin-bottom: 10px;
+}
+.panel-row label { flex-direction: row; align-items: center; gap: 4px; margin-bottom: 0; }
+.panel-row input { width: 64px; padding: 2px 6px; }
+.panel-row b { color: var(--accent2); }
+.panel-row .muted { margin-left: 4px; }
 .pick-btn {
   background: var(--panel2); border: 1px solid var(--line); color: var(--muted);
   border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;

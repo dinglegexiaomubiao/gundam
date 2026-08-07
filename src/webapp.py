@@ -190,6 +190,7 @@ _HP_RECOVER_RE = re.compile(
     r"自身HP为(\d+)%以下时，\s*自身HP恢复(\d+)%（1次）"
 )
 _CRIT_DMG_RE = re.compile(r"爆击损伤提升\s*(\d+)%")
+_CRIT_RATE_RE = re.compile(r"爆击率提升\s*(\d+)%")
 _STAT_COMBO_RE = re.compile(
     r"((?:射击值|格斗值|觉醒值)(?:及|与|和)?(?:射击值|格斗值|觉醒值)?)提升\s*(\d+)%"
 )
@@ -225,6 +226,9 @@ def _parse_ability_effects(d: str) -> list[dict]:
     m = _CRIT_DMG_RE.search(d)
     if m:
         effs.append({"kind": "crit_dmg", "pct": int(m.group(1))})
+    m = _CRIT_RATE_RE.search(d)
+    if m:
+        effs.append({"kind": "crit_rate", "pct": int(m.group(1))})
     m = _STAT_COMBO_RE.search(d)
     if m:
         pct = int(m.group(2))
@@ -1077,6 +1081,52 @@ def api_abilities() -> list:
     return sorted(seen.values(), key=lambda x: x["name"])
 
 
+def api_supporter_panel() -> list:
+    """支援角色面板数据：各突破阶段队长技加成% + 满星攻击/HP 固定值。"""
+    conn = _conn()
+    out = []
+    for s in conn.execute(
+        "SELECT id, rarity, name, max_attack_addition_value, "
+        "max_hp_addition_value FROM supporter ORDER BY rarity DESC, name"
+    ):
+        pct = 0
+        leader_pcts = [0, 0, 0, 0]
+        for row in conn.execute(
+            "SELECT limit_break_step, traits FROM supporter_skill "
+            "WHERE supporter_id = ? AND skill_type = 'leader' "
+            "ORDER BY limit_break_step",
+            (s["id"],),
+        ):
+            step = min(max(int(row["limit_break_step"] or 0), 0), 3)
+            step_pct = 0
+            for t in _json_list(row["traits"]):
+                tv = (t.get("trait_content") or {}).get("trait_value") or {}
+                try:
+                    step_pct = max(step_pct, int(tv.get("value") or 0))
+                except (TypeError, ValueError):
+                    pass
+            leader_pcts[step] = step_pct
+            pct = max(pct, step_pct)
+        # 缺失的阶段用已有值回填
+        last = 0
+        for i in range(4):
+            if leader_pcts[i]:
+                last = leader_pcts[i]
+            else:
+                leader_pcts[i] = last
+        out.append({
+            "id": s["id"],
+            "rarity": s["rarity"],
+            "name": s["name"],
+            "leader_pct": pct,
+            "leader_pcts": leader_pcts,
+            "atk_add": s["max_attack_addition_value"] or 0,
+            "hp_add": s["max_hp_addition_value"] or 0,
+        })
+    conn.close()
+    return out
+
+
 _UNIT_STAT_KEYS = ("hp", "en", "attack", "defense", "mobility", "movement")
 _UNIT_STAT_LABELS = {
     "hp": "HP", "en": "EN", "attack": "攻击", "defense": "防御",
@@ -1894,6 +1944,18 @@ def api_stage_detail(stage_id: int) -> dict | None:
     return st
 
 
+def _defensive_correction(q: dict) -> float:
+    """防御修正：无防御 1.0 / 防御·无盾 0.8 / 防御·有盾 0.6（兼容旧 shield 参数）。"""
+    st = q.get("defend_state", [""])[0]
+    if st == "defend":
+        return 0.8
+    if st == "defend_shield":
+        return 0.6
+    if q.get("shield", ["0"])[0] == "1":
+        return 0.8
+    return 1.0
+
+
 def api_damage(q: dict) -> dict:
     def f(name: str, default: float = 0.0) -> float:
         try:
@@ -1912,7 +1974,7 @@ def api_damage(q: dict) -> dict:
     ctx = DamageContext(
         weapon_power=f("wp", 1000),
         terrain_correction=f("terrain", 1.0),
-        defensive_correction=0.8 if q.get("shield", ["0"])[0] == "1" else 1.0,
+        defensive_correction=_defensive_correction(q),
         attacker_vigor=q.get("vigor", ["normal"])[0],
         critical=q.get("critical", ["0"])[0] == "1",
         attacker_damage_dealt_percent=[f("buff", 0.0)],
@@ -1946,7 +2008,7 @@ def api_damage_sim(q: dict) -> dict:
     buff = f("buff")
     debuff = f("debuff")
     crit = q.get("critical", ["0"])[0] == "1"
-    shield = q.get("shield", ["0"])[0] == "1"
+    defensive_correction = _defensive_correction(q)
     crit_damage_bonus = f("crit_damage_bonus")
     def_stack_pct = f("def_stack_pct")
     def_stack_max = f("def_stack_max")
@@ -1966,7 +2028,7 @@ def api_damage_sim(q: dict) -> dict:
         ctx = DamageContext(
             weapon_power=wp,
             terrain_correction=terrain,
-            defensive_correction=0.8 if shield else 1.0,
+            defensive_correction=defensive_correction,
             attacker_vigor=vigor,
             critical=crit,
             critical_correction_percent=(
@@ -2053,6 +2115,9 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
                      weapon_attr, attack_attr, attr_nullify,
                      atk_u_on, atk_p_on, def_u_on, def_p_on,
                      atk_star, def_star,
+                     atk_unit_skill, def_unit_skill,
+                     atk_ship, atk_support, atk_op, atk_fixed,
+                     def_ship, def_support, def_op, def_fixed,
                      atk_skill_ranged, atk_skill_melee, atk_skill_awaken) -> dict:
     """根据已选机体/驾驶员/武器 + 能力开关，计算加成与数值。"""
     conn = _conn()
@@ -2203,21 +2268,63 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
     atk_unit_extra = sum_kind(atk_unit_ab, on["atk_u"], "atk_pct")
     def_unit_extra = sum_kind(def_unit_ab, on["def_u"], "def_pct")
     def_pilot_extra = sum_kind(def_pilot_ab, on["def_p"], "def_pct")
+    try:
+        atk_us_pct = float(atk_unit_skill or 0)
+    except (TypeError, ValueError):
+        atk_us_pct = 0
+    try:
+        def_us_pct = float(def_unit_skill or 0)
+    except (TypeError, ValueError):
+        def_us_pct = 0
+    try:
+        atk_ship_pct = float(atk_ship or 0)
+    except (TypeError, ValueError):
+        atk_ship_pct = 0
+    try:
+        atk_support_pct = float(atk_support or 0)
+    except (TypeError, ValueError):
+        atk_support_pct = 0
+    try:
+        atk_op_pct = float(atk_op or 0)
+    except (TypeError, ValueError):
+        atk_op_pct = 0
+    try:
+        def_ship_pct = float(def_ship or 0)
+    except (TypeError, ValueError):
+        def_ship_pct = 0
+    try:
+        def_support_pct = float(def_support or 0)
+    except (TypeError, ValueError):
+        def_support_pct = 0
+    try:
+        def_op_pct = float(def_op or 0)
+    except (TypeError, ValueError):
+        def_op_pct = 0
+    try:
+        atk_fixed_v = int(atk_fixed or 0)
+    except (TypeError, ValueError):
+        atk_fixed_v = 0
+    try:
+        def_fixed_v = int(def_fixed or 0)
+    except (TypeError, ValueError):
+        def_fixed_v = 0
 
     atk_unit_attack = None
     if atk_unit:
         atk_unit_attack = star_value(
             atk_unit["max_attack"],
-            atk_unit["bonuses"].get("attack", 0) + atk_unit_extra,
+            atk_unit["bonuses"].get("attack", 0) + atk_unit_extra
+            + atk_us_pct + atk_ship_pct + atk_support_pct + atk_op_pct,
             atk_star_i,
-        )[0]
+        )[0] + atk_fixed_v
     def_unit_defense = None
     if def_unit:
         def_unit_defense = star_value(
             def_unit["max_defense"],
-            def_unit["bonuses"].get("defense", 0) + def_unit_extra,
+            def_unit["bonuses"].get("defense", 0) + def_unit_extra
+            + def_us_pct + def_ship_pct + def_support_pct + def_op_pct,
             def_star_i,
-        )[0]
+        )[0] + def_fixed_v
     def_unit_hp = None
     if def_unit:
         def_unit_hp = star_value(
@@ -2373,6 +2480,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_weapon_effects())
         if path == "/api/abilities":
             return self._send_json(api_abilities())
+        if path == "/api/supporter-panel":
+            return self._send_json(api_supporter_panel())
         if path == "/api/unit-sync-diff":
             try:
                 uid = int(q.get("unit_id", ["0"])[0])
@@ -2461,6 +2570,14 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("atk_u_on", [""])[0], q.get("atk_p_on", [""])[0],
                 q.get("def_u_on", [""])[0], q.get("def_p_on", [""])[0],
                 q.get("atk_star", ["0"])[0], q.get("def_star", ["0"])[0],
+                q.get("atk_unit_skill", ["0"])[0],
+                q.get("def_unit_skill", ["0"])[0],
+                q.get("atk_ship", ["0"])[0], q.get("atk_support", ["0"])[0],
+                q.get("atk_op", ["0"])[0],
+                q.get("atk_fixed", ["0"])[0],
+                q.get("def_ship", ["0"])[0], q.get("def_support", ["0"])[0],
+                q.get("def_op", ["0"])[0],
+                q.get("def_fixed", ["0"])[0],
                 q.get("atk_skill_ranged", ["0"])[0],
                 q.get("atk_skill_melee", ["0"])[0],
                 q.get("atk_skill_awaken", ["0"])[0]))

@@ -11,8 +11,8 @@
 说明：
 - 数值四舍五入按「向上取整」（RoundUp）。
 - terrainCorrection 来自武器在地形上的伤害倍率（如 100 表示 1.0）。
-- 战意加成：高战意 +10%，最高 +20%，超一击 +30%。
-- 暴击修正：中战意 +10%，高/最高 +20%，超一击 +30%。
+- 战意加成：强势 +10%，超强势 +20%，超一击 +30%（战意不产生暴击）。
+- 暴击修正：一般士气 +10%，强势/超强势 +20%，超一击 +30%。
 - defensiveCorrection：默认 1.0；有护盾时为 0.8。
 """
 from __future__ import annotations
@@ -63,8 +63,7 @@ VIGOR_DAMAGE_BONUS = {
 }
 
 CRITICAL_CORRECTION = {
-    "normal": 0.0,
-    "mid": 10.0,
+    "normal": 10.0,
     "high": 20.0,
     "max": 20.0,
     "supercharged": 30.0,
