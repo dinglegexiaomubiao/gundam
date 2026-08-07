@@ -47,6 +47,10 @@ def get_cloud_url() -> str:
     return os.environ.get("NEON_DB_URL", "").strip()
 
 
+# 记录最近一次云端操作失败原因，供 UI 展示友好提示
+last_cloud_error: str = ""
+
+
 def _map_type(t: str) -> str:
     t = t.upper()
     if "INT" in t:
@@ -144,7 +148,12 @@ def _local_schema() -> tuple[dict[str, str], list[str]]:
                 if name != "sqlite_sequence":
                     tables[name] = sql
             elif typ == "index" and not name.startswith("sqlite_autoindex"):
-                indexes.append(sql)
+                m = re.match(
+                    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+\w+\s+ON\s+(\w+)",
+                    sql.strip(), re.I,
+                )
+                if m and m.group(1) in TABLE_ORDER:
+                    indexes.append(sql)
     finally:
         con.close()
     return tables, indexes
@@ -233,7 +242,7 @@ def upload_local_db_to_cloud(url: str | None = None) -> dict:
             }
         return {"ok": True, "message": "已上传到服务器并校验一致", "counts": counts}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "message": str(exc), "counts": counts}
+        return {"ok": False, "message": _friendly_cloud_error(exc), "counts": counts}
 
 
 def cloud_diff(url: str | None = None) -> dict:
@@ -282,7 +291,7 @@ def cloud_diff(url: str | None = None) -> dict:
                     crow = cur.fetchone()
                     cloud_built = crow[0] if crow else None
     except Exception as exc:  # noqa: BLE001
-        cloud_error = str(exc)
+        cloud_error = _friendly_cloud_error(exc)
     if cloud_counts is None:
         return {"ok": False, "error": f"无法连接云端：{cloud_error}"}
     rows = []
@@ -384,7 +393,7 @@ def unit_sync_diff(unit_id: int) -> dict:
                 )
                 ca = {r["ability_id"]: r for r in (_row_to_dict(cur, x) for x in cur.fetchall())}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"云端连接失败：{exc}"}
+        return {"ok": False, "error": f"云端连接失败：{_friendly_cloud_error(exc)}"}
     if not cu:
         return {"ok": False, "error": "云端不存在该机体（可先做全量上传）"}
 
@@ -539,10 +548,39 @@ def direct_cloud_url(url: str | None = None) -> str:
 def _connect_pg(url: str, statement_timeout_ms: int | None = None):
     import psycopg  # 延迟导入：未装驱动时不影响其他命令
 
-    conn = psycopg.connect(url, connect_timeout=20)
-    if statement_timeout_ms:
-        conn.execute(f"SET statement_timeout = {int(statement_timeout_ms)}")
-    return conn
+    last = None
+    for attempt in (1, 2):
+        try:
+            conn = psycopg.connect(url, connect_timeout=20)
+            if statement_timeout_ms:
+                conn.execute(f"SET statement_timeout = {int(statement_timeout_ms)}")
+            return conn
+        except psycopg.OperationalError as exc:
+            last = exc
+            if attempt == 1:
+                time.sleep(2)
+    raise last if last is not None else RuntimeError("connect failed")
+
+
+def _friendly_cloud_error(exc: Exception) -> str:
+    """Convert common cloud connection errors to actionable Chinese hints."""
+    text = str(exc)
+    low = text.lower()
+    if "permission denied" in low or "10013" in text or "wsaeacces" in low:
+        return (
+            "云端连接被系统拦截（网络权限不足，错误 10013）。"
+            "请确认服务进程允许访问外网（例如在普通终端运行，或放行防火墙/安全软件）后重试同步。"
+        )
+    if "timed out" in low or "timeout" in low:
+        return f"连接云端超时：{text}"
+    if ("name or service not known" in low or "getaddrinfo" in low
+            or "nodename nor servname" in low):
+        return f"无法解析云端地址（DNS 失败）：{text}"
+    if "connection refused" in low:
+        return f"云端拒绝连接：{text}"
+    if "connection reset" in low or "broken pipe" in low or "connection closed" in low:
+        return f"云端连接中断：{text}"
+    return text
 
 
 def cloud_available(url: str | None = None) -> bool:
@@ -572,9 +610,11 @@ def restore_local_db_from_cloud(url: str | None = None,
     独立子进程拉取并带 180 秒硬超时（超时直接杀掉子进程），
     避免网络停流时无限挂起。
     """
+    global last_cloud_error
     url = direct_cloud_url(url)
     if not url:
-        print("未设置 NEON_DB_URL，无法从云端恢复")
+        last_cloud_error = "未设置 NEON_DB_URL，无法从云端恢复"
+        print(last_cloud_error)
         return False
     db_path = Path(db_path or config.DB_PATH)
     tmp = db_path.with_name(db_path.name + ".tmp")
@@ -619,7 +659,8 @@ def restore_local_db_from_cloud(url: str | None = None,
                 cloud_tables = {r[0] for r in cur.fetchall()}
         missing = [t for t in TABLE_ORDER if t not in cloud_tables]
         if missing:
-            print(f"云端缺少表 {missing}，放弃恢复")
+            last_cloud_error = f"云端缺少表 {missing}，放弃恢复"
+            print(last_cloud_error)
             return False
         db_path.parent.mkdir(parents=True, exist_ok=True)
         if tmp.exists():
@@ -661,7 +702,8 @@ def restore_local_db_from_cloud(url: str | None = None,
                     )
             pending = [t for t in TABLE_ORDER if t not in done]
             if pending:
-                print(f"云端恢复失败：以下表未恢复 {pending}")
+                last_cloud_error = f"云端恢复失败：以下表未恢复 {pending}"
+                print(last_cloud_error)
                 try:
                     tmp.unlink()
                 except OSError:
@@ -671,12 +713,14 @@ def restore_local_db_from_cloud(url: str | None = None,
         finally:
             lite.close()
         if tmp.stat().st_size == 0:
+            last_cloud_error = "云端数据为空"
             tmp.unlink()
             return False
         os.replace(tmp, db_path)
         print(f"已从云端恢复本地数据库 -> {db_path}")
         return True
     except Exception as exc:  # noqa: BLE001
+        last_cloud_error = _friendly_cloud_error(exc)
         print(f"云端恢复失败：{exc}")
         if tmp.exists():
             try:

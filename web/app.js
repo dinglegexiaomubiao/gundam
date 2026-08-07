@@ -522,6 +522,7 @@ async function loadSummary() {
       <button id="ov-crawl" class="cond-btn" title="从 soshage 全量抓取并构建数据库（仅手动触发）">爬取数据</button>
       <button id="ov-sync-up" class="cond-btn" title="以本地数据为准，覆盖云端服务器">上传本地到服务器</button>
       <button id="ov-sync-down" class="cond-btn" title="以云端服务器数据为准，覆盖本地">服务器同步到本地</button>
+      <button id="ov-edit-history" class="cond-btn" title="查看机体编辑的历史记录">查看编辑历史</button>
       <input type="file" id="ov-import-file" accept=".db" class="hidden">
       <span id="ov-msg" class="muted"></span>
     </div>
@@ -546,7 +547,7 @@ async function loadSummary() {
 }
 
 function disableOverviewButtons(disabled) {
-  ["#ov-export", "#ov-import", "#ov-crawl", "#ov-sync-up", "#ov-sync-down"]
+  ["#ov-export", "#ov-import", "#ov-crawl", "#ov-sync-up", "#ov-sync-down", "#ov-edit-history"]
     .forEach((sel) => {
       const b = $(sel);
       if (b) b.disabled = disabled;
@@ -560,6 +561,7 @@ function bindOverviewActions(d) {
   const crawlBtn = $("#ov-crawl");
   const syncUpBtn = $("#ov-sync-up");
   const syncDownBtn = $("#ov-sync-down");
+  const editHistoryBtn = $("#ov-edit-history");
   const fileInput = $("#ov-import-file");
   exportBtn.addEventListener("click", () => {
     if (!d.db_exists) {
@@ -571,6 +573,32 @@ function bindOverviewActions(d) {
   importBtn.addEventListener("click", () => fileInput.click());
   syncUpBtn.addEventListener("click", () => openSyncDiff("upload"));
   syncDownBtn.addEventListener("click", () => openSyncDiff("download"));
+  editHistoryBtn.addEventListener("click", async () => {
+    let items = [];
+    try {
+      items = await api("/api/edit-history");
+    } catch (e) {
+      msg.textContent = "获取编辑历史失败：" + (e.message || e);
+      return;
+    }
+    const rows = items.length ? items.map((x) => `
+      <tr>
+        <td class="mono">${esc(x.edited_at || "")}</td>
+        <td>${esc(x.unit_name || "")}</td>
+        <td>${esc(x.field || "")}</td>
+        <td class="mono" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.old_value || "")}">${esc(x.old_value || "")}</td>
+        <td class="mono" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.new_value || "")}">${esc(x.new_value || "")}</td>
+        <td>${esc(x.source || "")}</td>
+      </tr>`).join("")
+      : '<tr><td colspan="6" class="empty">暂无编辑记录</td></tr>';
+    showModal("查看编辑历史",
+      `<div class="sync-info"><div>共 ${items.length} 条记录（仅保存在本地）</div></div>
+       <div style="max-height:55vh;overflow:auto">
+       <table><tr><th>时间</th><th>机体</th><th>字段</th><th>原值</th><th>新值</th><th>来源</th></tr>${rows}</table>
+       </div>
+       <div class="calc-actions"><button id="edit-history-close" class="cond-btn">关闭</button></div>`);
+    $("#edit-history-close").addEventListener("click", () => $("#modal").classList.add("hidden"));
+  });
   crawlBtn.addEventListener("click", async () => {
     let edits = [];
     try {
@@ -1500,7 +1528,10 @@ async function openCharacter(id) {
      ${(c.series_names || []).length ? `<h3>系列（点击可搜索）</h3><div class="tags">${c.series_names.map((s) => `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : ""}
      <div id="char-stats"></div>
      ${c.tags.length ? `<h3>标签（点击可搜索）</h3><div class="tags">${c.tags.map((t) => tagChip(t)).join("")}</div>` : ""}
-     ${c.support_label ? `<h3>备注（点击可搜索）</h3><div class="tags"><button class="chip support-chip" data-support="${esc(c.support_label)}">${esc(c.support_label)}</button></div>` : ""}
+     ${(c.support_label || c.counter_guard) ? `<h3>备注（点击可搜索）</h3><div class="tags">${[
+       c.support_label ? `<button class="chip support-chip" data-support="${esc(c.support_label)}">${esc(c.support_label)}</button>` : "",
+       c.counter_guard ? `<button class="chip support-chip" data-support="反击援防">反击援防</button>` : "",
+     ].join("")}</div>` : ""}
      <h3>技能（${c.skills.length}）</h3>
      <table><tr><th>名称</th><th>SP</th><th>持续</th><th>效果</th></tr>${skills || '<tr><td colspan="4" class="empty">无</td></tr>'}</table>
      <h3>能力</h3>

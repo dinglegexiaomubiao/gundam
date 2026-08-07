@@ -18,6 +18,7 @@ import re
 from . import config
 from .cloud import (
     cloud_diff,
+    last_cloud_error,
     restore_local_db_from_cloud,
     unit_sync_diff,
     unit_sync_push,
@@ -130,6 +131,20 @@ def api_crawl_edits() -> list:
     return [dict(r) for r in rows]
 
 
+def api_edit_history(limit: int = 500) -> list:
+    """本地机体编辑历史详情。"""
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT e.id, e.unit_id, COALESCE(u.name, '?') AS unit_name, "
+        "e.field, e.old_value, e.new_value, e.edited_at, e.source "
+        "FROM unit_edit_log e LEFT JOIN unit u ON u.id = e.unit_id "
+        "ORDER BY e.edited_at DESC, e.id DESC LIMIT ?",
+        (int(limit),),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def _run_sync_worker(direction: str) -> None:
     try:
         _sync_state.update({
@@ -146,7 +161,7 @@ def _run_sync_worker(direction: str) -> None:
         else:
             if not restore_local_db_from_cloud():
                 _sync_state["error"] = (
-                    "同步失败（云端不可用或未配置 NEON_DB_URL）"
+                    last_cloud_error or "同步失败（云端不可用或未配置 NEON_DB_URL）"
                 )
         _sync_state["step"] = "done"
     except Exception as exc:  # noqa: BLE001
@@ -1550,17 +1565,17 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
     conn.close()
     for r in rows:
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
-        lbl = support_label(_json_dict(r.get("support_info")))
-        if r["id"] in counter_guard:
-            lbl = "反击援防"
-        r["support_label"] = lbl
+        r["support_label"] = support_label(_json_dict(r.get("support_info")))
         bonuses = _json_dict(r.get("stat_bonuses"))
         for key in ("ranged", "melee", "defense", "reaction", "awaken"):
             r[f"{key}_f"] = star_value(
                 r.get(f"max_{key}") or 0, bonuses.get(key, 0), 0
             )[0]
     if support:
-        rows = [r for r in rows if r["support_label"] == support]
+        if support == "反击援防":
+            rows = [r for r in rows if r["id"] in counter_guard]
+        else:
+            rows = [r for r in rows if r["support_label"] == support]
     if sort in CHAR_SORT_KEYS:
         key = CHAR_SORT_KEYS[sort]
         rows.sort(
@@ -1600,6 +1615,7 @@ def api_character_detail(char_id: int) -> dict | None:
         a["effects"], a["cond_entities"] = _trait_effects(
             a.get("traits"), tag_by_id, series_by_id, unit_by_id
         )
+    counter_guard_ids = _counter_guard_ids(conn)
     conn.close()
     c["tags"] = json.loads(c.get("tags") or "[]")
     c["role_label"] = ROLE_NAMES.get(c.get("role"), "—")
@@ -1607,6 +1623,7 @@ def api_character_detail(char_id: int) -> dict | None:
         c.get("series_ids"), c.get("series_id"), series_by_id
     )
     c["support_label"] = support_label(_json_dict(c.get("support_info")))
+    c["counter_guard"] = char_id in counter_guard_ids
     bonuses = _json_dict(c.get("stat_bonuses"))
     conditionals = _json_list(c.get("conditional_bonuses"))
     c["forms"], c["conditional_bonuses"], c["level_cap"], c["has_sp"] = (
@@ -2622,6 +2639,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(crawl_status())
         if path == "/api/crawl-edits":
             return self._send_json(api_crawl_edits())
+        if path == "/api/edit-history":
+            return self._send_json(api_edit_history())
         if path == "/api/sync-diff":
             return self._send_json(cloud_diff())
         if path == "/api/sync-status":
