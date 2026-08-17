@@ -19,8 +19,11 @@ def _load(rel: str):
         return json.load(fh)
 
 
-def _fetch_many(kind: str, ids: list, path_prefix: str) -> list[tuple[int, str]]:
-    """分批并发抓取某类详情，已存在则跳过；批次间长暂停；限流时整体终止。"""
+def _fetch_many(kind: str, ids: list, path_prefix: str, refresh: bool = False) -> list[tuple[int, str]]:
+    """分批并发抓取某类详情，已存在则跳过；批次间长暂停；限流时整体终止。
+
+    refresh=True 时已存在的文件也重新抓取（用于周期性全量刷新旧数据）。
+    """
     failures: list[tuple[int, str]] = []
     total_done = 0
     total = len(ids)
@@ -34,7 +37,7 @@ def _fetch_many(kind: str, ids: list, path_prefix: str) -> list[tuple[int, str]]
 
         def one(item_id: int):
             rel = Path(kind) / f"{item_id}.json"
-            if (config.RAW_DIR / rel).exists():
+            if not refresh and (config.RAW_DIR / rel).exists():
                 return "skip", item_id
             data = api.http_get_json(f"{path_prefix}/{item_id}")
             _save(rel, data)
@@ -80,14 +83,14 @@ def fetch_dictionaries():
     return series, faction
 
 
-def fetch_units(limit: int | None = None):
+def fetch_units(limit: int | None = None, refresh: bool = False):
     units_min = api.http_get_json("/unit/min", {"order_by": "rarity:desc"})
     _save("unit/min.json", units_min)
     ids = [u["id"] for u in units_min]
     print(f"机体列表 {len(ids)} 台")
     if limit:
         ids = ids[:limit]
-    failed = _fetch_many("unit", ids, "/unit")
+    failed = _fetch_many("unit", ids, "/unit", refresh=refresh)
     return failed
 
 
@@ -107,11 +110,11 @@ def fetch_supporters():
     return supporters, growth
 
 
-def fetch_events():
+def fetch_events(refresh: bool = False):
     story = api.http_get_json("/event/story")
     _save("event/story.json", story)
     ids = [e["event_id"] for e in story]
-    failed = _fetch_many("event/story", ids, "/event/story")
+    failed = _fetch_many("event/story", ids, "/event/story", refresh=refresh)
     tower = api.http_get_json("/event/tower")
     _save("event/tower.json", tower)
     print(f"剧情事件 {len(story)} 个，塔楼事件 {len(tower)} 个")
@@ -133,12 +136,12 @@ def collect_stage_ids() -> list[int]:
     return sorted(ids)
 
 
-def fetch_stages(limit: int | None = None):
+def fetch_stages(limit: int | None = None, refresh: bool = False):
     ids = collect_stage_ids()
     print(f"关卡合计 {len(ids)} 个（主线 + 剧情 Boss + 塔楼）")
     if limit:
         ids = ids[:limit]
-    return _fetch_many("stage", ids, "/stage")
+    return _fetch_many("stage", ids, "/stage", refresh=refresh)
 
 
 def write_manifest(failures: dict[str, list]) -> None:
@@ -164,25 +167,26 @@ def write_manifest(failures: dict[str, list]) -> None:
     api.atomic_write_json(config.MANIFEST_PATH, manifest)
 
 
-def fetch_all(limit: int | None = None) -> dict[str, list]:
+def fetch_all(limit: int | None = None, refresh: bool = False) -> dict[str, list]:
     failures: dict[str, list] = {}
     try:
         print("== 1/5 系列与阵营 ==")
         fetch_dictionaries()
         print("== 2/5 机体 ==")
-        failures["unit"] = fetch_units(limit)
+        failures["unit"] = fetch_units(limit, refresh=refresh)
         print("== 3/5 驾驶员 ==")
         fetch_characters()
         print("== 4/5 支援角色 ==")
         fetch_supporters()
         print("== 5/5 事件与关卡（敌人） ==")
-        failures["event/story"] = fetch_events()[2]
-        failures["stage"] = fetch_stages(limit)
+        failures["event/story"] = fetch_events(refresh=refresh)[2]
+        failures["stage"] = fetch_stages(limit, refresh=refresh)
     except RateLimitAbort as exc:
         print(f"!! {exc}")
         write_manifest(failures)
         return failures
     write_manifest(failures)
     total_fail = sum(len(v) for v in failures.values())
-    print(f"抓取完成，共 {total_fail} 个失败项")
+    mode = "全量刷新" if refresh else "增量（跳过已有）"
+    print(f"抓取完成（{mode}），共 {total_fail} 个失败项")
     return failures

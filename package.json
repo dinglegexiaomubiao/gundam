@@ -5,6 +5,9 @@
   "description": "高达 G 世纪永恒资料库（本地 Web 服务）",
   "scripts": {
     "dev": "python scripts/pipeline.py serve --port 8765",
+    "update": "python scripts/pipeline.py update",
+    "update:full": "python scripts/pipeline.py update --full",
+    "backup": "python scripts/pipeline.py backup",
     "build": "python scripts/pipeline.py build",
     "fetch": "python scripts/pipeline.py fetch",
     "verify": "python scripts/pipeline.py verify"

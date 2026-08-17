@@ -484,6 +484,81 @@ def ingest_series_faction(conn):
                      (_i(f["id"]), f.get("name")))
 
 
+def _collect_ssp_overrides(u: dict) -> dict:
+    """从 ssp_config 提取 SSP 属性、地形、武器替换/新增、能力替换。
+
+    返回:
+      {
+        'stats': {'ssp_hp':.., 'ssp_max_hp':..,..},     # SSP 基础属性加成
+        'terrain': {'space':..,..} | None,               # SSP 地形（如果有替换）
+        'weapon_changes': [
+          {'before_id': 0|int, 'after_id': int, 'weapon': {...weapon_detail...}}
+        ],
+        'initial_ability_change': {'before_id': int, 'after_id': int, 'ability': {...}} | None,
+      }
+    """
+    out = {
+        'stats': {},
+        'terrain': None,
+        'weapon_changes': [],
+        'initial_ability_change': None,
+    }
+    sc = u.get('ssp_config') or {}
+    # 1) SSP 属性：在 ssp_config.stats（字段名就是 ssp_hp 等）
+    sst = sc.get('stats') or {}
+    for k, v in sst.items():
+        if k != 'id':
+            out['stats'][k] = v
+    # 2) cores -> releases 中收集武器变更/地形变更/移动力变更等
+    for core in sc.get('cores') or []:
+        for rel in core.get('releases') or []:
+            t = rel.get('release_function_type_index')
+            if t == 5:  # weapon_change
+                wc = rel.get('weapon_change') or {}
+                before = wc.get('before_weapon_id') or 0
+                after = wc.get('after_weapon_id') or 0
+                wep = wc.get('weapon')
+                if after and wep:
+                    out['weapon_changes'].append({
+                        'before_id': before,
+                        'after_id': after,
+                        'weapon': wep,
+                        'sort': (rel.get('sort_order') or 0),
+                    })
+            elif t == 4:  # terrain 替换
+                tr = rel.get('terrain')
+                if tr and isinstance(tr, dict):
+                    # 取最后一次的地形替换
+                    out['terrain'] = {
+                        'space': tr.get('space'),
+                        'atmospheric': tr.get('atmospheric'),
+                        'ground': tr.get('ground'),
+                        'surface': tr.get('surface'),
+                        'underwater': tr.get('underwater'),
+                    }
+            elif t == 3:  # status_up: 移动力等属性增量
+                su = rel.get('status_up') or {}
+                idx = su.get('unit_status_type_index')
+                val = su.get('effect_value') or 0
+                # unit_status_type_index=6 → movement
+                if idx == 6 and val:
+                    out['stats']['ssp_movement'] = val
+                    out['stats']['ssp_max_movement'] = val
+    # 3) initial_release 中的能力替换
+    ir = sc.get('initial_release') or {}
+    ac = ir.get('ability_change') or {}
+    before = ac.get('before_ability_id') or 0
+    after = ac.get('after_ability_id') or 0
+    ability = ac.get('ability')
+    if before and after and ability:
+        out['initial_ability_change'] = {
+            'before_id': before,
+            'after_id': after,
+            'ability': ability,
+        }
+    return out
+
+
 def ingest_units(conn, tag_map: dict[int, str]):
     n = 0
     series_by_id = {
@@ -495,6 +570,8 @@ def ingest_units(conn, tag_map: dict[int, str]):
         u = _load_json(p)
         st = u.get("stats") or {}
         terrain = u.get("terrain") or {}
+        ssp_overrides = _collect_ssp_overrides(u)
+        ssp_st = ssp_overrides['stats']
         tags = [t.get("tag", {}).get("name") for t in u.get("tags") or [] if t.get("tag")]
         series_ids = sorted({
             int(s["series_id"])
@@ -547,10 +624,19 @@ def ingest_units(conn, tag_map: dict[int, str]):
              _i(st.get("sp_defense")), _i(st.get("sp_mobility")), _i(st.get("sp_movement")),
              _i(st.get("sp_max_hp")), _i(st.get("sp_max_en")), _i(st.get("sp_max_attack")),
              _i(st.get("sp_max_defense")), _i(st.get("sp_max_mobility")), _i(st.get("sp_max_movement")),
-             _i(st.get("ssp_hp")), _i(st.get("ssp_en")), _i(st.get("ssp_attack")),
-             _i(st.get("ssp_defense")), _i(st.get("ssp_mobility")), _i(st.get("ssp_movement")),
-             _i(st.get("ssp_max_hp")), _i(st.get("ssp_max_en")), _i(st.get("ssp_max_attack")),
-             _i(st.get("ssp_max_defense")), _i(st.get("ssp_max_mobility")), _i(st.get("ssp_max_movement")),
+             # SSP 属性：原始 JSON 中 u["stats"] 里没有 ssp_* 字段，必须从 ssp_config.stats 取
+             _i(ssp_st.get("ssp_hp") or st.get("ssp_hp")),
+             _i(ssp_st.get("ssp_en") or st.get("ssp_en")),
+             _i(ssp_st.get("ssp_attack") or st.get("ssp_attack")),
+             _i(ssp_st.get("ssp_defense") or st.get("ssp_defense")),
+             _i(ssp_st.get("ssp_mobility") or st.get("ssp_mobility")),
+             _i(ssp_st.get("ssp_movement") or st.get("ssp_movement")),
+             _i(ssp_st.get("ssp_max_hp") or st.get("ssp_max_hp")),
+             _i(ssp_st.get("ssp_max_en") or st.get("ssp_max_en")),
+             _i(ssp_st.get("ssp_max_attack") or st.get("ssp_max_attack")),
+             _i(ssp_st.get("ssp_max_defense") or st.get("ssp_max_defense")),
+             _i(ssp_st.get("ssp_max_mobility") or st.get("ssp_max_mobility")),
+             _i(ssp_st.get("ssp_max_movement") or st.get("ssp_max_movement")),
              json.dumps(terrain, ensure_ascii=False),
              json.dumps(tags, ensure_ascii=False),
              json.dumps(u.get("transform_to") or [], ensure_ascii=False),

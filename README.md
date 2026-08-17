@@ -29,14 +29,20 @@ scripts/pipeline.py    命令行入口
 ## 使用
 
 ```powershell
-python scripts/pipeline.py fetch          # 全量抓取（断点续传）
-python scripts/pipeline.py fetch --limit 10   # 冒烟测试：每类详情只抓 10 条
-python scripts/pipeline.py build          # 原始 JSON -> SQLite
-python scripts/pipeline.py verify         # 数量与抽样校验
-python scripts/pipeline.py all            # fetch + build + verify
-python scripts/pipeline.py restore        # 从云端 PostgreSQL 恢复本地数据库
+python scripts/pipeline.py update           # 一键更新：快照+增量抓取+构建+校验+变更报告（日常用这个）
+python scripts/pipeline.py update --full    # 每月一次：全量重抓，刷新已有条目的数值改动
+python scripts/pipeline.py fetch            # 仅抓取（增量，断点续传）
+python scripts/pipeline.py fetch --refresh  # 仅抓取（全量重抓已有详情）
+python scripts/pipeline.py fetch --limit 10 # 冒烟测试：每类详情只抓 10 条
+python scripts/pipeline.py build            # 原始 JSON -> SQLite
+python scripts/pipeline.py verify           # 数量与抽样校验
+python scripts/pipeline.py backup           # 手动快照当前数据库（data/backup/，保留 3 份）
+python scripts/pipeline.py all              # fetch + build + verify
+python scripts/pipeline.py restore          # 从云端 PostgreSQL 恢复本地数据库
 python scripts/pipeline.py serve --port 8765   # 启动本地 Web 查看器
 ```
+
+定期维护流程见 [MAINTENANCE.md](MAINTENANCE.md)。
 
 启动后浏览器打开 <http://127.0.0.1:8765>，可浏览机体 / 驾驶员 / 支援角色 / 关卡敌人，
 并使用伤害计算器（公式来自 formulas.docx）。

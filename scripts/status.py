@@ -1,6 +1,7 @@
 """查看后台抓取状态：进程是否存活、进度、日志尾部。"""
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,22 @@ from src import config  # noqa: E402
 def _count(rel: str) -> int:
     p = config.RAW_DIR / rel
     return len(list(p.glob("*.json"))) if p.exists() else 0
+
+
+def _manifest_totals() -> dict:
+    """从 manifest.json 读取上次抓取的各类总数（无 manifest 时用估算值）。"""
+    fallback = {"unit": 1210, "stage": 594, "event/story": 14}
+    try:
+        with open(config.MANIFEST_PATH, encoding="utf-8") as fh:
+            counts = json.load(fh).get("counts", {})
+        totals = {
+            "unit": counts.get("unit", fallback["unit"]),
+            "stage": counts.get("stage", fallback["stage"]),
+            "event/story": counts.get("event/story", fallback["event/story"]),
+        }
+    except (OSError, ValueError):
+        totals = fallback
+    return totals
 
 
 def _process_alive(pid: int) -> bool:
@@ -38,9 +55,11 @@ def main() -> None:
     unit = _count("unit") - (1 if (config.RAW_DIR / "unit" / "min.json").exists() else 0)
     stage = _count("stage")
     story_event = _count("event/story") - (1 if (config.RAW_DIR / "event" / "story" / "story.json").exists() else 0)
-    print(f"机体详情: {unit} / 1210 ({unit / 1210 * 100:.1f}%)")
-    print(f"关卡详情: {stage} / 594 ({stage / 594 * 100:.1f}%)")
-    print(f"剧情事件详情: {story_event} / 14")
+    totals = _manifest_totals()
+    t_unit, t_stage, t_story = totals["unit"], totals["stage"], totals["event/story"]
+    print(f"机体详情: {unit} / {t_unit} ({unit / max(t_unit, 1) * 100:.1f}%)")
+    print(f"关卡详情: {stage} / {t_stage} ({stage / max(t_stage, 1) * 100:.1f}%)")
+    print(f"剧情事件详情: {story_event} / {t_story}")
 
     out_log = config.META_DIR / "fetch_out.log"
     err_log = config.META_DIR / "fetch_err.log"

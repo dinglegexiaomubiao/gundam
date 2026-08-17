@@ -33,6 +33,7 @@ _CONDITION_HINTS = (
     "战意", "赋予", "对同部队", "持有", "装备", "状态", "期间",
 )
 _PCT_RE = re.compile(r"提升\s*(\d+)\s*%")
+_MAX_PCT_RE = re.compile(r"最高\s*(\d+)\s*%")
 
 
 def split_trait_stages(desc: str) -> list[str]:
@@ -117,6 +118,10 @@ def parse_ability_stat_bonuses(
         if not keys:
             continue
         pct = int(m.group(1))
+        # 如果描述中包含「最高X%」，用 X 替代（如"攻击力提升3%（最高15%）"→ pct=15）
+        max_m = _MAX_PCT_RE.search(clause)
+        if max_m:
+            pct = int(max_m.group(1))
         leading = [c for c in clauses[:i] if c]
         is_cond = any(h in clause for h in _CONDITION_HINTS) or any(
             h in c for c in leading for h in _CONDITION_HINTS
@@ -129,8 +134,16 @@ def parse_ability_stat_bonuses(
         if not text:
             text = " · ".join(leading) if leading else clause
         text, _ = resolve_trait_text(text, active_condition, tag_map, series_by_id)
+        # 提取 HP 范围用于互斥判断
+        cond = active_condition or {}
+        hp_gte = cond.get("hp_rate_gte_threshold") or 0
+        hp_lte = cond.get("hp_rate_lte_threshold") or 0
+        has_hp_cond = hp_gte > 0 or hp_lte > 0
         for key in keys:
-            conds.append({"stat": key, "pct": pct, "condition": text})
+            conds.append({
+                "stat": key, "pct": pct, "condition": text,
+                "hp_gte": hp_gte, "hp_lte": hp_lte, "has_hp_cond": has_hp_cond,
+            })
     return uncond, conds
 
 # 武器攻击属性：决定武器依靠驾驶员哪项属性

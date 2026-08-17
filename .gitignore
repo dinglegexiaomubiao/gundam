@@ -6,3 +6,4 @@ data/db/
 data/meta/
 .env
 .venv/
+data/backup/

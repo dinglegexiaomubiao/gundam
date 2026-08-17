@@ -1041,9 +1041,32 @@ async function loadUnits(page = state.units.page) {
   applyColWidths("units");
 }
 
-async function openUnit(id) {
-  const u = await api(`/api/units/${id}`);
-  const weapons = u.weapons.map((w) => `
+/* ---------- 机体详情：形态切换（地形/武器/能力） ---------- */
+
+// 取得当前形态下的武器/能力/地形（优先取 form_content，fallback 到顶层旧字段）
+function formContent(u, formKey) {
+  const fc = u.form_content || {};
+  if (fc[formKey]) return fc[formKey];
+  if (fc.default) return fc.default;
+  return { weapons: u.weapons, abilities: u.abilities, terrain: u.terrain || {} };
+}
+
+function renderUnitTerrain(u, formKey) {
+  const wrap = $("#unit-terrain");
+  if (!wrap) return;
+  const t = formContent(u, formKey).terrain || {};
+  wrap.innerHTML = Object.entries({ 宇宙: t.space, 大气圈: t.atmospheric, 地面: t.ground, 水面: t.surface, 水中: t.underwater })
+    .map(([k, v]) => `<span class="chip">${k} ${v ?? "—"}</span>`).join("");
+  bindEffectChips();
+}
+
+function renderUnitWeapons(u, formKey) {
+  const ws = formContent(u, formKey).weapons || [];
+  const title = $("#unit-weapons-title");
+  const wrap = $("#unit-weapons-wrap");
+  if (title) title.textContent = `武器（${ws.length}）`;
+  if (!wrap) return;
+  const rows = ws.map((w) => `
     <tr>
       <td>${esc(w.name)} ${lvBadge(w.weapon_max_level)}</td>
       <td>${esc(`${w.attack_attr_label ?? "—"}/${w.attrs_label ?? w.weapon_attr_label ?? "—"}`)}</td>
@@ -1057,20 +1080,37 @@ async function openUnit(id) {
       <td class="mono">${w.crit_lv9 ?? w.crit_lv5 ?? w.critical_rate ?? "—"}%</td>
       <td>${weaponEffects(w)}</td>
     </tr>`).join("");
-  const abilities = u.abilities.map((a) => `
+  wrap.innerHTML = `<table><tr><th>名称</th><th>类型</th><th>依赖属性</th><th>射程</th><th>威力(满级)</th><th>EN(满级)</th><th>命中(满级)</th><th>暴击(满级)</th><th>特效(满级)</th></tr>${rows || '<tr><td colspan="9" class="empty">暂无武器数据</td></tr>'}</table>`;
+  bindEffectChips();
+  bindSearchLinks();
+}
+
+function renderUnitAbilities(u, formKey) {
+  const abs = formContent(u, formKey).abilities || [];
+  const wrap = $("#unit-abilities-wrap");
+  if (!wrap) return;
+  if (!abs.length) {
+    wrap.innerHTML = "";
+    return;
+  }
+  const rows = abs.map((a) => `
     <tr>
       <td><button class="link-name" data-type="ability" data-name="${esc(a.name)}">${esc(a.name)}</button></td>
       <td class="desc">${effectHtml(a.effects, a.desc, a.cond_entities)}</td>
     </tr>`).join("");
+  wrap.innerHTML = `<h3>能力</h3><table><tr><th>名称</th><th>效果</th></tr>${rows}</table>`;
+  bindEffectChips();
+  bindSearchLinks();
+}
+
+async function openUnit(id) {
+  const u = await api(`/api/units/${id}`);
   const unitSkills = (u.skills || []).map((s) => `
     <tr>
       <td>${esc(s.name || "单位技能")}</td>
       <td class="desc">${esc(s.desc || "—")}</td>
       <td>${s.duration ? `${s.duration} 回合` : "—"}</td>
     </tr>`).join("");
-  const t = u.terrain || {};
-  const terrain = Object.entries({ 宇宙: t.space, 大气圈: t.atmospheric, 地面: t.ground, 水面: t.surface, 水中: t.underwater })
-    .map(([k, v]) => `<span class="chip">${k} ${v ?? "—"}</span>`).join("");
   unitEdit = null;
   showModal(
     `${esc(u.name)}<span class="unit-edit-btns">
@@ -1081,14 +1121,17 @@ async function openUnit(id) {
     `<p class="desc">${roleBadge(u.role, u.role_label)} ${esc(u.desc || "暂无描述")}</p>
      ${(u.series_names || []).length ? `<h3>系列（点击可搜索）</h3><div class="tags">${u.series_names.map((s) => `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : ""}
      <div id="unit-stats"></div>
-     <h3>地形适性</h3><div class="tags">${terrain}</div>
+     <h3>地形适性</h3><div id="unit-terrain" class="tags"></div>
      ${u.tags.length ? `<h3>标签（点击可搜索）</h3><div class="tags">${u.tags.map((t) => tagChip(t)).join("")}</div>` : ""}
      ${(u.wfx_matches || []).length ? `<h3>备注（点击可搜索）</h3><div class="tags">${WFX_OPTIONS.filter((o) => (u.wfx_matches || []).includes(o.value)).map((o) => `<button class="chip wfx-chip" data-wfx="${esc(o.value)}">${esc(o.label)}</button>`).join("")}</div>` : ""}
-     <h3>武器（${u.weapons.length}）</h3>
-     <table><tr><th>名称</th><th>类型</th><th>依赖属性</th><th>射程</th><th>威力(满级)</th><th>EN(满级)</th><th>命中(满级)</th><th>暴击(满级)</th><th>特效(满级)</th></tr>${weapons || '<tr><td colspan="9" class="empty">暂无武器数据</td></tr>'}</table>
-     ${abilities ? `<h3>能力</h3><table><tr><th>名称</th><th>效果</th></tr>${abilities}</table>` : ""}
+     <h3 id="unit-weapons-title">武器（${u.weapons.length}）</h3>
+     <div id="unit-weapons-wrap"></div>
+     <div id="unit-abilities-wrap"></div>
      ${unitSkills ? `<h3>单位技能（${(u.skills || []).length}）</h3><table><tr><th>名称</th><th>效果</th><th>持续</th></tr>${unitSkills}</table>` : ""}`);
   renderUnitStats(u, 0, "default");
+  renderUnitTerrain(u, "default");
+  renderUnitWeapons(u, "default");
+  renderUnitAbilities(u, "default");
   bindTagChips();
   bindSearchLinks();
   bindEffectChips();
@@ -1766,29 +1809,60 @@ function statCell(d, level) {
 }
 
 function condPanel(obj, current, kind) {
-  const rows = (obj.conditional_bonuses || []).map((c) => {
+  const items = (obj.conditional_bonuses || []).filter((c) => {
+    const cs = kind === "character"
+      ? c.values?.[current]
+      : c.forms?.[current.form]?.[current.star];
+    return cs != null;
+  });
+  const rows = items.map((c) => {
     const cs = kind === "character"
       ? c.values[current]
       : c.forms[current.form][current.star];
-    if (!cs) return "";
     return `<tr>
       <td class="desc">${esc(c.condition || "—")}</td>
       <td>${STAT_NAMES[kind][c.stat] ?? c.stat}</td>
       <td class="mono">+${c.pct}%</td>
-      <td class="mono">${cs.lv1}</td>
       <td class="mono">${cs.max}</td>
       <td class="desc">${esc(c.name || "")}</td>
     </tr>`;
   }).join("");
   if (!rows) return "";
+
+  // 构建「全部条件达成」合计行
+  let allMetRows = "";
+  const allMet = obj.cond_all_met;
+  if (allMet && kind !== "character") {
+    const form = obj.forms?.[current.form];
+    const star = current.star;
+    if (form && form.stars?.[star]) {
+      const st = form.stars[star].stats;
+      const bonuses = obj.stat_bonuses || {};
+      allMetRows = Object.entries(allMet).map(([stat, pct]) => {
+        const totalPct = (bonuses[stat] || 0) + pct;
+        const baseMax = st[stat]?.max ?? 0;
+        const maxVal = Math.floor(baseMax * (100 + totalPct) / 100);
+        return `<tr class="all-met-row">
+          <td class="desc"><strong>全部条件达成</strong></td>
+          <td>${STAT_NAMES[kind][stat] ?? stat}</td>
+          <td class="mono"><strong>+${pct}%</strong></td>
+          <td class="mono"><strong>${maxVal}</strong></td>
+          <td class="desc">合计</td>
+        </tr>`;
+      }).join("");
+    }
+  }
+
   const title = kind === "character"
     ? (current === "sp" ? "SP" : "默认")
     : `${current.form === "default" ? "默认" : current.form.toUpperCase()} · ${current.star}★`;
   return `<div id="cond-panel" class="cond-panel hidden">
     <h4>达成条件后的数值（${title}）</h4>
-    <p class="hint">以下数值 = 当前形态基础值 ×（1 + 无条件加成% + 该条件加成%），即该条件达成后的 1级 / 满级 属性。</p>
-    <table><tr><th>条件</th><th>属性</th><th>加成</th><th>1级</th><th>满级</th><th>来源能力</th></tr>
-    ${rows}</table>
+    <p class="hint">以下数值 = 当前形态满级基础值 ×（1 + 无条件加成% + 该条件加成%），即该条件达成后的满级属性。</p>
+    <table><tr><th>条件</th><th>属性</th><th>加成</th><th>满级</th><th>来源能力</th></tr>
+    ${rows}
+    ${allMetRows}
+    </table>
   </div>`;
 }
 
@@ -1864,7 +1938,13 @@ function renderCharStats(c, formKey) {
 
 function bindUnitControls(u, formKey, star) {
   $("#unit-stats").querySelectorAll(".form-btn").forEach((b) =>
-    b.addEventListener("click", () => renderUnitStats(u, star, b.dataset.form)));
+    b.addEventListener("click", () => {
+      const fk = b.dataset.form;
+      renderUnitStats(u, star, fk);
+      renderUnitTerrain(u, fk);
+      renderUnitWeapons(u, fk);
+      renderUnitAbilities(u, fk);
+    }));
   $("#unit-stats").querySelectorAll(".star-btn").forEach((b) =>
     b.addEventListener("click", () => renderUnitStats(u, Number(b.dataset.star), formKey)));
   const toggle = $("#cond-toggle");

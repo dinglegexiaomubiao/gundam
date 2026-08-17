@@ -40,6 +40,8 @@ from .labels import (
     SUPPORTER_SKILL_TYPE,
     ULTIMATE_TAG,
     WEAPON_ATTR,
+    parse_ability_stat_bonuses,
+    parse_weapon_max_level,
     resolve_trait_text,
     split_trait_stages,
     star_value,
@@ -407,7 +409,10 @@ def _apply_char_forms(row: dict, bonuses: dict, conditionals: list[dict]):
 
 
 def _apply_unit_forms(row: dict, bonuses: dict, conditionals: list[dict]):
-    """机体形态：默认（稀有度等级上限）/ SP / SSP（均叠加 0~3 星）。"""
+    """机体形态：默认（稀有度等级上限）/ SP / SSP（均叠加 0~3 星）。
+
+    SSP 属性 = SP 属性 + ssp_config.stats 增量（ssp_* 字段存的是增量，不是绝对值）。
+    """
     keys = UNIT_STAR_STATS
     cap = UNIT_LEVEL_CAPS.get(row.get("rarity"), 60)
     has_sp = (row.get("rarity") or 5) < 5
@@ -438,11 +443,37 @@ def _apply_unit_forms(row: dict, bonuses: dict, conditionals: list[dict]):
             ),
         }
 
+    # SSP 形态：SP 基础值 + SSP 增量
+    def build_ssp(level_cap):
+        stars = []
+        for star in range(4):
+            stats = {}
+            for key in keys:
+                lv1 = (row.get("sp_" + key) or 0) + (row.get("ssp_" + key) or 0)
+                mx = (row.get("sp_max_" + key) or 0) + (row.get("ssp_max_" + key) or 0)
+                pct = bonuses.get(key, 0)
+                v1, b1 = star_value(lv1, pct, star)
+                vm, bm = star_value(mx, pct, star)
+                stats[key] = {"lv1": v1, "lv1_bonus": b1, "max": vm, "max_bonus": bm}
+            stars.append({
+                "star": star,
+                "label": STAR_LABEL[star],
+                "stats": stats,
+            })
+        return {
+            "level_cap": level_cap,
+            "stars": stars,
+            "movement": (
+                (row.get("sp_movement") or 0) + (row.get("ssp_movement") or 0),
+                (row.get("sp_max_movement") or 0) + (row.get("ssp_max_movement") or 0),
+            ),
+        }
+
     forms = {"default": build("", "max_", cap)}
     if has_sp:
         forms["sp"] = build("sp_", "sp_max_", 100)
     if has_ssp:
-        forms["ssp"] = build("ssp_", "ssp_max_", 100)
+        forms["ssp"] = build_ssp(100)
         ssp_present = any(
             (row.get(f"ssp_{key}") or 0) or (row.get(f"ssp_max_{key}") or 0)
             for key in keys
@@ -459,7 +490,6 @@ def _apply_unit_forms(row: dict, bonuses: dict, conditionals: list[dict]):
         for form_key, lv1_prefix, max_prefix in (
             ("default", "", "max_"),
             ("sp", "sp_", "sp_max_"),
-            ("ssp", "ssp_", "ssp_max_"),
         ):
             if form_key not in forms:
                 continue
@@ -474,8 +504,441 @@ def _apply_unit_forms(row: dict, bonuses: dict, conditionals: list[dict]):
                     "lv1": sb1 * (100 + total_pct) // 100,
                     "max": sbm * (100 + total_pct) // 100,
                 }
+        # SSP: SP + SSP 增量
+        if "ssp" in forms:
+            lv1 = (row.get("sp_" + key) or 0) + (row.get("ssp_" + key) or 0)
+            mx = (row.get("sp_max_" + key) or 0) + (row.get("ssp_max_" + key) or 0)
+            item["forms"]["ssp"] = {}
+            for star in range(4):
+                num, den = STAR_MULT[star]
+                sb1 = lv1 * num // den
+                sbm = mx * num // den
+                item["forms"]["ssp"][star] = {
+                    "lv1": sb1 * (100 + total_pct) // 100,
+                    "max": sbm * (100 + total_pct) // 100,
+                }
         cond_items.append(item)
     return forms, cond_items, cap, has_sp, has_ssp
+
+
+def _recalc_conditional_forms(row: dict, cond_items: list[dict]) -> list[dict]:
+    """重新计算条件加成的 forms 数值（含 SSP 新增条件）。
+
+    SSP 条件加成 = SP基础值 + SSP增量 作为基数，再叠加条件加成%。
+    """
+    for item in cond_items:
+        key = item.get("stat")
+        pct = item.get("pct", 0)
+        item["forms"] = {}
+        for form_key in ("default", "sp", "ssp"):
+            if form_key == "default":
+                lv1 = row.get(key) or 0
+                mx = row.get("max_" + key) or 0
+            elif form_key == "sp":
+                lv1 = row.get("sp_" + key) or 0
+                mx = row.get("sp_max_" + key) or 0
+            else:  # ssp
+                lv1 = (row.get("sp_" + key) or 0) + (row.get("ssp_" + key) or 0)
+                mx = (row.get("sp_max_" + key) or 0) + (row.get("ssp_max_" + key) or 0)
+            item["forms"][form_key] = {}
+            for star in range(4):
+                num, den = STAR_MULT[star]
+                sb1 = lv1 * num // den
+                sbm = mx * num // den
+                item["forms"][form_key][star] = {
+                    "lv1": sb1 * (100 + pct) // 100,
+                    "max": sbm * (100 + pct) // 100,
+                }
+    return cond_items
+
+
+def _calc_all_conditions_met(row: dict) -> dict | None:
+    """计算「全部条件达成」时的合计加成（按 stat 分组求和，排除互斥条件）。
+
+    返回 {stat: pct} 或 None（无条件加成时）。
+    """
+    conds = row.get("conditional_bonuses") or []
+    if not conds:
+        return None
+
+    # 按 stat 分组
+    by_stat: dict[str, list[dict]] = {}
+    for c in conds:
+        stat = c.get("stat")
+        if stat:
+            by_stat.setdefault(stat, []).append(c)
+
+    result: dict[str, int] = {}
+    for stat, items in by_stat.items():
+        # 检查同 stat 条件之间是否互斥
+        # 两个 HP 条件互斥的条件：两者都有 HP 约束，且范围不重叠
+        all_compatible = True
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                a, b = items[i], items[j]
+                if _hp_conditions_mutually_exclusive(a, b):
+                    all_compatible = False
+                    break
+            if not all_compatible:
+                break
+        if all_compatible:
+            result[stat] = sum(c.get("pct", 0) for c in items)
+        else:
+            # 取最大的单个条件加成
+            result[stat] = max(c.get("pct", 0) for c in items)
+    return result if result else None
+
+
+def _hp_conditions_mutually_exclusive(a: dict, b: dict) -> bool:
+    """判断两个条件加成在 HP 范围上是否互斥。"""
+    a_hp = a.get("has_hp_cond", False)
+    b_hp = b.get("has_hp_cond", False)
+    if not a_hp or not b_hp:
+        return False  # 非HP条件不互斥
+    a_gte = a.get("hp_gte", 0)
+    a_lte = a.get("hp_lte", 0)
+    b_gte = b.get("hp_gte", 0)
+    b_lte = b.get("hp_lte", 0)
+    # a 的下界 > b 的上界 或 b 的下界 > a 的上界
+    a_upper = a_lte if a_lte > 0 else 100
+    b_upper = b_lte if b_lte > 0 else 100
+    if a_gte > b_upper:
+        return True
+    if b_gte > a_upper:
+        return True
+    return False
+
+
+def _raw_weapon_to_row(unit_id: int, wep_raw: dict, sort: int = 0) -> dict:
+    """把 raw JSON 中的 weapon 对象转换成 unit_weapon 查询出来的 dict 格式（字段对齐）。"""
+    ws = wep_raw.get("weapon_status") or {}
+    top = parse_weapon_max_level(ws)
+    return {
+        "unit_id": unit_id,
+        "weapon_id": wep_raw.get("id") or ws.get("id"),
+        "sort": sort,
+        "name": wep_raw.get("name"),
+        "type": wep_raw.get("type"),
+        "work_type": wep_raw.get("work_type"),
+        "attack_attr": wep_raw.get("attack_attr"),
+        "weapon_attr": wep_raw.get("weapon_attr"),
+        "weapon_capability": wep_raw.get("weapon_capability"),
+        "weapon_effect": wep_raw.get("weapon_effect"),
+        "weapon_level_up_material": wep_raw.get("weapon_level_up_material"),
+        "range_min": ws.get("range_min"),
+        "range_max": ws.get("range_max"),
+        "power": ws.get("power"),
+        "en": ws.get("en"),
+        "hit_rate": ws.get("hit_rate"),
+        "critical_rate": ws.get("critical_rate"),
+        "power_lv5": top["power"] if top["level"] >= 5 else None,
+        "en_lv5": top["en"] if top["level"] >= 5 else None,
+        "hit_lv5": top["hit"] if top["level"] >= 5 else None,
+        "crit_lv5": top["crit"] if top["level"] >= 5 else None,
+        "power_lv9": top["power"] if top["level"] >= 9 else None,
+        "en_lv9": top["en"] if top["level"] >= 9 else None,
+        "hit_lv9": top["hit"] if top["level"] >= 9 else None,
+        "crit_lv9": top["crit"] if top["level"] >= 9 else None,
+        "weapon_attrs": None,
+        "weapon_max_level": top["level"],
+        "map_weapon_range": ws.get("map_weapon_effect_range"),
+        "map_weapon_desc": ws.get("map_weapon_desc"),
+        "map_weapon_trait": ws.get("map_weapon_trait"),
+        "map_weapon_can_use_after_move": ws.get("map_weapon_can_use_after_move"),
+        "is_full_animation": wep_raw.get("is_full_animation"),
+        "weapon_effects": top["effects"],
+    }
+
+
+def _raw_ability_to_row(unit_id: int, ab_raw: dict, sort: int = 0) -> dict:
+    """把 raw JSON 中的 ability 对象转换成 unit_ability 查询出来的格式。"""
+    detail = ab_raw.get("detail") or {}
+    traits = [t.get("trait") or t for t in ab_raw.get("traits") or []]
+    return {
+        "unit_id": unit_id,
+        "ability_id": ab_raw.get("id"),
+        "sort": sort,
+        "name": (detail.get("name") or ab_raw.get("name") or ""),
+        "desc": detail.get("desc"),
+        "ability_type": ab_raw.get("ability_type"),
+        "buff_debuff": detail.get("buff_debuff"),
+        "is_stackable": detail.get("is_stackable"),
+        "stack_limit": detail.get("stack_limit"),
+        "traits": json.dumps(traits, ensure_ascii=False),
+    }
+
+
+def _build_unit_form_content(
+    u: dict,
+    default_weapons: list[dict],
+    default_abilities: list[dict],
+    default_terrain: dict,
+) -> dict:
+    """根据 raw_path 读取原始 JSON，构建按形态分组的 weapons / abilities / terrain。
+
+    返回: { 'default': {...}, 'sp': {...}, 'ssp': {...} }，每个形态包含 weapons, abilities, terrain
+    """
+    has_ssp = (u.get("rarity") or 5) < 5
+
+    # --- 先从 raw JSON 中识别 SSP 专属武器 id / 替换 id 集合，用于后续过滤 default 形态 ---
+    ssp_only_ids: set[int] = set()
+    raw_rel = u.get("raw_path")
+    raw_obj = None
+    try:
+        if raw_rel and has_ssp:
+            with open(config.RAW_DIR / raw_rel, encoding="utf-8") as fh:
+                raw_obj = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        raw_obj = None
+
+    if raw_obj and has_ssp:
+        sc = raw_obj.get("ssp_config") or {}
+        # 从 cores 的 weapon_change 中收集 after_weapon_id
+        for core in sc.get("cores") or []:
+            for rel in core.get("releases") or []:
+                if rel.get("release_function_type_index") == 5:
+                    wc = rel.get("weapon_change") or {}
+                    after = wc.get("after_weapon_id") or 0
+                    if after:
+                        ssp_only_ids.add(int(after))
+        # 从顶层 ssp_weapon 列表收集
+        for sw in raw_obj.get("ssp_weapon") or []:
+            wid = sw.get("weapon_id") or 0
+            if wid:
+                ssp_only_ids.add(int(wid))
+
+    # 从 unit_weapon 中再补：名字以「 SSP」结尾且 id 末两位 >=90 的视为 SSP 专属（兜底 heuristic）
+    for w in default_weapons:
+        wname = (w.get("name") or "").strip()
+        wid = w.get("weapon_id") or 0
+        if wid and (wname.endswith("SSP") or wname.endswith("ssp")):
+            try:
+                if int(wid) % 100 >= 90:
+                    ssp_only_ids.add(int(wid))
+            except (TypeError, ValueError):
+                pass
+
+    # default/sp 形态移除 SSP 专属武器
+    filtered_wp = [
+        w for w in default_weapons
+        if int(w.get("weapon_id") or 0) not in ssp_only_ids
+    ]
+
+    # SP 形态：武器/能力/地形和默认形态完全一致，仅属性不同（属性已由 forms 处理）
+    result = {
+        "default": {
+            "weapons": filtered_wp,
+            "abilities": default_abilities,
+            "terrain": default_terrain,
+        },
+        "sp": {
+            "weapons": filtered_wp,
+            "abilities": default_abilities,
+            "terrain": default_terrain,
+        },
+        "ssp": None,
+    }
+    if not has_ssp:
+        return result
+
+    ssp_weapons = [dict(w) for w in filtered_wp]
+    ssp_abilities = list(default_abilities)
+    ssp_terrain = _json_dict(u.get("ssp_terrain")) or dict(default_terrain)
+
+    if raw_obj:
+        sc = raw_obj.get("ssp_config") or {}
+
+        # --- 收集 weapon_enhance (type=1) 和 weapon_effect (type=7) ---
+        # weapon_enhance_type_index: 1=power, 2=en, 3=hit_rate, 4=range_max, 5=critical_rate
+        enhances: dict[int, list[tuple[int, int]]] = {}
+        effects_map: dict[int, list[dict]] = {}
+        for core in sc.get("cores") or []:
+            for rel in core.get("releases") or []:
+                t = rel.get("release_function_type_index")
+                if t == 1:
+                    we = rel.get("weapon_enhance") or {}
+                    tid = we.get("target_weapon_id") or 0
+                    if tid:
+                        enhances.setdefault(int(tid), []).append((
+                            we.get("weapon_enhance_type_index") or 0,
+                            we.get("effect_value") or 0,
+                        ))
+                elif t == 7:
+                    wfe = rel.get("weapon_effect") or {}
+                    tid = wfe.get("target_weapon_id") or 0
+                    wt = wfe.get("weapon_trait") or {}
+                    if tid and wt:
+                        effects_map.setdefault(int(tid), []).append({
+                            "slot": None,
+                            "name": wt.get("name") or "",
+                            "desc": wt.get("desc") or "",
+                        })
+
+        # --- 武器变更 (type=5): 新增/替换武器 ---
+        for core in sc.get("cores") or []:
+            for rel in core.get("releases") or []:
+                if rel.get("release_function_type_index") == 5:
+                    wc = rel.get("weapon_change") or {}
+                    before = wc.get("before_weapon_id") or 0
+                    after = wc.get("after_weapon_id") or 0
+                    wep = wc.get("weapon")
+                    if after and wep:
+                        sort_val = (rel.get("sort_order") or 0) + len(default_weapons)
+                        row = _raw_weapon_to_row(u["id"], wep, sort_val)
+                        # before 非 0 → 替换：移除原武器
+                        if before:
+                            ssp_weapons = [
+                                w for w in ssp_weapons
+                                if (w.get("weapon_id") or 0) != before
+                            ]
+                        # 移除同 id 旧记录（避免重复）
+                        ssp_weapons = [
+                            w for w in ssp_weapons
+                            if (w.get("weapon_id") or 0) != after
+                        ]
+                        ssp_weapons.append(row)
+
+        # --- 补充 ssp_weapon 列表引用 ---
+        for sw in raw_obj.get("ssp_weapon") or []:
+            wid = sw.get("weapon_id") or 0
+            if wid and not any((w.get("weapon_id") or 0) == wid for w in ssp_weapons):
+                hit = next(
+                    (w for w in default_weapons if (w.get("weapon_id") or 0) == wid),
+                    None,
+                )
+                if hit:
+                    ssp_weapons.append(dict(hit))
+
+        # --- 应用 weapon_enhance 到 SSP 武器 ---
+        # effect_value 加到满级数值字段（power_lv9/power_lv5），若都不存在则加到基础 power
+        for w in ssp_weapons:
+            wid = int(w.get("weapon_id") or 0)
+            if wid not in enhances:
+                continue
+            for type_idx, val in enhances[wid]:
+                if type_idx == 1:  # power
+                    if w.get("power_lv9") is not None:
+                        w["power_lv9"] = (w.get("power_lv9") or 0) + val
+                    elif w.get("power_lv5") is not None:
+                        w["power_lv5"] = (w.get("power_lv5") or 0) + val
+                    else:
+                        w["power"] = (w.get("power") or 0) + val
+                elif type_idx == 2:  # en
+                    if w.get("en_lv9") is not None:
+                        w["en_lv9"] = (w.get("en_lv9") or 0) + val
+                    elif w.get("en_lv5") is not None:
+                        w["en_lv5"] = (w.get("en_lv5") or 0) + val
+                    else:
+                        w["en"] = (w.get("en") or 0) + val
+                elif type_idx == 3:  # hit_rate
+                    if w.get("hit_lv9") is not None:
+                        w["hit_lv9"] = (w.get("hit_lv9") or 0) + val
+                    elif w.get("hit_lv5") is not None:
+                        w["hit_lv5"] = (w.get("hit_lv5") or 0) + val
+                    else:
+                        w["hit_rate"] = (w.get("hit_rate") or 0) + val
+                elif type_idx == 4:  # range_max
+                    w["range_max"] = (w.get("range_max") or 0) + val
+                elif type_idx == 5:  # critical_rate
+                    if w.get("crit_lv9") is not None:
+                        w["crit_lv9"] = (w.get("crit_lv9") or 0) + val
+                    elif w.get("crit_lv5") is not None:
+                        w["crit_lv5"] = (w.get("crit_lv5") or 0) + val
+                    else:
+                        w["critical_rate"] = (w.get("critical_rate") or 0) + val
+
+        # --- 应用 weapon_effect (type=7) 到 SSP 武器 ---
+        for w in ssp_weapons:
+            wid = int(w.get("weapon_id") or 0)
+            if wid not in effects_map:
+                continue
+            if not isinstance(w.get("effects"), list):
+                try:
+                    w["effects"] = _json_list(w.get("weapon_effects") or "[]")
+                except Exception:
+                    w["effects"] = []
+            w["effects"].extend(effects_map[wid])
+
+        # --- 能力变更 ---
+        ir = sc.get("initial_release") or {}
+        ac = ir.get("ability_change") or {}
+        after_ab = ac.get("after_ability_id") or 0
+        before_ab = ac.get("before_ability_id") or 0
+        ability_obj = ac.get("ability")
+        # before=0 → 新增能力; before>0 → 替换能力
+        if after_ab and ability_obj:
+            if before_ab:
+                ssp_abilities = [
+                    a for a in ssp_abilities
+                    if (a.get("ability_id") or 0) != before_ab
+                ]
+            if not any(
+                (a.get("ability_id") or 0) == after_ab for a in ssp_abilities
+            ):
+                ssp_abilities.append(
+                    _raw_ability_to_row(u["id"], ability_obj, len(ssp_abilities))
+                )
+
+        # --- 地形变更 (type=4) ---
+        for core in sc.get("cores") or []:
+            for rel in core.get("releases") or []:
+                if rel.get("release_function_type_index") == 4:
+                    tr = rel.get("terrain")
+                    if tr and isinstance(tr, dict):
+                        ssp_terrain = {
+                            "space": tr.get("space"),
+                            "atmospheric": tr.get("atmospheric"),
+                            "ground": tr.get("ground"),
+                            "surface": tr.get("surface"),
+                            "underwater": tr.get("underwater"),
+                        }
+
+    # 对 SSP 的武器、能力补充 web 端展示需要的字段（attack_attr_label / attrs / effects 等）
+    for w in ssp_weapons:
+        aattr = w.get("attack_attr")
+        wattr = w.get("weapon_attr")
+        w.setdefault("attack_attr_label", ATTACK_ATTR.get(aattr, "—"))
+        w.setdefault("weapon_attr_label", WEAPON_ATTR.get(wattr, "—"))
+        w.setdefault("pilot_stat", ATTACK_ATTR_DEP_LABEL.get(aattr, "—"))
+        # attrs
+        if "attrs" not in w:
+            try:
+                raw_attrs = _json_list(w.get("weapon_attrs") or "[]")
+                attrs = (
+                    [int(x) for x in raw_attrs]
+                    if isinstance(raw_attrs, list) else []
+                )
+            except (TypeError, ValueError):
+                attrs = []
+            if not attrs and wattr:
+                attrs = [wattr]
+            w["attrs"] = attrs
+        w.setdefault(
+            "attrs_label",
+            "、".join(WEAPON_ATTR.get(x, f"#{x}") for x in w["attrs"]) or "—",
+        )
+        if "effects" not in w:
+            try:
+                w["effects"] = _json_list(w.get("weapon_effects") or "[]")
+            except Exception:
+                w["effects"] = []
+
+    # 对 SSP 的能力补充 effects / cond_entities（在 api_unit_detail 中遍历 abilities 时统一处理会更好，这里留空容器）
+    for a in ssp_abilities:
+        if "effects" not in a:
+            a["effects"] = []
+        if "cond_entities" not in a:
+            a["cond_entities"] = []
+
+    ssp_weapons.sort(key=lambda w: (w.get("sort") or 0, w.get("weapon_id") or 0))
+    ssp_abilities.sort(key=lambda a: (a.get("sort") or 0, a.get("ability_id") or 0))
+
+    result["ssp"] = {
+        "weapons": ssp_weapons,
+        "abilities": ssp_abilities,
+        "terrain": ssp_terrain,
+    }
+    return result
 
 
 SUMMARY_TABLES = (
@@ -1111,6 +1574,55 @@ def api_unit_detail(unit_id: int) -> dict | None:
     u["abilities"] = abilities
     u["skills"] = skills
     u["wfx_matches"] = wfx_matches
+    # 构建按形态分组的武器/能力/地形
+    form_content = _build_unit_form_content(u, weapons, abilities, u["terrain"])
+    # 补充 SSP 能力的 effects / cond_entities（_build_unit_form_content 里只是占位容器）
+    if form_content.get("ssp"):
+        for a in form_content["ssp"]["abilities"]:
+            if a.get("effects") and a.get("cond_entities"):
+                # 来自数据库处理过的保留
+                if isinstance(a.get("effects"), list) and len(a["effects"]) > 0:
+                    continue
+            a["effects"], a["cond_entities"] = _trait_effects(
+                a.get("traits"), tag_by_id, series_by_id, unit_by_id
+            )
+        # SSP 新增被动能力的条件加成追加到 conditional_bonuses
+        # 收集 default 形态已有的能力名称，避免重复
+        default_ab_names = set()
+        for a in abilities:
+            default_ab_names.add(a.get("name") or "")
+        for a in form_content["ssp"]["abilities"]:
+            if not a.get("ability_id"):
+                continue
+            # 跳过 default 形态已有的能力（非 SSP 新增的）
+            ab_name = a.get("name") or ""
+            if ab_name in default_ab_names:
+                continue
+            # 也跳过已存在于 conditional_bonuses 的同名称条件
+            existing_names = {c.get("name") for c in u["conditional_bonuses"]}
+            if ab_name in existing_names:
+                continue
+            traits_raw = a.get("traits") or "[]"
+            traits_list = _json_list(traits_raw)
+            for t in traits_list:
+                tr = t.get("trait") or t
+                ub, cb = parse_ability_stat_bonuses(
+                    tr.get("desc") or "", "unit",
+                    tr.get("active_condition"), tag_by_id, series_by_id,
+                )
+                for item in cb:
+                    item["name"] = ab_name
+                    u["conditional_bonuses"].append(item)
+
+    # 重新计算 conditional_bonuses 的 forms 数值（SSP 新增的也需要）
+    if u["conditional_bonuses"]:
+        u["conditional_bonuses"] = _recalc_conditional_forms(
+            u, u["conditional_bonuses"]
+        )
+
+    # 构建「全部条件达成」合计行（检查互斥）
+    u["cond_all_met"] = _calc_all_conditions_met(u)
+    u["form_content"] = form_content
     return u
 
 
