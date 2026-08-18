@@ -1060,6 +1060,50 @@ function renderUnitTerrain(u, formKey) {
   bindEffectChips();
 }
 
+function renderUnitWfx(u, formKey) {
+  const wrap = $("#unit-wfx-wrap");
+  if (!wrap) return;
+  const ws = formContent(u, formKey).weapons || [];
+  const abs = formContent(u, formKey).abilities || [];
+  // 收集每个武器的 effects 文本
+  const hasEffect = (w, text) => (w.effects || []).some((e) => (e.desc || "").includes(text) || (e.name || "").includes(text));
+  const nonMapWeps = ws.filter((w) => !w.map_weapon_range || ["", "null", "0"].includes(String(w.map_weapon_range)));
+  const maxRange = Math.max(0, ...ws.map((w) => Number(w.range_max) || 0));
+  const mapWeps = ws.filter((w) => w.map_weapon_range && !["", "null", "0"].includes(String(w.map_weapon_range)));
+  const match = new Set();
+  if (mapWeps.length) match.add("map");
+  if (maxRange === 5) match.add("range5");
+  if (maxRange > 5) match.add("range5plus");
+  // 非MAP的射程
+  const nonMapMax = Math.max(0, ...nonMapWeps.map((w) => Number(w.range_max) || 0));
+  if (nonMapMax === 5) match.add("range5_nomap");
+  if (nonMapMax > 5) match.add("range5plus_nomap");
+  // 特效相关
+  if (ws.some((w) => hasEffect(w, "物理损伤"))) match.add("phys");
+  if (ws.some((w) => hasEffect(w, "光束损伤"))) match.add("beam");
+  if (ws.some((w) => hasEffect(w, "特殊损伤"))) match.add("spec");
+  if (ws.some((w) => hasEffect(w, "防御力减少"))) match.add("defdown");
+  // 特效+射程
+  const r5Weps = ws.filter((w) => Number(w.range_max) >= 5);
+  if (r5Weps.some((w) => hasEffect(w, "物理损伤"))) match.add("phys_r5");
+  if (r5Weps.some((w) => hasEffect(w, "光束损伤"))) match.add("beam_r5");
+  if (r5Weps.some((w) => hasEffect(w, "特殊损伤"))) match.add("spec_r5");
+  if (r5Weps.some((w) => hasEffect(w, "防御力减少"))) match.add("defdown_r5");
+  // 技能
+  if ((u.skills || []).length) match.add("has_unit_skill");
+  // 按 WFX_SPECIFIC_REMOVE 规则移除笼统项
+  const remove = { range5_nomap: "range5", range5plus_nomap: "range5plus", phys_r5: "phys", beam_r5: "beam", spec_r5: "spec", defdown_r5: "defdown" };
+  for (const [specific, general] of Object.entries(remove)) {
+    if (match.has(specific)) match.delete(general);
+  }
+  const chips = WFX_OPTIONS.filter((o) => match.has(o.value));
+  wrap.innerHTML = chips.length
+    ? `<h3>备注（点击可搜索）</h3><div class="tags">${chips.map((o) => `<button class="chip wfx-chip" data-wfx="${esc(o.value)}">${esc(o.label)}</button>`).join("")}</div>`
+    : "";
+  bindEffectChips();
+  bindUnitInfoChips();
+}
+
 function renderUnitWeapons(u, formKey) {
   const ws = formContent(u, formKey).weapons || [];
   const title = $("#unit-weapons-title");
@@ -1123,7 +1167,7 @@ async function openUnit(id) {
      <div id="unit-stats"></div>
      <h3>地形适性</h3><div id="unit-terrain" class="tags"></div>
      ${u.tags.length ? `<h3>标签（点击可搜索）</h3><div class="tags">${u.tags.map((t) => tagChip(t)).join("")}</div>` : ""}
-     ${(u.wfx_matches || []).length ? `<h3>备注（点击可搜索）</h3><div class="tags">${WFX_OPTIONS.filter((o) => (u.wfx_matches || []).includes(o.value)).map((o) => `<button class="chip wfx-chip" data-wfx="${esc(o.value)}">${esc(o.label)}</button>`).join("")}</div>` : ""}
+     <div id="unit-wfx-wrap"></div>
      <h3 id="unit-weapons-title">武器（${u.weapons.length}）</h3>
      <div id="unit-weapons-wrap"></div>
      <div id="unit-abilities-wrap"></div>
@@ -1132,6 +1176,7 @@ async function openUnit(id) {
   renderUnitTerrain(u, "default");
   renderUnitWeapons(u, "default");
   renderUnitAbilities(u, "default");
+  renderUnitWfx(u, "default");
   bindTagChips();
   bindSearchLinks();
   bindEffectChips();
@@ -1809,7 +1854,11 @@ function statCell(d, level) {
 }
 
 function condPanel(obj, current, kind) {
+  // 过滤条件加成：default/sp 形态不显示 SSP 专属条件
+  const formKey = kind === "character" ? current : current.form;
   const items = (obj.conditional_bonuses || []).filter((c) => {
+    // unit 时 SSP 专属条件只在 ssp 形态下显示
+    if (kind === "unit" && c._ssp_only && formKey !== "ssp") return false;
     const cs = kind === "character"
       ? c.values?.[current]
       : c.forms?.[current.form]?.[current.star];
@@ -1829,7 +1878,7 @@ function condPanel(obj, current, kind) {
   }).join("");
   if (!rows) return "";
 
-  // 构建「全部条件达成」合计行
+  // 构建「全部条件达成」合计行（也需要按当前form过滤哪些条件被计入）
   let allMetRows = "";
   const allMet = obj.cond_all_met;
   if (allMet && kind !== "character") {
@@ -1838,15 +1887,49 @@ function condPanel(obj, current, kind) {
     if (form && form.stars?.[star]) {
       const st = form.stars[star].stats;
       const bonuses = obj.stat_bonuses || {};
-      allMetRows = Object.entries(allMet).map(([stat, pct]) => {
-        const totalPct = (bonuses[stat] || 0) + pct;
-        const baseMax = st[stat]?.max ?? 0;
-        const maxVal = Math.floor(baseMax * (100 + totalPct) / 100);
+      // 按当前 form 重新计算 all-met pct（剔除 ssp 专属条件）
+      const byStat = {};
+      for (const c of items) {
+        byStat[c.stat] = (byStat[c.stat] || 0) + (c.pct || 0);
+      }
+      // 如果当前 form 有互斥条件，需要同样逻辑处理
+      // 先检查同 stat 条件之间的 HP 互斥
+      const grouped = {};
+      for (const c of items) {
+        (grouped[c.stat] = grouped[c.stat] || []).push(c);
+      }
+      const effectivePct = {};
+      for (const [stat, csList] of Object.entries(grouped)) {
+        let allCompat = true;
+        for (let i = 0; i < csList.length && allCompat; i++) {
+          for (let j = i + 1; j < csList.length && allCompat; j++) {
+            const a = csList[i], b = csList[j];
+            if (!a.has_hp_cond || !b.has_hp_cond) continue;
+            const a_upper = a.hp_lte > 0 ? a.hp_lte : 100;
+            const b_upper = b.hp_lte > 0 ? b.hp_lte : 100;
+            if ((a.hp_gte || 0) > b_upper || (b.hp_gte || 0) > a_upper) allCompat = false;
+          }
+        }
+        if (allCompat) {
+          effectivePct[stat] = csList.reduce((s, c) => s + (c.pct || 0), 0);
+        } else {
+          effectivePct[stat] = Math.max(...csList.map((c) => c.pct || 0));
+        }
+      }
+      allMetRows = Object.entries(effectivePct).map(([stat, condPct]) => {
+        const basePct = bonuses[stat] || 0;
+        // st[stat].max 已含无条件加成，star_base = max - max_bonus
+        const maxVal = st[stat]?.max ?? 0;
+        const maxBonus = st[stat]?.max_bonus ?? 0;
+        const starBase = maxVal - maxBonus;
+        const allMetVal = Math.floor(starBase * (100 + basePct + condPct) / 100);
+        const delta = allMetVal - maxVal;
+        const statLabel = STAT_NAMES[kind][stat] ?? stat;
         return `<tr class="all-met-row">
-          <td class="desc"><strong>全部条件达成</strong></td>
-          <td>${STAT_NAMES[kind][stat] ?? stat}</td>
-          <td class="mono"><strong>+${pct}%</strong></td>
-          <td class="mono"><strong>${maxVal}</strong></td>
+          <td class="desc"><strong>所有能力都达成</strong></td>
+          <td><strong>${statLabel}</strong></td>
+          <td class="mono"><strong>+${condPct}%</strong></td>
+          <td class="mono"><strong>${allMetVal}</strong> <span class="add">(+${delta})</span></td>
           <td class="desc">合计</td>
         </tr>`;
       }).join("");
@@ -1944,9 +2027,14 @@ function bindUnitControls(u, formKey, star) {
       renderUnitTerrain(u, fk);
       renderUnitWeapons(u, fk);
       renderUnitAbilities(u, fk);
+      renderUnitWfx(u, fk);
     }));
   $("#unit-stats").querySelectorAll(".star-btn").forEach((b) =>
-    b.addEventListener("click", () => renderUnitStats(u, Number(b.dataset.star), formKey)));
+    b.addEventListener("click", () => {
+      const sstar = Number(b.dataset.star);
+      renderUnitStats(u, sstar, formKey);
+      renderUnitWfx(u, formKey);
+    }));
   const toggle = $("#cond-toggle");
   if (!toggle) return;
   toggle.addEventListener("click", () => {

@@ -521,14 +521,16 @@ def _apply_unit_forms(row: dict, bonuses: dict, conditionals: list[dict]):
     return forms, cond_items, cap, has_sp, has_ssp
 
 
-def _recalc_conditional_forms(row: dict, cond_items: list[dict]) -> list[dict]:
+def _recalc_conditional_forms(row: dict, cond_items: list[dict], bonuses: dict) -> list[dict]:
     """重新计算条件加成的 forms 数值（含 SSP 新增条件）。
 
+    必须传入 bonuses（无条件加成），因为 total_pct = 无条件加成 + 条件加成。
     SSP 条件加成 = SP基础值 + SSP增量 作为基数，再叠加条件加成%。
     """
     for item in cond_items:
         key = item.get("stat")
-        pct = item.get("pct", 0)
+        cond_pct = item.get("pct", 0)
+        total_pct = bonuses.get(key, 0) + cond_pct
         item["forms"] = {}
         for form_key in ("default", "sp", "ssp"):
             if form_key == "default":
@@ -546,8 +548,8 @@ def _recalc_conditional_forms(row: dict, cond_items: list[dict]) -> list[dict]:
                 sb1 = lv1 * num // den
                 sbm = mx * num // den
                 item["forms"][form_key][star] = {
-                    "lv1": sb1 * (100 + pct) // 100,
-                    "max": sbm * (100 + pct) // 100,
+                    "lv1": sb1 * (100 + total_pct) // 100,
+                    "max": sbm * (100 + total_pct) // 100,
                 }
     return cond_items
 
@@ -1617,11 +1619,16 @@ def api_unit_detail(unit_id: int) -> dict | None:
     # 重新计算 conditional_bonuses 的 forms 数值（SSP 新增的也需要）
     if u["conditional_bonuses"]:
         u["conditional_bonuses"] = _recalc_conditional_forms(
-            u, u["conditional_bonuses"]
+            u, u["conditional_bonuses"], bonuses
         )
 
     # 构建「全部条件达成」合计行（检查互斥）
     u["cond_all_met"] = _calc_all_conditions_met(u)
+    # 标记哪些条件加成是 SSP 专属的（通过能力名称是否在 default abilities 中）
+    default_ab_names = {a.get("name") or "" for a in abilities}
+    for c in u["conditional_bonuses"]:
+        cname = c.get("name") or ""
+        c["_ssp_only"] = bool(cname and cname not in default_ab_names)
     u["form_content"] = form_content
     return u
 
