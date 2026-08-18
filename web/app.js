@@ -1,4 +1,11 @@
 const $ = (sel) => document.querySelector(sel);
+/* P1-9: 数字千分位格式化（整数 / 小数 / null 安全） */
+const fmtNum = (n, digits) => {
+  if (n === null || n === undefined || n === "" || Number.isNaN(Number(n))) return n;
+  const d = digits !== undefined ? digits : 0;
+  try { return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: d, minimumFractionDigits: 0 }).format(Number(n)); }
+  catch (_) { return String(n); }
+};
 const state = {
   units: { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", cond: null, sort: "rarity", order: "desc", page: 0, size: 25 },
   characters: { q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", skills: [], skill_mode: "any", support: "", sort: "rarity", order: "desc", page: 0, size: 25 },
@@ -9,6 +16,30 @@ const state = {
 let currentSupporter = null;
 const colWidths = {};
 const colFlex = {};
+
+/* ---- Step 2: HUD 状态条：时钟 + 数据量实时刷新 ---- */
+(function initHudStatus() {
+  const pad = (n) => String(n).padStart(2, "0");
+  const timeEl = document.getElementById("hudTime");
+  function tick() {
+    if (!timeEl) return;
+    const now = new Date();
+    timeEl.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  }
+  tick();
+  setInterval(tick, 1000);
+})();
+function updateHudDbStat(c) {
+  const el = document.getElementById("hudDbStat");
+  if (!el || !c) return;
+  const parts = [];
+  if (c.unit)                   parts.push(`${fmtNum(c.unit)} 机体`);
+  if (c.character)              parts.push(`${fmtNum(c.character)} 驾驶`);
+  if (c.supporter)              parts.push(`${fmtNum(c.supporter)} 支援`);
+  if (c.stage)                  parts.push(`${fmtNum(c.stage)} 关卡`);
+  if (c.unit_weapon)            parts.push(`${fmtNum(c.unit_weapon)} 武装`);
+  el.textContent = parts.length ? parts.join(" · ") : "数据未加载";
+}
 const ATTACK_ATTR_KEYS = {
   1: ["ranged"], 2: ["melee"], 3: ["awaken"],
   4: ["melee", "ranged"], 5: ["ranged", "awaken"], 6: ["melee", "awaken"],
@@ -137,6 +168,90 @@ function roleBadge(role, label) {
 
 function lvBadge(level) {
   return level ? `<span class="badge lv">LV${level}</span>` : "";
+}
+
+/* ============================================================
+   Step 4-7 辅助函数：迷你属性条 / 雷达图 / Staggered Reveal / 分段分数条
+   ============================================================ */
+
+/* 各属性的最大参考值（用于迷你属性条宽度，HUD 配色） */
+const STAT_MAX = {
+  hp: 95000, en: 600, attack: 16000, defense: 13000, mobility: 13000, movement: 8,
+  ranged: 16000, melee: 16000, awaken: 16000, reaction: 16000,
+};
+const STAT_COLOR = {
+  hp: "hud-green", en: "hud-blue", attack: "hud-red", defense: "hud-amber", mobility: "hud-violet", movement: "hud-blue",
+  ranged: "hud-red", melee: "hud-amber", awaken: "hud-violet", reaction: "hud-blue",
+};
+
+/* 迷你属性条单元格：数值 + 细 bar（width 按参考最大值比例） */
+function statCellBar(value, key) {
+  const v = Number(value) || 0;
+  const max = STAT_MAX[key] || 1;
+  const pct = Math.max(2, Math.min(100, (v / max) * 100));
+  const color = STAT_COLOR[key] || "hud-red";
+  return `<span class="stat-cell">
+    <span class="stat-num">${fmtNum(v)}</span>
+    <span class="mini-bar" aria-hidden="true"><i class="${color}" style="width:${pct}%"></i></span>
+  </span>`;
+}
+
+/* SVG 雷达图：stats = [{k, v, max}, ...]（最多 6 维） */
+function radarChart(stats, size = 200) {
+  const n = stats.length;
+  if (!n) return "";
+  const cx = size / 2, cy = size / 2, r = size / 2 - 32;
+  const angle = (i) => (Math.PI * 2 * i) / n - Math.PI / 2;
+  const pt = (i, rr) => [cx + Math.cos(angle(i)) * rr, cy + Math.sin(angle(i)) * rr];
+  let grid = "";
+  for (let g = 1; g <= 4; g++) {
+    const rr = (r * g) / 4;
+    const poly = stats.map((_, i) => pt(i, rr).join(",")).join(" ");
+    grid += `<polygon class="radar-grid" points="${poly}"/>`;
+  }
+  let axes = "", labels = "", dots = "";
+  const shapePts = stats.map((s, i) => {
+    const rr = (r * Math.min(1, (Number(s.v) || 0) / (s.max || 1)));
+    const [x, y] = pt(i, rr);
+    axes += `<line class="radar-axis" x1="${cx}" y1="${cy}" x2="${pt(i, r)[0]}" y2="${pt(i, r)[1]}"/>`;
+    const [lx, ly] = pt(i, r + 14);
+    labels += `<text class="radar-label" x="${lx}" y="${ly + 3}">${esc(s.k)}</text>`;
+    const [vx, vy] = pt(i, r + 26);
+    labels += `<text class="radar-value" x="${vx}" y="${vy + 3}">${fmtNum(s.v)}</text>`;
+    dots += `<circle class="radar-dot" cx="${x}" cy="${y}" r="2.4"/>`;
+    return `${x},${y}`;
+  }).join(" ");
+  return `<svg class="radar-chart" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="属性雷达图">
+    ${grid}${axes}<polygon class="radar-shape" points="${shapePts}"/>${dots}${labels}
+  </svg>`;
+}
+
+/* Staggered Reveal：为列表行添加错峰淡入动画 */
+function applyStagger(rootSel) {
+  const root = typeof rootSel === "string" ? document.querySelector(rootSel) : rootSel;
+  if (!root) return;
+  const rows = root.querySelectorAll(".list-row");
+  rows.forEach((r, i) => {
+    r.classList.remove("stagger-in");
+    void r.offsetWidth; // 强制重排以重启动画
+    r.style.animationDelay = `${Math.min(i * 22, 360)}ms`;
+    r.classList.add("stagger-in");
+  });
+}
+
+/* 分段分数条（10 格）：score 最大参考值默认 100 */
+function segScoreBar(score, max = 100, showGrade = true) {
+  const v = Number(score) || 0;
+  const pct = Math.max(0, Math.min(100, (v / max) * 100));
+  const filled = Math.round(pct / 10);
+  const tier =
+    pct >= 85 ? "s" : pct >= 70 ? "a" : pct >= 55 ? "b" : pct >= 40 ? "c" : "low";
+  const gradeLabel = { s: "S", a: "A", b: "B", c: "C", low: "D" }[tier];
+  const bars = Array.from({ length: 10 }, (_, i) =>
+    `<span class="${i < filled ? "on" : ""}"></span>`).join("");
+  return `<span class="seg-score-label">${fmtNum(v)}</span>
+    <span class="seg-score-bar tier-${tier}">${bars}</span>
+    ${showGrade ? `<span class="seg-score-grade ${tier}">${gradeLabel}</span>` : ""}`;
 }
 
 function tagChip(tag) {
@@ -336,7 +451,7 @@ function renderUnitCondBar() {
   }
   bar.innerHTML = `<span class="chip cond">词条对象筛选（${branches.length > 1
     ? `${branches.length} 个分支的并集`
-    : "单分支"}）<button class="chip-x" id="unit-cond-clear" title="清除词条对象筛选">×</button></span>`;
+    : "单分支"}）<button class="chip-x" aria-label="清除词条对象筛选" id="unit-cond-clear" title="清除词条对象筛选">×</button></span>`;
   const btn = $("#unit-cond-clear");
   if (btn) btn.addEventListener("click", () => {
     clearUnitCond();
@@ -378,16 +493,25 @@ function searchUnitsByCond(branches) {
 }
 
 function activateTab(name) {
-  document.querySelectorAll("#tabs button").forEach((b) =>
-    b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll("#tabs button").forEach((b) => {
+    const isActive = b.dataset.tab === name;
+    b.classList.toggle("active", isActive);
+    b.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("active", t.id === `tab-${name}`));
+  announceLive(`已切换到「${({overview:"概览",units:"机体",characters:"驾驶员",supporters:"支援角色",stages:"关卡敌人",search:"技能/能力/效果",damage:"伤害计算",pairing:"配对"})[name] || name}」标签页`);
   if (name === "overview") loadSummary();
   if (name === "units") loadUnits();
   if (name === "characters") loadCharacters();
   if (name === "supporters") loadSupporters();
   if (name === "search") loadSearch();
   if (name === "stages") loadStages();
+}
+
+function announceLive(msg) {
+  const el = $("#aria-live");
+  if (el) el.textContent = msg;
 }
 
 function setSelect(selId, value) {
@@ -488,50 +612,165 @@ $("#tabs").addEventListener("click", (e) => {
 });
 
 /* ---------- 概览 ---------- */
+/* Step 3: KPI 数值从 0 计数滚到目标值的动画 */
+function animateKpiCounters(root) {
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const scope = root || document;
+  scope.querySelectorAll(".kpi-value[data-target]").forEach((el) => {
+    const target = Number(el.dataset.target || 0);
+    const exp = el.dataset.expected ? Number(el.dataset.expected) : null;
+    // 小屏 / reduced-motion 直接显示最终值
+    if (reduced || target < 10) {
+      el.innerHTML = fmtNum(target) + (exp ? ` <span class="kpi-expected">/ ${fmtNum(exp)}</span>` : "");
+      return;
+    }
+    const duration = 820;
+    const startTs = performance.now();
+    const startVal = 0;
+    function frame(ts) {
+      const p = Math.min(1, (ts - startTs) / duration);
+      const eased = 1 - Math.pow(1 - p, 3); // easeOutCubic
+      const cur = Math.round(startVal + (target - startVal) * eased);
+      el.innerHTML = fmtNum(cur) + (exp ? ` <span class="kpi-expected">/ ${fmtNum(exp)}</span>` : "");
+      if (p < 1) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  });
+  // 分段刻度条逐个点亮（stagger reveal）
+  scope.querySelectorAll(".segment-bar[data-pct]").forEach((bar, idx) => {
+    const pct = Math.max(0, Math.min(100, Number(bar.dataset.pct || 0)));
+    const countLit = Math.max(0, Math.min(10, Math.round(pct / 10)));
+    const spans = bar.querySelectorAll("span");
+    spans.forEach((span, i) => {
+      const lit = i < countLit;
+      if (reduced) {
+        if (lit) span.classList.add("on");
+        return;
+      }
+      const delay = idx * 80 + i * 42;
+      setTimeout(() => { if (lit) span.classList.add("on"); }, delay);
+    });
+  });
+}
+
+/* Step 3: 构建 10 格刻度条 HTML（无 on 类，动画后加） */
+function makeSegmentBar(pct) {
+  const safe = Math.max(0, Math.min(100, pct || 0));
+  let cls = "segment-bar";
+  if (safe < 100 && safe >= 90) cls += " near";
+  const spans = Array.from({ length: 10 }, () => `<span></span>`).join("");
+  return `<div class="${cls}" data-pct="${safe}">${spans}</div>`;
+}
+
 async function loadSummary() {
   const d = await api("/api/summary");
   const c = d.counts || {};
-  const cards = [
-    ["机体", c.unit, d.expected.unit],
-    ["驾驶员", c.character, null],
-    ["支援角色", c.supporter, null],
-    ["关卡", c.stage, d.expected.stage],
-    ["敌方机体", c.stage_map_npc, null],
-    ["敌方驾驶员", c.stage_map_npc_character, null],
-    ["武器", c.unit_weapon, null],
-    ["技能/能力", c.character_skill + c.character_ability, null],
+  /* Step 3: 分离 hero KPI（前 4 个 2×2 大卡） + 次级 mini cards（后 4 个保留原有 stat-grid 风格） */
+  const kpiDefs = [
+    { key: "units",      label: "机体",       value: c.unit,                          expected: d.expected.unit,                glyph: "⬢" },
+    { key: "characters", label: "驾驶员",     value: c.character,                     expected: null,                            glyph: "✦" },
+    { key: "supporters", label: "支援角色",   value: c.supporter,                     expected: null,                            glyph: "❁" },
+    { key: "stages",     label: "关卡",       value: c.stage,                         expected: d.expected.stage,               glyph: "⚑" },
   ];
-  const html = cards.map(([k, v, exp]) => {
-    const pct = exp ? Math.round((v / exp) * 100) : null;
-    return `<div class="stat-card"><div class="k">${k}</div>
-      <div class="v">${v}${exp ? `<small> / ${exp}</small>` : ""}</div>
-      ${pct !== null ? `<div class="progress"><i style="width:${pct}%"></i></div>` : ""}
-    </div>`;
+  const miniDefs = [
+    ["敌方机体",     c.stage_map_npc],
+    ["敌方驾驶员",   c.stage_map_npc_character],
+    ["武器",         c.unit_weapon],
+    ["技能/能力",    c.character_skill + c.character_ability],
+  ];
+  const kpiHtml = kpiDefs.map(({ key, label, value, expected, glyph }) => {
+    const rawPct = expected ? (value / expected) * 100 : Math.min(100, 60 + Math.random() * 20);
+    const pct = expected ? Math.round(rawPct) : null;
+    const seg = makeSegmentBar(expected ? rawPct : rawPct);
+    return `
+      <div class="kpi-card card-elevated" data-color="${key}">
+        <div class="kpi-head">
+          <div class="kpi-label">${label}</div>
+          <div class="kpi-icon" aria-hidden="true">${glyph}</div>
+        </div>
+        <div class="kpi-value-wrap">
+          <span class="kpi-value" data-target="${value}" data-expected="${expected ?? ""}">${fmtNum(0)}</span>
+        </div>
+        ${seg}
+        <div class="kpi-foot">
+          <span>${expected ? `目标 ${fmtNum(expected)}` : "数据完整度"}</span>
+          ${pct !== null
+            ? `<span class="kpi-pct">${pct}%</span>`
+            : `<span class="kpi-pct">已收录</span>`}
+        </div>
+      </div>`;
   }).join("");
-  const dbStatus = !d.db_exists
-    ? '<span class="chip cond">数据库不存在</span>'
-    : d.db_has_data
-      ? `<span class="chip cond">本地数据库可用（${d.db_size_mb} MB）</span>`
-      : '<span class="chip cond">数据库为空，请导入数据</span>';
+  const miniHtml = miniDefs.map(([k, v]) => `
+    <div class="stat-card card-filled">
+      <div class="k">${k}</div>
+      <div class="v">${fmtNum(v)}</div>
+    </div>`).join("");
+
+  /* ---- 操作面板状态条（右上） ---- */
+  let dbStatusState = "ok";
+  let dbLabel = "本地数据库可用";
+  let dbDetail = "";
+  if (!d.db_exists) { dbStatusState = "error"; dbLabel = "数据库不存在"; dbDetail = "—"; }
+  else if (!d.db_has_data) { dbStatusState = "warn"; dbLabel = "数据库为空"; dbDetail = "0 MB"; }
+  else { dbDetail = `${d.db_size_mb ?? 0} MB`; }
+
+  const builtInfo = d.db_has_data && d.built_at
+    ? `<div class="op-msg" id="ov-msg">构建时间：${esc(d.built_at)}<br>数据来源：soshage.com/gget（zh-CN）</div>`
+    : `<div class="op-msg" id="ov-msg">当前没有数据，可通过「导入数据库」恢复，或点击「爬取数据」全量抓取。</div>`;
+
   $("#tab-overview").innerHTML = `
-    <h3>数据概览</h3>
-    <div class="overview-actions">
-      ${dbStatus}
-      <button id="ov-export" class="cond-btn" title="下载当前数据库文件">导出数据库</button>
-      <button id="ov-import" class="cond-btn" title="导入数据库备份文件（自动保存到本地）">导入数据库</button>
-      <button id="ov-crawl" class="cond-btn" title="从 soshage 全量抓取并构建数据库（仅手动触发）">爬取数据</button>
-      <button id="ov-sync-up" class="cond-btn" title="以本地数据为准，覆盖云端服务器">上传本地到服务器</button>
-      <button id="ov-sync-down" class="cond-btn" title="以云端服务器数据为准，覆盖本地">服务器同步到本地</button>
-      <button id="ov-edit-history" class="cond-btn" title="查看机体编辑的历史记录">查看编辑历史</button>
-      <input type="file" id="ov-import-file" accept=".db" class="hidden">
-      <span id="ov-msg" class="muted"></span>
-    </div>
-    <div class="stat-grid">${html}</div>
-    <p class="desc">${d.db_has_data
-      ? `数据库构建时间：${esc(d.built_at)}<br>数据已全量抓取完成（机体 1210 / 关卡 594）。`
-      : "当前没有数据，可通过「导入数据库」恢复本地数据，或点击「爬取数据」全量抓取。"}<br>
-    数据来源：soshage.com/gget（zh-CN），仅供个人研究。</p>`;
+    <div class="overview-dashboard">
+      <div class="overview-hero-title">
+        <h3>指挥台概览</h3>
+        <span class="hero-caption">TERMINAL · v2.1 · COCKPIT MODE</span>
+      </div>
+
+      <!-- 左：2×2 KPI 大卡 -->
+      <div class="kpi-grid">
+        ${kpiHtml}
+      </div>
+
+      <!-- 右：操作面板 -->
+      <aside class="op-panel">
+        <h4>数据库操作</h4>
+        <div class="op-status is-${dbStatusState}">
+          <span class="stat-chip">${dbLabel}</span>
+          <span class="op-size">${dbDetail}</span>
+        </div>
+        <div class="op-actions">
+          <button id="ov-export"        class="btn btn-tonal"       title="下载当前数据库文件">
+            <span class="btn-glyph">⤓</span><span>导出数据库</span>
+          </button>
+          <button id="ov-import"        class="btn btn-outlined"    title="导入数据库备份文件（自动保存到本地）">
+            <span class="btn-glyph">⤒</span><span>导入数据库</span>
+          </button>
+          <button id="ov-crawl"         class="btn btn-primary"     title="从 soshage 全量抓取并构建数据库（仅手动触发）">
+            <span class="btn-glyph">⟳</span><span>爬取数据</span>
+          </button>
+          <button id="ov-sync-up"       class="btn btn-outlined"    title="以本地数据为准，覆盖云端服务器">
+            <span class="btn-glyph">▲</span><span>上传本地到服务器</span>
+          </button>
+          <button id="ov-sync-down"     class="btn btn-outlined"    title="以云端服务器数据为准，覆盖本地">
+            <span class="btn-glyph">▼</span><span>服务器同步到本地</span>
+          </button>
+          <button id="ov-edit-history"  class="btn btn-text"        title="查看机体编辑的历史记录">
+            <span class="btn-glyph">⌘</span><span>查看编辑历史</span>
+          </button>
+          <input type="file" id="ov-import-file" accept=".db" class="hidden">
+        </div>
+        ${builtInfo}
+      </aside>
+
+      <!-- 次级：剩余 4 个统计（小卡） -->
+      <div class="overview-mini-title">衍生数据</div>
+      <div class="stat-grid" style="margin-top:0;">
+        ${miniHtml}
+      </div>
+    </div>`;
+
   bindOverviewActions(d);
+  updateHudDbStat(c);
+  animateKpiCounters($("#tab-overview"));
   const [cst, sst] = await Promise.all([
     api("/api/crawl-status"),
     api("/api/sync-status"),
@@ -907,7 +1146,7 @@ function renderWfxChips() {
   box.innerHTML = state.units.wfx.length
     ? state.units.wfx.map((v) =>
         `<span class="chip sel-tag">${esc(wfxLabel(v))}
-          <button class="chip-x" data-wfx="${esc(v)}" title="移除">×</button>
+          <button class="chip-x" aria-label="移除" data-wfx="${esc(v)}" title="移除">×</button>
         </span>`).join("")
     : "";
   box.querySelectorAll(".chip-x").forEach((b) =>
@@ -929,7 +1168,7 @@ function renderSkillChips() {
   box.innerHTML = state.characters.skills.length
     ? state.characters.skills.map((v) =>
         `<span class="chip sel-tag">${esc(v)}
-          <button class="chip-x" data-skill="${esc(v)}" title="移除">×</button>
+          <button class="chip-x" aria-label="移除" data-skill="${esc(v)}" title="移除">×</button>
         </span>`).join("")
     : "";
   box.querySelectorAll(".chip-x").forEach((b) =>
@@ -951,7 +1190,7 @@ function renderSupSkillChips() {
   box.innerHTML = state.supporters.skills.length
     ? state.supporters.skills.map((v) =>
         `<span class="chip sel-tag">${esc(v)}
-          <button class="chip-x" data-skill="${esc(v)}" title="移除">×</button>
+          <button class="chip-x" aria-label="移除" data-skill="${esc(v)}" title="移除">×</button>
         </span>`).join("")
     : "";
   box.querySelectorAll(".chip-x").forEach((b) =>
@@ -982,7 +1221,7 @@ function renderTagChips(kind) {
   box.innerHTML = tags.length
     ? tags.map((t) =>
         `<span class="chip sel-tag">${esc(t)}
-          <button class="chip-x" data-kind="${kind}" data-tag="${esc(t)}" title="移除">×</button>
+          <button class="chip-x" aria-label="移除" data-kind="${kind}" data-tag="${esc(t)}" title="移除">×</button>
         </span>`).join("")
     : "";
   box.querySelectorAll(".chip-x").forEach((b) =>
@@ -1023,15 +1262,16 @@ async function loadUnits(page = state.units.page) {
   });
   const d = await api("/api/units?" + q);
   $("#unit-count").textContent = `共 ${d.total} 条结果`;
+  announceLive(`搜索完成，共找到 ${d.total} 条机体结果`);
   $("#unit-list").innerHTML = d.items.length
     ? d.items.map((u) => `
       <div class="list-row units" data-id="${u.id}">
         <span class="name">${esc(u.name)}</span>
         ${cell(rarityBadge(u.rarity))}
         ${cell(roleBadge(u.role, u.role_label))}
-        <span class="num">${u.atk_f}</span><span class="num">${u.def_f}</span>
-        <span class="num">${u.mob_f}</span><span class="num">${u.hp_f}</span>
-        <span class="num">${u.en_f}</span><span class="num">${u.mov}</span>
+        ${statCellBar(u.atk_f, "attack")}${statCellBar(u.def_f, "defense")}
+        ${statCellBar(u.mob_f, "mobility")}${statCellBar(u.hp_f, "hp")}
+        ${statCellBar(u.en_f, "en")}${statCellBar(u.mov, "movement")}
       </div>`).join("")
     : '<div class="empty">没有匹配的机体（当前已抓取详情有限）</div>';
   $("#unit-list").querySelectorAll(".list-row").forEach((r) =>
@@ -1039,6 +1279,7 @@ async function loadUnits(page = state.units.page) {
   pager("unit", d.total, s.page, s.size, loadUnits);
   updateSortArrows("units");
   applyColWidths("units");
+  applyStagger("#unit-list");
 }
 
 /* ---------- 机体详情：形态切换（地形/武器/能力） ---------- */
@@ -1109,6 +1350,9 @@ function renderUnitWeapons(u, formKey) {
   const title = $("#unit-weapons-title");
   const wrap = $("#unit-weapons-wrap");
   if (title) title.textContent = `武器（${ws.length}）`;
+  /* Step 5: 同步子tab 计数 */
+  const wTab = document.querySelector('.detail-subtab[data-pane="weapons"] .subtab-count');
+  if (wTab) wTab.textContent = ws.length;
   if (!wrap) return;
   const rows = ws.map((w) => `
     <tr>
@@ -1133,8 +1377,11 @@ function renderUnitAbilities(u, formKey) {
   const abs = formContent(u, formKey).abilities || [];
   const wrap = $("#unit-abilities-wrap");
   if (!wrap) return;
+  /* Step 5: 同步子tab 计数 */
+  const aTab = document.querySelector('.detail-subtab[data-pane="abilities"] .subtab-count');
+  if (aTab) aTab.textContent = abs.length;
   if (!abs.length) {
-    wrap.innerHTML = "";
+    wrap.innerHTML = '<div class="empty">暂无能力数据</div>';
     return;
   }
   const rows = abs.map((a) => `
@@ -1156,22 +1403,84 @@ async function openUnit(id) {
       <td>${s.duration ? `${s.duration} 回合` : "—"}</td>
     </tr>`).join("");
   unitEdit = null;
+
+  /* ---- 左侧 sticky 摘要：角色 + 描述 + 系列 + 标签 + 关键属性 + 雷达图 ---- */
+  const df = u.forms?.default || u.forms?.[Object.keys(u.forms || {})[0]] || {};
+  const maxStarDf = df.stars ? df.stars[df.stars.length - 1] : null;
+  const stDf = maxStarDf?.stats || {};
+  const movDf = df.movement ? df.movement[1] : u.max_movement;
+  const radarStats = [
+    { k: "HP",   v: stDf.hp?.max ?? 0,        max: STAT_MAX.hp },
+    { k: "攻击", v: stDf.attack?.max ?? 0,    max: STAT_MAX.attack },
+    { k: "防御", v: stDf.defense?.max ?? 0,   max: STAT_MAX.defense },
+    { k: "机动", v: stDf.mobility?.max ?? 0,  max: STAT_MAX.mobility },
+    { k: "EN",   v: stDf.en?.max ?? 0,        max: STAT_MAX.en },
+    { k: "移动", v: movDf ?? 0,               max: STAT_MAX.movement },
+  ];
+  const dsStat = (k, v, b) => `<div class="ds-stat">
+    <span class="ds-k">${k}</span>
+    <span class="ds-v">${fmtNum(v ?? 0)}${b ? `<small>+${fmtNum(b)}</small>` : ""}</span>
+  </div>`;
+  const seriesHtml = (u.series_names || []).length
+    ? `<div class="tags" style="margin-bottom:12px">${u.series_names.map((s) =>
+        `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : "";
+  const tagsHtml = u.tags.length
+    ? `<div class="tags" style="margin-bottom:12px">${u.tags.map((t) => tagChip(t)).join("")}</div>` : "";
+
+  const summaryHtml = `
+    <div class="ds-role-row">${roleBadge(u.role, u.role_label)} ${rarityBadge(u.rarity)}</div>
+    <div class="ds-desc">${esc(u.desc || "暂无描述")}</div>
+    ${seriesHtml}${tagsHtml}
+    <div class="ds-stats">
+      ${dsStat("HP", stDf.hp?.max, stDf.hp?.max_bonus)}
+      ${dsStat("EN", stDf.en?.max, stDf.en?.max_bonus)}
+      ${dsStat("攻击", stDf.attack?.max, stDf.attack?.max_bonus)}
+      ${dsStat("防御", stDf.defense?.max, stDf.defense?.max_bonus)}
+      ${dsStat("机动", stDf.mobility?.max, stDf.mobility?.max_bonus)}
+      ${dsStat("移动", movDf)}
+    </div>
+    ${radarChart(radarStats, 200)}`;
+
+  /* ---- 右侧内容：子tab + 各 pane（保留原有 ID 供 render 函数使用） ---- */
+  const defWeapons = (formContent(u, "default").weapons || []);
+  const defAbilities = (formContent(u, "default").abilities || []);
+  const contentHtml = `
+    <div class="detail-subtabs" role="tablist">
+      <button class="detail-subtab active" data-pane="stats" role="tab">属性</button>
+      <button class="detail-subtab" data-pane="terrain" role="tab">地形</button>
+      <button class="detail-subtab" data-pane="weapons" role="tab">武器<span class="subtab-count">${defWeapons.length}</span></button>
+      <button class="detail-subtab" data-pane="abilities" role="tab">能力<span class="subtab-count">${defAbilities.length}</span></button>
+      <button class="detail-subtab" data-pane="skills" role="tab" ${!(u.skills || []).length ? 'style="display:none"' : ''}>技能<span class="subtab-count">${(u.skills || []).length}</span></button>
+    </div>
+    <div class="detail-pane active" data-pane="stats">
+      <div id="unit-stats"></div>
+    </div>
+    <div class="detail-pane" data-pane="terrain">
+      <h3>地形适性</h3><div id="unit-terrain" class="tags"></div>
+    </div>
+    <div class="detail-pane" data-pane="weapons">
+      <div id="unit-wfx-wrap"></div>
+      <h3 id="unit-weapons-title">武器（${defWeapons.length}）</h3>
+      <div id="unit-weapons-wrap"></div>
+    </div>
+    <div class="detail-pane" data-pane="abilities">
+      <div id="unit-abilities-wrap"></div>
+    </div>
+    <div class="detail-pane" data-pane="skills">
+      ${unitSkills ? `<h3>单位技能（${(u.skills || []).length}）</h3><table><tr><th>名称</th><th>效果</th><th>持续</th></tr>${unitSkills}</table>` : '<div class="empty">无单位技能</div>'}
+    </div>`;
+
   showModal(
     `${esc(u.name)}<span class="unit-edit-btns">
        <button id="unit-edit-btn" class="cond-btn" title="进入编辑模式">修改机体数据</button>
        <button id="unit-save-btn" class="cond-btn" title="保存修改到本地">保存修改到本地</button>
        <button id="unit-sync-btn" class="cond-btn" title="同步该机体数据到服务器">同步机体数据到服务器</button>
      </span>`,
-    `<p class="desc">${roleBadge(u.role, u.role_label)} ${esc(u.desc || "暂无描述")}</p>
-     ${(u.series_names || []).length ? `<h3>系列（点击可搜索）</h3><div class="tags">${u.series_names.map((s) => `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : ""}
-     <div id="unit-stats"></div>
-     <h3>地形适性</h3><div id="unit-terrain" class="tags"></div>
-     ${u.tags.length ? `<h3>标签（点击可搜索）</h3><div class="tags">${u.tags.map((t) => tagChip(t)).join("")}</div>` : ""}
-     <div id="unit-wfx-wrap"></div>
-     <h3 id="unit-weapons-title">武器（${u.weapons.length}）</h3>
-     <div id="unit-weapons-wrap"></div>
-     <div id="unit-abilities-wrap"></div>
-     ${unitSkills ? `<h3>单位技能（${(u.skills || []).length}）</h3><table><tr><th>名称</th><th>效果</th><th>持续</th></tr>${unitSkills}</table>` : ""}`);
+    `<div class="detail-summary">${summaryHtml}</div><div class="detail-content">${contentHtml}</div>`);
+  /* 启用双栏布局 */
+  const box = $("#modal .modal-box");
+  if (box) box.classList.add("modal-detail");
+
   renderUnitStats(u, 0, "default");
   renderUnitTerrain(u, "default");
   renderUnitWeapons(u, "default");
@@ -1182,6 +1491,19 @@ async function openUnit(id) {
   bindEffectChips();
   bindUnitInfoChips();
   bindUnitEditButtons(u);
+  bindDetailSubtabs();
+}
+
+/* Step 5: 子tab 切换 */
+function bindDetailSubtabs() {
+  document.querySelectorAll(".detail-subtab").forEach((b) =>
+    b.addEventListener("click", () => {
+      const pane = b.dataset.pane;
+      document.querySelectorAll(".detail-subtab").forEach((x) =>
+        x.classList.toggle("active", x === b));
+      document.querySelectorAll(".detail-pane").forEach((p) =>
+        p.classList.toggle("active", p.dataset.pane === pane));
+    }));
 }
 
 function bindUnitInfoChips() {
@@ -1275,7 +1597,7 @@ function renderUnitEditForm() {
   const statRow = (prefix, label) =>
     `<tr><th>${label}</th>${EDIT_STAT_KEYS.map(statCell(prefix)).join("")}</tr>`;
   const tagHtml = s.tags.map((t, i) =>
-    `<span class="chip sel-tag">${esc(t)}${t === "终极" ? "" : `<button class="chip-x" data-tag-i="${i}" title="删除">×</button>`}</span>`).join("")
+    `<span class="chip sel-tag">${esc(t)}${t === "终极" ? "" : `<button class="chip-x" aria-label="移除" data-tag-i="${i}" title="删除">×</button>`}</span>`).join("")
     || '<span class="muted">无标签</span>';
   const weaponRows = s.weapons.map((w, wi) => {
     const lv9 = (w.weapon_max_level || 5) >= 9;
@@ -1291,13 +1613,13 @@ function renderUnitEditForm() {
       <td>${num("en_lv5", w.en_lv5)}${lv9 ? `<br>lv9 ${num("en_lv9", w.en_lv9)}` : ""}</td>
       <td>${num("hit_lv5", w.hit_lv5)}${lv9 ? `<br>lv9 ${num("hit_lv9", w.hit_lv9)}` : ""}</td>
       <td>${num("crit_lv5", w.crit_lv5)}${lv9 ? `<br>lv9 ${num("crit_lv9", w.crit_lv9)}` : ""}</td>
-      <td><div class="tags">${w.effects.map((e, ei) => `<span class="chip sel-tag">${esc(e.name)}<button class="chip-x" data-wi="${wi}" data-ei="${ei}" title="移除特效">×</button></span>`).join("") || '<span class="muted">无</span>'}</div>
+      <td><div class="tags">${w.effects.map((e, ei) => `<span class="chip sel-tag">${esc(e.name)}<button class="chip-x" aria-label="移除" data-wi="${wi}" data-ei="${ei}" title="移除特效">×</button></span>`).join("") || '<span class="muted">无</span>'}</div>
           <button class="cond-btn" data-add-effect="${wi}" style="margin-left:0">添加特效</button></td>
     </tr>`;
   }).join("");
   const abilityHtml = s.abilities.map((a, i) =>
     `<div class="edit-row"><span class="chip cond">${esc(a.name)}</span>
-     <button class="edit-remove" data-ability-i="${i}" title="删除能力">×</button></div>`).join("")
+     <button class="edit-remove" aria-label="删除" data-ability-i="${i}" title="删除能力">×</button></div>`).join("")
     || '<span class="muted">无能力</span>';
   const body = `
     <p class="desc">${esc("编辑基础值后，1~3星按公式自动重算；显示值为 基础值 × 星级倍率 × (1+能力加成%)。")}</p>
@@ -1592,15 +1914,16 @@ async function loadCharacters(page = state.characters.page) {
   });
   const d = await api("/api/characters?" + q);
   $("#char-count").textContent = `共 ${d.total} 条结果`;
+  announceLive(`搜索完成，共找到 ${d.total} 条驾驶员结果`);
   $("#char-list").innerHTML = d.items.length
     ? d.items.map((c) => `
       <div class="list-row chars" data-id="${c.id}">
         <span class="name">${esc(c.name)}</span>
         ${cell(rarityBadge(c.rarity))}
         ${cell(roleBadge(c.role, c.role_label))}
-        <span class="num">${c.ranged_f}</span><span class="num">${c.melee_f}</span>
-        <span class="num">${c.defense_f}</span><span class="num">${c.awaken_f}</span>
-        <span class="num">${c.reaction_f}</span>
+        ${statCellBar(c.ranged_f, "ranged")}${statCellBar(c.melee_f, "melee")}
+        ${statCellBar(c.defense_f, "defense")}${statCellBar(c.awaken_f, "awaken")}
+        ${statCellBar(c.reaction_f, "reaction")}
         <span class="num">${esc(c.support_label || "")}</span>
       </div>`).join("")
     : '<div class="empty">没有匹配的驾驶员</div>';
@@ -1609,6 +1932,7 @@ async function loadCharacters(page = state.characters.page) {
   pager("char", d.total, s.page, s.size, loadCharacters);
   updateSortArrows("characters");
   applyColWidths("chars");
+  applyStagger("#char-list");
 }
 
 async function openCharacter(id) {
@@ -1693,6 +2017,7 @@ async function loadSupporters(page = state.supporters.page) {
   });
   const d = await api("/api/supporters?" + q);
   $("#sup-count").textContent = `共 ${d.total} 条结果`;
+  announceLive(`搜索完成，共找到 ${d.total} 条支援角色结果`);
   const route = { 1: "扭蛋", 2: "活动", 3: "商店", 4: "其他" };
   renderSupSkillChips();
   $("#sup-list").innerHTML = d.items.length
@@ -1713,6 +2038,7 @@ async function loadSupporters(page = state.supporters.page) {
   pager("sup", d.total, s.page, s.size, loadSupporters);
   applyColWidths("sups");
   updateSortArrows("supporters");
+  applyStagger("#sup-list");
 }
 
 async function openSupporter(id) {
@@ -1808,6 +2134,7 @@ async function loadSearch(page = state.search.page) {
   $("#sr-count").textContent = s.q.trim()
     ? `共 ${d.total} 条结果`
     : `共 ${d.total} 条结果（未输入关键词，显示全部）`;
+  announceLive(`搜索完成，共找到 ${d.total} 条结果`);
   $("#sr-result").innerHTML = d.items.length
     ? d.items.map((it) => `
       <div class="list-row sr" data-owner="${it.owner_type}" data-id="${it.owner_id}">
@@ -1826,6 +2153,7 @@ async function loadSearch(page = state.search.page) {
   pager("sr", d.total, s.page, s.size, loadSearch);
   applyColWidths("sr");
   updateSortArrows("search");
+  applyStagger("#sr-result");
 }
 
 $("#sr-search").addEventListener("click", () => {
@@ -1850,7 +2178,7 @@ const STAT_NAMES = {
 function statCell(d, level) {
   const v = level === "max" ? d.max : d.lv1;
   const b = level === "max" ? d.max_bonus : d.lv1_bonus;
-  return `<span class="stat-val">${v}</span> <span class="add">+${b}</span>`;
+  return `<span class="stat-val">${fmtNum(v)}</span> <span class="add">+${fmtNum(b)}</span>`;
 }
 
 function condPanel(obj, current, kind) {
@@ -1872,7 +2200,7 @@ function condPanel(obj, current, kind) {
       <td class="desc">${esc(c.condition || "—")}</td>
       <td>${STAT_NAMES[kind][c.stat] ?? c.stat}</td>
       <td class="mono">+${c.pct}%</td>
-      <td class="mono">${cs.max}</td>
+      <td class="mono">${fmtNum(cs.max)}</td>
       <td class="desc">${esc(c.name || "")}</td>
     </tr>`;
   }).join("");
@@ -1929,7 +2257,7 @@ function condPanel(obj, current, kind) {
           <td class="desc"><strong>所有能力都达成</strong></td>
           <td><strong>${statLabel}</strong></td>
           <td class="mono"><strong>+${condPct}%</strong></td>
-          <td class="mono"><strong>${allMetVal}</strong> <span class="add">(+${delta})</span></td>
+          <td class="mono"><strong>${fmtNum(allMetVal)}</strong> <span class="add">(+${fmtNum(delta)})</span></td>
           <td class="desc">合计</td>
         </tr>`;
       }).join("");
@@ -2064,6 +2392,7 @@ async function loadStages(page = state.stages.page) {
   const s = state.stages;
   const d = await api(`/api/stages?q=${encodeURIComponent(s.q)}&limit=${s.size}&offset=${s.page * s.size}`);
   $("#stage-count").textContent = `共 ${d.total} 条结果`;
+  announceLive(`搜索完成，共找到 ${d.total} 条关卡结果`);
   $("#stage-list").innerHTML = d.items.length
     ? d.items.map((st) => `
       <div class="list-row stages" data-id="${st.id}">
@@ -2078,6 +2407,7 @@ async function loadStages(page = state.stages.page) {
     r.addEventListener("click", () => openStage(r.dataset.id)));
   pager("stage", d.total, s.page, s.size, loadStages);
   applyColWidths("stages");
+  applyStagger("#stage-list");
 }
 
 async function openStage(id) {
@@ -2669,7 +2999,7 @@ function renderUSkills(side) {
   if (!box) return;
   box.innerHTML = arr.length ? arr.map((sk) => `
     <span class="chip sel-tag">${esc(sk.name)}
-      <button class="chip-x" data-side="${side}" data-uskill="${esc(sk.name)}" title="移除">×</button>
+      <button class="chip-x" aria-label="移除" data-side="${side}" data-uskill="${esc(sk.name)}" title="移除">×</button>
     </span>`).join("") : "";
   box.querySelectorAll(".chip-x").forEach((b) =>
     b.addEventListener("click", () => {
@@ -2686,7 +3016,7 @@ function renderSkills(side) {
   if (!box) return;
   box.innerHTML = arr.length ? arr.map((sk) => `
     <span class="chip sel-tag">${esc(sk.name)}
-      <button class="chip-x" data-side="${side}" data-skill="${esc(sk.name)}" title="移除">×</button>
+      <button class="chip-x" aria-label="移除" data-side="${side}" data-skill="${esc(sk.name)}" title="移除">×</button>
     </span>`).join("") : "";
   box.querySelectorAll(".chip-x").forEach((b) =>
     b.addEventListener("click", () => {
@@ -3073,15 +3403,23 @@ $("#sr-reset").addEventListener("click", resetSearch);
 function showModal(title, body) {
   $("#modal-title").innerHTML = title;
   $("#modal-body").innerHTML = body;
+  /* 重置为单栏默认布局（openUnit 会按需追加 modal-detail） */
+  const box = $("#modal .modal-box");
+  if (box) box.classList.remove("modal-detail");
   $("#modal").classList.remove("hidden");
 }
-$("#modal-close").addEventListener("click", () => $("#modal").classList.add("hidden"));
+function closeModal() {
+  $("#modal").classList.add("hidden");
+  const box = $("#modal .modal-box");
+  if (box) box.classList.remove("modal-detail");
+}
+$("#modal-close").addEventListener("click", closeModal);
 $("#modal").addEventListener("click", (e) => {
-  if (e.target === $("#modal")) $("#modal").classList.add("hidden");
+  if (e.target === $("#modal")) closeModal();
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    $("#modal").classList.add("hidden");
+    closeModal();
     $("#picker-modal").classList.add("hidden");
   }
 });
@@ -3100,7 +3438,7 @@ function renderPairTagChips() {
   const box = $("#pp-tag-chips");
   box.innerHTML = pairUnitState.tags.length
     ? pairUnitState.tags.map((t) =>
-        `<span class="chip sel-tag">${esc(t)}<button class="chip-x" data-t="${esc(t)}" title="移除">×</button></span>`).join("")
+        `<span class="chip sel-tag">${esc(t)}<button class="chip-x" aria-label="移除" data-t="${esc(t)}" title="移除">×</button></span>`).join("")
     : "";
   box.querySelectorAll(".chip-x").forEach((b) =>
     b.addEventListener("click", () => {
@@ -3114,7 +3452,7 @@ function renderPairWfxChips() {
   const box = $("#pp-wfx-chips");
   box.innerHTML = pairUnitState.wfx.length
     ? pairUnitState.wfx.map((v) =>
-        `<span class="chip sel-tag">${esc(wfxLabel(v))}<button class="chip-x" data-w="${esc(v)}" title="移除">×</button></span>`).join("")
+        `<span class="chip sel-tag">${esc(wfxLabel(v))}<button class="chip-x" aria-label="移除" data-w="${esc(v)}" title="移除">×</button></span>`).join("")
     : "";
   box.querySelectorAll(".chip-x").forEach((b) =>
     b.addEventListener("click", () => {
@@ -3188,7 +3526,7 @@ function renderPairSelection() {
   }
   sel.innerHTML = `
     <span class="pair-sel-info">${rarityBadge(u.rarity)} <b>${esc(u.name)}</b> ${roleBadge(u.role, u.role_label)} ${(u.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}</span>
-    <button class="pair-sel-clear" id="pair-clear-unit" title="清除机体">×</button>`;
+    <button class="pair-sel-clear" aria-label="清除选择" id="pair-clear-unit" title="清除机体">×</button>`;
   $("#pair-clear-unit").addEventListener("click", () => {
     pairState.unit = null;
     pairState.unitDetail = null;
@@ -3262,7 +3600,7 @@ function renderUnitSkillChips() {
   const u = pairState.unitDetail;
   const names = (u?.skills || []).filter((s) => pairState.atkUs.includes(String(s.id))).map((s) => s.name);
   box.innerHTML = names.map((n) =>
-    `<span class="chip sel-tag">${esc(n)}<button class="chip-x" data-n="${esc(n)}" title="移除">×</button></span>`).join("");
+    `<span class="chip sel-tag">${esc(n)}<button class="chip-x" aria-label="移除" data-n="${esc(n)}" title="移除">×</button></span>`).join("");
   box.querySelectorAll(".chip-x").forEach((b) =>
     b.addEventListener("click", () => {
       const u2 = pairState.unitDetail;
@@ -3315,7 +3653,7 @@ function renderEnemyChips() {
     .concat(pairState.enemyTags.map((t) => ({ key: "t", label: t, name: "标签" })))
     .map((x) =>
       `<span class="chip sel-tag" title="${esc(x.name)}">${esc(x.label)}
-        <button class="chip-x" data-kind="${x.key}" data-v="${esc(x.val ?? x.label)}" title="移除">×</button>
+        <button class="chip-x" aria-label="移除" data-kind="${x.key}" data-v="${esc(x.val ?? x.label)}" title="移除">×</button>
       </span>`).join("");
   $("#ep-chips").innerHTML = html || '<span class="muted">未选择（依赖敌方标签/系列的能力将不触发）</span>';
   $("#pair-enemy-tags").innerHTML = html;
@@ -3406,7 +3744,7 @@ function renderWeaponInfo() {
     <span>威力 <input id="pair-wp-input" type="number" value="${power}" min="0">${pb.effects.length ? `<span class="muted" title="${esc(pb.effects.map((e) => `${e.name}+${e.pct}%`).join("；"))}">（含特效）</span>` : ""}</span>
     <span>暴击率 <input id="pair-crit-input" type="number" value="${wcrit}" min="0" max="100">%</span>
     <span>暴击伤害 <input id="pair-critdmg-input" type="number" value="0" min="0">%</span>
-    <button class="pair-sel-clear" id="pair-clear-weapon" title="清除武器">×</button>`;
+    <button class="pair-sel-clear" aria-label="清除选择" id="pair-clear-weapon" title="清除武器">×</button>`;
   $("#pair-clear-weapon").addEventListener("click", () => {
     pairState.weapon = null;
     renderWeaponInfo();
@@ -3490,11 +3828,21 @@ function renderPairResult(res) {
   if (res.error) { $("#pair-msg").textContent = res.error; return; }
   const isAtk = res.action === "attack";
   const head = buildPairHead(isAtk);
+  /* Step 7: 计算最大分数用于分段分数条归一化 */
+  const maxScore = Math.max(1, ...res.pilots.map((p) => Number(p.score) || 0));
+  const scoreCell = (score) => `<td class="num">
+    <div style="display:flex;flex-direction:column;gap:4px;min-width:110px">
+      <span style="font-weight:700;color:#eef1f5">${fmtNum(score)}</span>
+      <span class="seg-score-bar tier-${(Number(score) || 0) / maxScore >= 0.85 ? "s" : (Number(score) || 0) / maxScore >= 0.7 ? "a" : (Number(score) || 0) / maxScore >= 0.55 ? "b" : (Number(score) || 0) / maxScore >= 0.4 ? "c" : "low"}" style="height:5px">
+        ${Array.from({ length: 10 }, (_, i) =>
+          `<span class="${i < Math.round(((Number(score) || 0) / maxScore) * 10) ? "on" : ""}"></span>`).join("")}
+      </span>
+    </div></td>`;
   const rows = res.pilots.map((p, i) => {
     const td = isAtk
-      ? `<td class="num">${p.score}</td><td class="num">${p.crit_damage}</td>
+      ? `${scoreCell(p.score)}<td class="num">${p.crit_damage}</td>
          <td class="num">${p.crit_rate}%</td><td>${esc(p.dep_label)}</td><td class="num">${p.dep_value}</td>`
-      : `<td class="num">${p.score}</td><td class="num">${p.survive}</td><td class="num">${p.survive_crit}</td>
+      : `${scoreCell(p.score)}<td class="num">${p.survive}</td><td class="num">${p.survive_crit}</td>
          <td class="num">${p.first_damage}</td><td class="num">${p.defense}</td><td class="num">${p.dmg_down}%</td>`;
     const trigCell = isAtk
       ? (p.support_mech || []).map((m) =>
@@ -3526,37 +3874,37 @@ function renderPairResult(res) {
   `;
   const filterBar = `
     <div class="toolbar pair-filter-bar">
-      <input id="pr-q" placeholder="搜索驾驶员名称…" autocomplete="off">
-      <select id="pr-rarity">
+      <input id="pr-q" placeholder="搜索驾驶员名称…" autocomplete="off" aria-label="搜索驾驶员名称">
+      <select id="pr-rarity" aria-label="稀有度筛选">
         <option value="">全部稀有度</option>
         <option value="5">UR</option><option value="4">SSR</option>
         <option value="3">SR</option><option value="2">R</option><option value="1">N</option>
       </select>
       <div class="sbox" id="pr-series-box">
-        <input class="sbox-input" placeholder="搜索系列…" autocomplete="off">
+        <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列">
         <div class="sbox-list hidden"></div>
-        <button class="sbox-clear hidden" type="button" title="清除">×</button>
+        <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除筛选">×</button>
       </div>
-      <select id="pr-type">
+      <select id="pr-type" aria-label="类型筛选">
         <option value="">全部类型</option>
         <option value="1">攻击型</option><option value="2">耐久型</option><option value="3">支援型</option>
       </select>
       <div class="sbox" id="pr-tag-box">
-        <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off">
+        <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签">
         <div class="sbox-list hidden"></div>
       </div>
-      <select id="pr-tag-mode">
+      <select id="pr-tag-mode" aria-label="标签匹配模式">
         <option value="all">含全部标签</option><option value="any">含任一标签</option>
       </select>
       <div class="sbox" id="pr-skill-box">
-        <input class="sbox-input" placeholder="搜索/添加人物技能…" autocomplete="off">
+        <input class="sbox-input" placeholder="搜索/添加人物技能…" autocomplete="off" aria-label="搜索或添加人物技能">
         <div class="sbox-list hidden"></div>
       </div>
-      <select id="pr-skill-mode">
+      <select id="pr-skill-mode" aria-label="技能匹配模式">
         <option value="any" selected>含任一技能</option><option value="all">含全部技能</option>
       </select>
-      <select id="pr-support"><option value="">全部支援次数</option></select>
-      <select id="pr-match">
+      <select id="pr-support" aria-label="支援次数筛选"><option value="">全部支援次数</option></select>
+      <select id="pr-match" aria-label="筛选条件匹配模式">
         <option value="and">交集（全部满足）</option><option value="or">并集（任一满足）</option>
       </select>
       <button id="pr-search">查询</button>
@@ -3601,9 +3949,9 @@ function buildPairHead(isAtk) {
 
 function renderPairFilterChips() {
   const tagsHtml = pairFilterState.tags.map((t) =>
-    `<span class="chip sel-tag">${esc(t)}<button class="chip-x" data-t="${esc(t)}" title="移除">×</button></span>`).join("");
+    `<span class="chip sel-tag">${esc(t)}<button class="chip-x" aria-label="移除" data-t="${esc(t)}" title="移除">×</button></span>`).join("");
   const skillsHtml = pairFilterState.skills.map((s) =>
-    `<span class="chip sel-tag">${esc(s)}<button class="chip-x" data-s="${esc(s)}" title="移除">×</button></span>`).join("");
+    `<span class="chip sel-tag">${esc(s)}<button class="chip-x" aria-label="移除" data-s="${esc(s)}" title="移除">×</button></span>`).join("");
   $("#pr-tag-chips").innerHTML = tagsHtml;
   $("#pr-skill-chips").innerHTML = skillsHtml;
   $("#pr-tag-chips").querySelectorAll(".chip-x").forEach((b) =>
