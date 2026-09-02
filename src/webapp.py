@@ -148,6 +148,148 @@ def api_edit_history(limit: int = 500) -> list:
     return [dict(r) for r in rows]
 
 
+def refetch_unit_diff(unit_id: int) -> dict:
+    """爬取单个机体最新数据 → 内存库规范化 → 与本地逐字段对比，返回差异列表。
+
+    流程：http_get_json 抓最新 raw → :memory: 库执行 SCHEMA + ingest_one_unit
+    规范化 → 读出新行 → 与主库现有行逐字段对比（机体/武器/能力/技能）。
+    """
+    from . import api
+    from .db import SCHEMA, _build_tag_map, ingest_one_unit
+    try:
+        new_raw = api.http_get_json(f"/unit/{unit_id}")
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"爬取失败：{exc}"}
+    src = _conn()
+    try:
+        tag_map = _build_tag_map()
+        series_by_id = {
+            r[0]: r[1] for r in src.execute("SELECT id, name FROM series").fetchall()
+        }
+        # 内存库规范化新数据
+        mem = sqlite3.connect(":memory:")
+        mem.row_factory = sqlite3.Row
+        mem.executescript(SCHEMA)
+        try:
+            ingest_one_unit(mem, new_raw, tag_map, series_by_id, f"unit/{unit_id}.json")
+            nrow = mem.execute("SELECT * FROM unit WHERE id = ?", (unit_id,)).fetchone()
+            if not nrow:
+                return {"ok": False, "error": "新数据规范化后未生成机体行"}
+            nu = dict(nrow)
+            n_weapons = [dict(w) for w in mem.execute(
+                "SELECT * FROM unit_weapon WHERE unit_id = ? ORDER BY sort", (unit_id,)
+            ).fetchall()]
+            n_abilities = [dict(a) for a in mem.execute(
+                "SELECT * FROM unit_ability WHERE unit_id = ? ORDER BY sort", (unit_id,)
+            ).fetchall()]
+            n_skill_count = mem.execute(
+                "SELECT COUNT(*) FROM unit_skill WHERE unit_id = ?", (unit_id,)
+            ).fetchone()[0]
+        finally:
+            mem.close()
+        # 读本地现有数据
+        lrow = src.execute("SELECT * FROM unit WHERE id = ?", (unit_id,)).fetchone()
+        if not lrow:
+            return {"ok": False, "error": "本地不存在该机体"}
+        lu = dict(lrow)
+        l_weapons = [dict(w) for w in src.execute(
+            "SELECT * FROM unit_weapon WHERE unit_id = ? ORDER BY sort", (unit_id,)
+        ).fetchall()]
+        l_abilities = [dict(a) for a in src.execute(
+            "SELECT * FROM unit_ability WHERE unit_id = ? ORDER BY sort", (unit_id,)
+        ).fetchall()]
+        l_skill_count = src.execute(
+            "SELECT COUNT(*) FROM unit_skill WHERE unit_id = ?", (unit_id,)
+        ).fetchone()[0]
+    finally:
+        src.close()
+
+    diff: list[dict] = []
+    skip_u = {"id", "raw_path"}
+    for k, v in nu.items():
+        if k in skip_u:
+            continue
+        cv = lu.get(k)
+        if str(cv) != str(v):
+            diff.append({"section": "机体", "field": k, "old": cv, "new": v})
+    # 武器（按 weapon_id 配对）
+    cw = {w.get("weapon_id"): w for w in l_weapons}
+    nw = {w.get("weapon_id"): w for w in n_weapons}
+    # 跳过 ingest 不写入的列（这些列由编辑/其他来源填充，对比会产生假差异）
+    skip_w = {"id", "unit_id", "sort", "raw_path", "weapon_attrs",
+              "power_lv9", "en_lv9", "hit_lv9", "crit_lv9"}
+    for wid, w in nw.items():
+        old = cw.get(wid)
+        if old is None:
+            diff.append({"section": "武器", "field": w.get("name") or wid,
+                         "old": "本地缺失", "new": "新增"})
+            continue
+        for k, v in w.items():
+            if k in skip_w:
+                continue
+            if str(old.get(k)) != str(v):
+                diff.append({"section": "武器", "field": f"{w.get('name')}·{k}",
+                             "old": old.get(k), "new": v})
+    for wid in set(cw) - set(nw):
+        diff.append({"section": "武器", "field": cw[wid].get("name") or wid,
+                     "old": "本地存在", "new": "已移除"})
+    # 能力（按 ability_id 配对）
+    ca = {a.get("ability_id"): a for a in l_abilities}
+    na = {a.get("ability_id"): a for a in n_abilities}
+    skip_a = {"id", "unit_id", "sort"}
+    for aid, a in na.items():
+        old = ca.get(aid)
+        if old is None:
+            diff.append({"section": "能力", "field": a.get("name") or aid,
+                         "old": "本地缺失", "new": "新增"})
+            continue
+        for k, v in a.items():
+            if k in skip_a:
+                continue
+            if str(old.get(k)) != str(v):
+                diff.append({"section": "能力", "field": f"{a.get('name')}·{k}",
+                             "old": old.get(k), "new": v})
+    for aid in set(ca) - set(na):
+        diff.append({"section": "能力", "field": ca[aid].get("name") or aid,
+                     "old": "本地存在", "new": "已移除"})
+    # 技能（数量对比）
+    if l_skill_count != n_skill_count:
+        diff.append({"section": "技能", "field": "数量",
+                     "old": l_skill_count, "new": n_skill_count})
+    return {"ok": True, "name": nu.get("name"), "identical": not diff, "diff": diff}
+
+
+def refetch_unit_apply(unit_id: int) -> dict:
+    """重新爬取单个机体并以网页数据覆盖本地（保存 raw + 删旧子表 + 单条 ingest）。"""
+    from . import api
+    from .db import _build_tag_map, ingest_one_unit
+    try:
+        new_raw = api.http_get_json(f"/unit/{unit_id}")
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"爬取失败：{exc}"}
+    # 保存 raw JSON（覆盖本地 raw 文件）
+    api.atomic_write_json(config.RAW_DIR / "unit" / f"{unit_id}.json", new_raw)
+    # 主库覆盖：先删旧子表行，再单条 ingest（主表 INSERT OR REPLACE，子表重插）
+    conn = _write_conn()
+    try:
+        conn.execute("DELETE FROM unit_weapon WHERE unit_id = ?", (unit_id,))
+        conn.execute("DELETE FROM unit_ability WHERE unit_id = ?", (unit_id,))
+        conn.execute("DELETE FROM unit_skill WHERE unit_id = ?", (unit_id,))
+        tag_map = _build_tag_map()
+        series_by_id = {
+            r[0]: r[1] for r in conn.execute("SELECT id, name FROM series").fetchall()
+        }
+        ingest_one_unit(conn, new_raw, tag_map, series_by_id, f"unit/{unit_id}.json")
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        conn.close()
+        return {"ok": False, "error": f"覆盖失败：{exc}"}
+    conn.close()
+    return {"ok": True, "message": f"已用网页数据覆盖机体 {unit_id}",
+            "name": new_raw.get("name")}
+
+
 def _run_sync_worker(direction: str) -> None:
     try:
         _sync_state.update({
@@ -3223,6 +3365,18 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 uid = 0
             return self._send_json(unit_sync_diff(uid))
+        if path == "/api/refetch-unit-diff":
+            try:
+                uid = int(q.get("unit_id", ["0"])[0])
+            except ValueError:
+                uid = 0
+            return self._send_json(refetch_unit_diff(uid))
+        if path == "/api/refetch-unit-apply":
+            try:
+                uid = int(q.get("unit_id", ["0"])[0])
+            except ValueError:
+                uid = 0
+            return self._send_json(refetch_unit_apply(uid))
         if path == "/api/export":
             if not config.DB_PATH.exists():
                 return self._send_json({"error": "数据库不存在"}, 404)

@@ -559,6 +559,145 @@ def _collect_ssp_overrides(u: dict) -> dict:
     return out
 
 
+def ingest_one_unit(conn, u: dict, tag_map: dict[int, str], series_by_id: dict, raw_path: str) -> None:
+    """规范化单条机体 raw JSON 写入连接：主表 INSERT OR REPLACE，子表 INSERT OR IGNORE。
+
+    供单条覆盖爬取（refetch apply）使用，与 ingest_units 循环体逻辑保持一致。
+    """
+    st = u.get("stats") or {}
+    terrain = u.get("terrain") or {}
+    ssp_overrides = _collect_ssp_overrides(u)
+    ssp_st = ssp_overrides['stats']
+    tags = [t.get("tag", {}).get("name") for t in u.get("tags") or [] if t.get("tag")]
+    series_ids = sorted({
+        int(s["series_id"])
+        for s in u.get("series_set") or []
+        if s.get("series_id")
+    })
+    stat_bonuses: dict[str, int] = {}
+    conditional_bonuses: list[dict] = []
+    for a in u.get("abilities") or []:
+        ab = a.get("ability") or {}
+        ab_name = (ab.get("detail") or {}).get("name") or ab.get("name") or ""
+        for t in ab.get("traits") or []:
+            tr = t.get("trait") or t
+            ub, cb = parse_ability_stat_bonuses(
+                tr.get("desc") or "",
+                "unit",
+                tr.get("active_condition"),
+                tag_map,
+                series_by_id,
+            )
+            for key, pct in ub.items():
+                stat_bonuses[key] = stat_bonuses.get(key, 0) + pct
+            for item in cb:
+                item["name"] = ab_name
+                conditional_bonuses.append(item)
+    conn.execute(
+        """INSERT OR REPLACE INTO unit
+           (id, rarity, name, short_name, models, desc, icon, series_id, series_ids, role,
+            acquisition, area, body_type, tr, defend, evade, ult,
+            hp, en, attack, defense, mobility, movement,
+            max_hp, max_en, max_attack, max_defense, max_mobility, max_movement,
+            sp_hp, sp_en, sp_attack, sp_defense, sp_mobility, sp_movement,
+            sp_max_hp, sp_max_en, sp_max_attack, sp_max_defense, sp_max_mobility, sp_max_movement,
+            ssp_hp, ssp_en, ssp_attack, ssp_defense, ssp_mobility, ssp_movement,
+            ssp_max_hp, ssp_max_en, ssp_max_attack, ssp_max_defense, ssp_max_mobility, ssp_max_movement,
+            terrain, tags, transform_to, mechanism_set, base_skill, main_unit,
+            stat_bonuses, conditional_bonuses, raw_path)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (_i(u["id"]), _i(u.get("rarity")), u.get("name"), u.get("short_name"),
+         u.get("models"), u.get("desc"), u.get("icon"), _series_id(u),
+         json.dumps(series_ids, ensure_ascii=False),
+         _i(u.get("role")), _i(u.get("acquisition")), _i(u.get("area")),
+         _i(u.get("body_type")), _i(u.get("tr")), _b(u.get("defend")),
+         _b(u.get("evade")), _b(u.get("ult")),
+         _i(st.get("hp")), _i(st.get("en")), _i(st.get("attack")),
+         _i(st.get("defense")), _i(st.get("mobility")), _i(st.get("movement")),
+         _i(st.get("max_hp")), _i(st.get("max_en")), _i(st.get("max_attack")),
+         _i(st.get("max_defense")), _i(st.get("max_mobility")), _i(st.get("max_movement")),
+         _i(st.get("sp_hp")), _i(st.get("sp_en")), _i(st.get("sp_attack")),
+         _i(st.get("sp_defense")), _i(st.get("sp_mobility")), _i(st.get("sp_movement")),
+         _i(st.get("sp_max_hp")), _i(st.get("sp_max_en")), _i(st.get("sp_max_attack")),
+         _i(st.get("sp_max_defense")), _i(st.get("sp_max_mobility")), _i(st.get("sp_max_movement")),
+         _i(ssp_st.get("ssp_hp") or st.get("ssp_hp")),
+         _i(ssp_st.get("ssp_en") or st.get("ssp_en")),
+         _i(ssp_st.get("ssp_attack") or st.get("ssp_attack")),
+         _i(ssp_st.get("ssp_defense") or st.get("ssp_defense")),
+         _i(ssp_st.get("ssp_mobility") or st.get("ssp_mobility")),
+         _i(ssp_st.get("ssp_movement") or st.get("ssp_movement")),
+         _i(ssp_st.get("ssp_max_hp") or st.get("ssp_max_hp")),
+         _i(ssp_st.get("ssp_max_en") or st.get("ssp_max_en")),
+         _i(ssp_st.get("ssp_max_attack") or st.get("ssp_max_attack")),
+         _i(ssp_st.get("ssp_max_defense") or st.get("ssp_max_defense")),
+         _i(ssp_st.get("ssp_max_mobility") or st.get("ssp_max_mobility")),
+         _i(ssp_st.get("ssp_max_movement") or st.get("ssp_max_movement")),
+         json.dumps(terrain, ensure_ascii=False),
+         json.dumps(tags, ensure_ascii=False),
+         json.dumps(u.get("transform_to") or [], ensure_ascii=False),
+         _i(u.get("mechanism_set")), _i(u.get("base_skill")),
+         _i(u.get("main_unit")),
+         json.dumps(stat_bonuses, ensure_ascii=False),
+         json.dumps(conditional_bonuses, ensure_ascii=False),
+         raw_path),
+    )
+    for w in u.get("weapons") or []:
+        wep = w.get("weapon") or {}
+        ws = wep.get("weapon_status") or {}
+        top = parse_weapon_max_level(ws)
+        weapon_effects = top["effects"]
+        conn.execute(
+            """INSERT OR IGNORE INTO unit_weapon
+               (unit_id, weapon_id, sort, name, type, work_type, attack_attr,
+                weapon_attr, weapon_capability, weapon_effect, weapon_level_up_material,
+                range_min, range_max, power, en, hit_rate, critical_rate,
+                power_lv5, en_lv5, hit_lv5, crit_lv5,
+                weapon_max_level,
+                map_weapon_range, map_weapon_desc, map_weapon_trait,
+                map_weapon_can_use_after_move, is_full_animation, weapon_effects)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (_i(u["id"]), _i(wep.get("id") or ws.get("id")), _i(w.get("sort")),
+             wep.get("name"), _i(wep.get("type")), _i(wep.get("work_type")),
+             _i(wep.get("attack_attr")), _i(wep.get("weapon_attr")),
+             _i(wep.get("weapon_capability")), _i(wep.get("weapon_effect")),
+             _i(wep.get("weapon_level_up_material")),
+             _i(ws.get("range_min")), _i(ws.get("range_max")), _i(ws.get("power")),
+             _i(ws.get("en")), _i(ws.get("hit_rate")), _i(ws.get("critical_rate")),
+             _i(top["power"]), _i(top["en"]), _i(top["hit"]), _i(top["crit"]),
+             _i(top["level"]),
+             ws.get("map_weapon_effect_range"),
+             _i(ws.get("map_weapon_desc")), _i(ws.get("map_weapon_trait")),
+             _b(ws.get("map_weapon_can_use_after_move")), _b(wep.get("is_full_animation")),
+             json.dumps(weapon_effects, ensure_ascii=False)),
+        )
+    for a in u.get("abilities") or []:
+        ab = a.get("ability") or {}
+        detail = ab.get("detail") or {}
+        traits = [t.get("trait") or t for t in ab.get("traits") or []]
+        conn.execute(
+            """INSERT OR IGNORE INTO unit_ability
+               (unit_id, ability_id, sort, name, desc, ability_type,
+                buff_debuff, is_stackable, stack_limit, traits)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (_i(u["id"]), _i(ab.get("id")), _i(a.get("sort")),
+             detail.get("name") or ab.get("name"), detail.get("desc"),
+             _i(ab.get("ability_type")), _i(detail.get("buff_debuff")),
+             _b(detail.get("is_stackable")), _i(detail.get("stack_limit")),
+             json.dumps(traits, ensure_ascii=False)),
+        )
+    for sk in u.get("skills") or []:
+        skill = sk.get("skill") or {}
+        traits = skill.get("trait_set") or []
+        conn.execute(
+            """INSERT OR IGNORE INTO unit_skill
+               (unit_id, skill_id, sort, name, desc, sp, duration, traits)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (_i(u["id"]), _i(skill.get("id")), _i(sk.get("sort")),
+             skill.get("name"), skill.get("desc"), _i(skill.get("sp")),
+             _i(skill.get("duration")), json.dumps(traits, ensure_ascii=False)),
+        )
+
+
 def ingest_units(conn, tag_map: dict[int, str]):
     n = 0
     series_by_id = {

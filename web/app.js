@@ -1475,6 +1475,7 @@ async function openUnit(id) {
        <button id="unit-edit-btn" class="cond-btn" title="进入编辑模式">修改机体数据</button>
        <button id="unit-save-btn" class="cond-btn" title="保存修改到本地">保存修改到本地</button>
        <button id="unit-sync-btn" class="cond-btn" title="同步该机体数据到服务器">同步机体数据到服务器</button>
+       <button id="unit-refetch-btn" class="cond-btn" title="重新从网站爬取该机体数据并对比差异，确认后以网页数据覆盖本地">重新爬取</button>
      </span>`,
     `<div class="detail-summary">${summaryHtml}</div><div class="detail-content">${contentHtml}</div>`);
   /* 启用双栏布局 */
@@ -1539,10 +1540,14 @@ function bindUnitEditButtons(u) {
   const editBtn = $("#unit-edit-btn");
   const saveBtn = $("#unit-save-btn");
   const syncBtn = $("#unit-sync-btn");
+  const refetchBtn = $("#unit-refetch-btn");
   if (editBtn) editBtn.addEventListener("click", () => enterUnitEdit(u));
   if (saveBtn) saveBtn.addEventListener("click", () => saveUnitEdit());
   if (syncBtn) syncBtn.addEventListener("click", () => {
     openUnitSync(u.id);
+  });
+  if (refetchBtn) refetchBtn.addEventListener("click", () => {
+    refetchCurrentUnit(u.id);
   });
 }
 
@@ -1809,6 +1814,56 @@ async function openUnitSync(unitId) {
     }
   });
   $("#unit-sync-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+}
+
+/* 重新爬取单个机体：抓网页最新 → 对比本地差异 → 确认后以网页数据覆盖本地 → 刷新详情 */
+async function refetchCurrentUnit(unitId) {
+  if (unitEdit) {
+    $("#modal").classList.add("hidden");
+    showModal("提示", '<p class="desc">还有未保存的修改，请先「保存修改到本地」再重新爬取。</p>');
+    return;
+  }
+  showModal("正在爬取", '<p class="desc">正在从网站获取最新数据并对比差异，请稍候…</p>');
+  let d;
+  try {
+    d = await api(`/api/refetch-unit-diff?unit_id=${unitId}`);
+  } catch (e) {
+    showModal("爬取失败", `<p class="desc">${esc(e.message || e)}</p>`);
+    return;
+  }
+  if (!d.ok) {
+    showModal("无法爬取", `<p class="desc">${esc(d.error || "未知错误")}</p>`);
+    return;
+  }
+  if (d.identical) {
+    showModal("重新爬取机体数据",
+      '<p class="desc" style="color:var(--ok)">网页数据与本地完全一致，无需覆盖。</p>');
+    return;
+  }
+  const diffRows = (d.diff || []).map((x) =>
+    `<tr><td>${esc(x.section)}</td><td>${esc(x.field)}</td><td class="desc">${esc(x.old)}</td><td class="desc">${esc(x.new)}</td></tr>`).join("");
+  showModal("重新爬取机体数据",
+    `<p class="desc">以下为网页最新数据与本地数据库的差异（共 ${d.diff.length} 处）。确认后将以网页数据覆盖本地（仅这一台机体，其他数据不变）：</p>
+     <table><tr><th>项目</th><th>字段</th><th>本地</th><th>网页</th></tr>${diffRows}</table>
+     <div class="calc-actions"><button id="refetch-confirm" class="cond-btn">确认以网页数据覆盖本地</button>
+     <button id="refetch-cancel" class="cond-btn">取消</button></div>`);
+  $("#refetch-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+  $("#refetch-confirm").addEventListener("click", async () => {
+    const btn = $("#refetch-confirm");
+    btn.disabled = true;
+    btn.textContent = "覆盖中…";
+    try {
+      const r = await api(`/api/refetch-unit-apply?unit_id=${unitId}`);
+      if (r.ok) {
+        await openUnit(unitId);  /* 刷新详情（详情本身即覆盖成功的反馈） */
+        announceLive(`已用网页数据覆盖机体 ${r.name || unitId}`);
+      } else {
+        showModal("覆盖失败", `<p class="desc">${esc(r.error || "未知错误")}</p>`);
+      }
+    } catch (e) {
+      showModal("覆盖失败", `<p class="desc">${esc(e.message || e)}</p>`);
+    }
+  });
 }
 
 async function openUnitTagPicker() {
