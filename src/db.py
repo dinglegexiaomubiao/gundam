@@ -367,6 +367,17 @@ CREATE TABLE IF NOT EXISTS unit_edit_log (
   source TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_edit_log_unit ON unit_edit_log(unit_id);
+
+CREATE TABLE IF NOT EXISTS character_edit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER,
+  field TEXT,
+  old_value TEXT,
+  new_value TEXT,
+  edited_at TEXT,
+  source TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_char_edit_log_char ON character_edit_log(character_id);
 """
 
 
@@ -844,105 +855,179 @@ def ingest_units(conn, tag_map: dict[int, str]):
     print(f"机体入库 {n} 台")
 
 
+def ingest_one_character(conn, c: dict, tag_map: dict[int, str],
+                         series_by_id: dict[int, str], raw_path: str) -> None:
+    """规范化并入库单名驾驶员（供全量入库与单条覆盖爬取共用）。
+
+    与 ingest_characters 单条循环体逻辑一致：主行 INSERT OR REPLACE，
+    子表 INSERT OR IGNORE，并重算派生列 stat_bonuses / conditional_bonuses /
+    support_info。
+    """
+    char_id = _i(c["id"])
+    st = c.get("stats") or {}
+    tags = [t.get("tag", {}).get("name") for t in c.get("tags") or [] if t.get("tag")]
+    stat_bonuses: dict[str, int] = {}
+    conditional_bonuses: list[dict] = []
+    for ab in c.get("abilities") or []:
+        ability = ab.get("ability") or {}
+        ab_name = (ability.get("detail") or {}).get("name") or ability.get("name") or ""
+        for t in ability.get("traits") or []:
+            tr = t.get("trait") or t
+            ub, cb = parse_ability_stat_bonuses(
+                tr.get("desc") or "",
+                "character",
+                tr.get("active_condition"),
+                tag_map,
+                series_by_id,
+            )
+            for key, pct in ub.items():
+                stat_bonuses[key] = stat_bonuses.get(key, 0) + pct
+            for item in cb:
+                item["name"] = ab_name
+                conditional_bonuses.append(item)
+    series_id = None
+    char_series_ids = set()
+    for ss in c.get("series_set") or []:
+        if ss.get("series_id"):
+            series_id = ss["series_id"]
+            char_series_ids.add(int(ss["series_id"]))
+    support_info = _support_info(c.get("abilities") or [], c.get("skills") or [])
+    conn.execute(
+        """INSERT OR REPLACE INTO character
+           (id, rarity, role, is_playable, name, sort_name, abbreviation, desc,
+            icon, series_set_id, main_character_id, acquisition,
+            acquisition_voice, killed_quote, voice_resource_id,
+            ranged, melee, defense, reaction, awaken,
+            max_ranged, max_melee, max_defense, max_reaction, max_awaken,
+            sp_ranged, sp_melee, sp_defense, sp_reaction, sp_awaken,
+            sp_max_ranged, sp_max_melee, sp_max_defense, sp_max_reaction, sp_max_awaken,
+            series_id, series_ids, tags, stat_bonuses, conditional_bonuses,
+            support_info, raw_path)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (char_id, _i(c.get("rarity")), _i(c.get("role")),
+         _b(c.get("is_playable")), c.get("name"), c.get("sort_name"),
+         c.get("abbreviation"), c.get("desc"), c.get("icon"),
+         _i(c.get("series_set_id")), _i(c.get("main_character_id")),
+         _i(c.get("acquisition")), c.get("acquisition_voice"),
+         c.get("killed_quote"), c.get("voice_resource_id"),
+         _i(st.get("ranged")), _i(st.get("melee")), _i(st.get("defense")),
+         _i(st.get("reaction")), _i(st.get("awaken")),
+         _i(st.get("max_ranged")), _i(st.get("max_melee")),
+         _i(st.get("max_defense")), _i(st.get("max_reaction")),
+         _i(st.get("max_awaken")),
+         _i(st.get("sp_ranged")), _i(st.get("sp_melee")),
+         _i(st.get("sp_defense")), _i(st.get("sp_reaction")),
+         _i(st.get("sp_awaken")),
+         _i(st.get("sp_max_ranged")), _i(st.get("sp_max_melee")),
+         _i(st.get("sp_max_defense")), _i(st.get("sp_max_reaction")),
+         _i(st.get("sp_max_awaken")),
+         series_id,
+         json.dumps(sorted(char_series_ids), ensure_ascii=False),
+         json.dumps(tags, ensure_ascii=False),
+         json.dumps(stat_bonuses, ensure_ascii=False),
+         json.dumps(conditional_bonuses, ensure_ascii=False),
+         json.dumps(support_info, ensure_ascii=False),
+         raw_path),
+    )
+    for sk in c.get("skills") or []:
+        skill = sk.get("skill") or {}
+        traits = [t.get("trait") or t for t in skill.get("trait_set") or []]
+        conn.execute(
+            """INSERT OR IGNORE INTO character_skill
+               (character_id, character_skill_id, sort, level, name, desc, sp,
+                duration, is_auto_usage, auto_usage_priority, traits)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (char_id, _i(skill.get("id")), _i(sk.get("sort")),
+             _i(sk.get("level")), skill.get("name"), skill.get("desc"),
+             _i(skill.get("sp")), _i(skill.get("duration")),
+             _b(skill.get("is_auto_usage")), _i(skill.get("auto_usage_priority")),
+             json.dumps(traits, ensure_ascii=False)),
+        )
+    for ab in c.get("abilities") or []:
+        ability = ab.get("ability") or {}
+        detail = ability.get("detail") or {}
+        traits = [t.get("trait") or t for t in ability.get("traits") or []]
+        conn.execute(
+            """INSERT OR IGNORE INTO character_ability
+               (character_id, ability_id, sort, level, name, desc, ability_type, traits)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (char_id, _i(ability.get("id")), _i(ab.get("sort")),
+             _i(ab.get("level")), detail.get("name") or ability.get("name"),
+             detail.get("desc"), _i(ability.get("ability_type")),
+             json.dumps(traits, ensure_ascii=False)),
+        )
+
+
 def ingest_characters(conn, tag_map: dict[int, str]):
     chars = _load_json(config.RAW_DIR / "character.json")
     series_by_id = {
         r[0]: r[1] for r in conn.execute("SELECT id, name FROM series").fetchall()
     }
     for c in chars:
-        st = c.get("stats") or {}
-        tags = [t.get("tag", {}).get("name") for t in c.get("tags") or [] if t.get("tag")]
-        stat_bonuses: dict[str, int] = {}
-        conditional_bonuses: list[dict] = []
-        for ab in c.get("abilities") or []:
-            ability = ab.get("ability") or {}
-            ab_name = (ability.get("detail") or {}).get("name") or ability.get("name") or ""
-            for t in ability.get("traits") or []:
-                tr = t.get("trait") or t
-                ub, cb = parse_ability_stat_bonuses(
-                    tr.get("desc") or "",
-                    "character",
-                    tr.get("active_condition"),
-                    tag_map,
-                    series_by_id,
-                )
-                for key, pct in ub.items():
-                    stat_bonuses[key] = stat_bonuses.get(key, 0) + pct
-                for item in cb:
-                    item["name"] = ab_name
-                    conditional_bonuses.append(item)
-        series_id = None
-        char_series_ids = set()
-        for ss in c.get("series_set") or []:
-            if ss.get("series_id"):
-                series_id = ss["series_id"]
-                char_series_ids.add(int(ss["series_id"]))
-        support_info = _support_info(c.get("abilities") or [], c.get("skills") or [])
-        conn.execute(
-            """INSERT OR REPLACE INTO character
-               (id, rarity, role, is_playable, name, sort_name, abbreviation, desc,
-                icon, series_set_id, main_character_id, acquisition,
-                acquisition_voice, killed_quote, voice_resource_id,
-                ranged, melee, defense, reaction, awaken,
-                max_ranged, max_melee, max_defense, max_reaction, max_awaken,
-                sp_ranged, sp_melee, sp_defense, sp_reaction, sp_awaken,
-                sp_max_ranged, sp_max_melee, sp_max_defense, sp_max_reaction, sp_max_awaken,
-                series_id, series_ids, tags, stat_bonuses, conditional_bonuses,
-                support_info, raw_path)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (_i(c["id"]), _i(c.get("rarity")), _i(c.get("role")),
-             _b(c.get("is_playable")), c.get("name"), c.get("sort_name"),
-             c.get("abbreviation"), c.get("desc"), c.get("icon"),
-             _i(c.get("series_set_id")), _i(c.get("main_character_id")),
-             _i(c.get("acquisition")), c.get("acquisition_voice"),
-             c.get("killed_quote"), c.get("voice_resource_id"),
-             _i(st.get("ranged")), _i(st.get("melee")), _i(st.get("defense")),
-             _i(st.get("reaction")), _i(st.get("awaken")),
-             _i(st.get("max_ranged")), _i(st.get("max_melee")),
-             _i(st.get("max_defense")), _i(st.get("max_reaction")),
-             _i(st.get("max_awaken")),
-             _i(st.get("sp_ranged")), _i(st.get("sp_melee")),
-             _i(st.get("sp_defense")), _i(st.get("sp_reaction")),
-             _i(st.get("sp_awaken")),
-             _i(st.get("sp_max_ranged")), _i(st.get("sp_max_melee")),
-             _i(st.get("sp_max_defense")), _i(st.get("sp_max_reaction")),
-             _i(st.get("sp_max_awaken")),
-             series_id,
-             json.dumps(sorted(char_series_ids), ensure_ascii=False),
-             json.dumps(tags, ensure_ascii=False),
-             json.dumps(stat_bonuses, ensure_ascii=False),
-             json.dumps(conditional_bonuses, ensure_ascii=False),
-             json.dumps(support_info, ensure_ascii=False),
-             "character.json"),
-        )
-        for sk in c.get("skills") or []:
-            skill = sk.get("skill") or {}
-            traits = [t.get("trait") or t for t in skill.get("trait_set") or []]
-            conn.execute(
-                """INSERT OR IGNORE INTO character_skill
-                   (character_id, character_skill_id, sort, level, name, desc, sp,
-                    duration, is_auto_usage, auto_usage_priority, traits)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (_i(c["id"]), _i(skill.get("id")), _i(sk.get("sort")),
-                 _i(sk.get("level")), skill.get("name"), skill.get("desc"),
-                 _i(skill.get("sp")), _i(skill.get("duration")),
-                 _b(skill.get("is_auto_usage")), _i(skill.get("auto_usage_priority")),
-                 json.dumps(traits, ensure_ascii=False)),
-            )
-        for ab in c.get("abilities") or []:
-            ability = ab.get("ability") or {}
-            detail = ability.get("detail") or {}
-            traits = [t.get("trait") or t for t in ability.get("traits") or []]
-            conn.execute(
-                """INSERT OR IGNORE INTO character_ability
-                   (character_id, ability_id, sort, level, name, desc, ability_type, traits)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                (_i(c["id"]), _i(ability.get("id")), _i(ab.get("sort")),
-                 _i(ab.get("level")), detail.get("name") or ability.get("name"),
-                 detail.get("desc"), _i(ability.get("ability_type")),
-                 json.dumps(traits, ensure_ascii=False)),
-            )
+        ingest_one_character(conn, c, tag_map, series_by_id, "character.json")
     print(f"驾驶员入库 {len(chars)} 人")
+
+
+def recompute_character_derived(conn, char_id: int) -> None:
+    """按 character_ability 已存 traits 重算派生列（stat_bonuses /
+    conditional_bonuses / support_info）并回写。
+
+    驾驶员编辑增删/改动能力后调用，与 ingest 派生逻辑保持一致
+    （trait 描述解析百分比加成，能力不计技能）。
+    """
+    rows = conn.execute(
+        "SELECT name, traits FROM character_ability WHERE character_id = ?",
+        (char_id,),
+    ).fetchall()
+    tag_map = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
+    series_by_id = {
+        r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")
+    }
+    stat_bonuses: dict[str, int] = {}
+    conditional_bonuses: list[dict] = []
+    support = {"defense": {"count": 0, "cond": False},
+               "attack": {"count": 0, "cond": False},
+               "extra": {"count": 0, "cond": False}}
+    for row in rows:
+        ab_name = row["name"] or ""
+        try:
+            traits = json.loads(row["traits"] or "[]")
+        except json.JSONDecodeError:
+            traits = []
+        if not isinstance(traits, list):
+            traits = []
+        for t in traits:
+            if not isinstance(t, dict):
+                continue
+            desc = t.get("desc") or ""
+            ub, cb = parse_ability_stat_bonuses(
+                desc, "character", t.get("active_condition"),
+                tag_map, series_by_id,
+            )
+            for key, pct in ub.items():
+                stat_bonuses[key] = stat_bonuses.get(key, 0) + pct
+            for item in cb:
+                item["name"] = ab_name
+                conditional_bonuses.append(item)
+            ac = t.get("active_condition") or {}
+            has_cond = any(
+                v not in (None, "", 0, False, [])
+                for k, v in ac.items()
+                if k not in ("id", "trait_condition_set_id")
+            )
+            for kind, rx in _SUPPORT_RES:
+                m = rx.search(desc)
+                if m:
+                    support[kind]["count"] += int(m.group(1))
+                    if has_cond:
+                        support[kind]["cond"] = True
+    conn.execute(
+        "UPDATE character SET stat_bonuses=?, conditional_bonuses=?, support_info=? "
+        "WHERE id=?",
+        (json.dumps(stat_bonuses, ensure_ascii=False),
+         json.dumps(conditional_bonuses, ensure_ascii=False),
+         json.dumps(support, ensure_ascii=False), char_id),
+    )
 
 
 def ingest_supporters(conn, tag_map: dict[int, str]):

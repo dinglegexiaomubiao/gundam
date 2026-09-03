@@ -309,14 +309,15 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--accent2); border-left: 3p
 }
 .effect-block .effect { color: var(--text); font-size: 13px; font-weight: 600; }
 .effect-block .tags { margin-top: 6px; }
-.unit-edit-btns { display: inline-flex; gap: 6px; margin-left: 10px; flex-wrap: wrap; }
-.unit-edit-btns .cond-btn { margin-left: 0; padding: 3px 10px; font-size: 12px; }
+.unit-edit-btns, .char-edit-btns { display: inline-flex; gap: 6px; margin-left: 10px; flex-wrap: wrap; }
+.unit-edit-btns .cond-btn, .char-edit-btns .cond-btn { margin-left: 0; padding: 3px 10px; font-size: 12px; }
 .edit-input {
   width: 74px; background: var(--panel2); border: 1px solid var(--line);
   border-radius: 6px; color: var(--text); padding: 3px 6px; font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 .edit-input.wide { width: 130px; }
+textarea.edit-input { width: 240px; min-height: 40px; resize: vertical; font-family: inherit; }
 .edit-select {
   background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
   color: var(--text); padding: 3px 6px; font-size: 12px;
@@ -1757,92 +1758,44 @@ nav button.active::after {
 }
 .detail-summary .ds-stat .ds-v small { color: var(--ok); font-weight: 600; font-size: 11px; margin-left: 2px; }
 
-/* ---- 5.3 雷达图（SVG） ---- */
-.radar-chart {
-  margin: 8px auto 4px;
-  display: block;
+/* ---- 5.3 左侧小结标题（机体备注 / 机体属性 / 地形适性） ---- */
+.detail-summary .ds-sec {
+  margin: 18px 0 8px;
+  font-size: 12.5px;
+  color: var(--accent2);
+  letter-spacing: .05em;
 }
-.radar-chart .radar-grid { stroke: var(--outline-variant); stroke-width: 0.6; fill: none; }
-.radar-chart .radar-axis { stroke: var(--outline-variant); stroke-width: 0.5; }
-.radar-chart .radar-shape {
-  fill: rgba(230, 69, 60, 0.18);
-  stroke: var(--accent);
-  stroke-width: 1.4;
-  filter: drop-shadow(0 0 4px rgba(230, 69, 60, 0.4));
-}
-.radar-chart .radar-dot { fill: var(--accent2); stroke: #1a1405; stroke-width: 0.8; }
-.radar-chart .radar-label {
-  font-size: 9.5px;
-  fill: var(--muted);
-  font-family: var(--font-mono);
-  text-anchor: middle;
-  letter-spacing: 0.04em;
-}
-.radar-chart .radar-value {
-  font-size: 10px;
-  font-weight: 700;
-  fill: #eef1f5;
-  font-family: var(--font-display);
-  text-anchor: middle;
-}
+#unit-wfx-wrap { margin-bottom: 2px; }
+#unit-wfx-wrap .ds-sec { margin-bottom: 6px; }
 
-/* ---- 5.4 右侧内容区 + 子tab ---- */
+/* 5.3a 左侧属性区控件紧凑化 + 达成条件开关 */
+.detail-summary .star-bar {
+  gap: 5px;
+  margin-bottom: 8px;
+}
+.detail-summary .star-label { font-size: 12px; margin-right: 2px; }
+.detail-summary .form-btn, .detail-summary .star-btn { padding: 4px 9px; font-size: 12px; }
+.cond-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  margin: 2px 0 10px;
+}
+.cond-row .tags { margin: 0; }
+.cond-chip { cursor: pointer; }
+.cond-chip:hover { border-color: var(--accent2); color: var(--accent2); }
+.cond-chip.on { border-color: var(--accent); color: var(--accent2); background: rgba(230, 69, 60, 0.14); }
+
+/* ---- 5.4 右侧内容区（无 tab，区块顺序堆叠） ---- */
 .detail-content {
   padding: 16px 20px 20px;
   overflow-y: auto;
   overscroll-behavior: contain;
   min-width: 0;
 }
-.detail-subtabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--outline-variant);
-  margin-bottom: 14px;
-  position: sticky;
-  top: -16px;
-  background: linear-gradient(180deg, var(--surface) 60%, transparent);
-  padding-top: 6px;
-  margin-left: -20px;
-  margin-right: -20px;
-  padding-left: 20px;
-  padding-right: 20px;
-  z-index: 3;
-}
-.detail-subtab {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--muted);
-  padding: 8px 14px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  position: relative;
-  transition: color 180ms ease, border-color 180ms ease;
-  letter-spacing: 0.02em;
-}
-.detail-subtab:hover { color: var(--text); }
-.detail-subtab.active {
-  color: var(--accent2);
-  border-bottom-color: var(--accent);
-}
-.detail-subtab .subtab-count {
-  display: inline-block;
-  margin-left: 4px;
-  padding: 0 6px;
-  border-radius: 8px;
-  background: var(--surface-variant);
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 600;
-}
-.detail-subtab.active .subtab-count { background: rgba(230, 69, 60, 0.18); color: var(--accent2); }
-.detail-pane { display: none; }
-.detail-pane.active { display: block; animation: pane-fade 240ms ease; }
-@keyframes pane-fade {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+.detail-content h3 { margin: 22px 0 10px; }
+.detail-content > h3:first-child { margin-top: 6px; }
 
 /* 响应式：小屏单栏 */
 @media (max-width: 1023px) {
@@ -1899,8 +1852,7 @@ nav button.active::after {
   .list-row.stagger-in,
   .tab.active,
   .modal:not(.hidden) .modal-box,
-  .modal:not(.hidden),
-  .detail-pane.active {
+  .modal:not(.hidden) {
     animation: none !important;
   }
 }

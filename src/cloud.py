@@ -533,6 +533,218 @@ def restore_unit_locally(unit: dict) -> None:
         con.close()
 
 
+def _character_local(char_id: int):
+    """读取本地单驾驶员：character / skills / abilities。"""
+    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        c = con.execute("SELECT * FROM character WHERE id = ?", (char_id,)).fetchone()
+        if not c:
+            return None
+        c = dict(c)
+        c["skills"] = [
+            dict(r) for r in con.execute(
+                "SELECT * FROM character_skill WHERE character_id = ? ORDER BY sort",
+                (char_id,),
+            ).fetchall()
+        ]
+        c["abilities"] = [
+            dict(r) for r in con.execute(
+                "SELECT * FROM character_ability WHERE character_id = ? ORDER BY sort",
+                (char_id,),
+            ).fetchall()
+        ]
+        return c
+    finally:
+        con.close()
+
+
+def restore_character_locally(snap: dict) -> None:
+    """把单驾驶员快照整行写回本地库（爬取重建后保留编辑用）。"""
+    con = sqlite3.connect(config.DB_PATH)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA foreign_keys=ON")
+
+    def cols_sql(keys):
+        return ", ".join(f'"{c}"' for c in keys)
+
+    def ph(n):
+        return ", ".join("?" * n)
+
+    try:
+        con.execute("BEGIN")
+        con.execute("DELETE FROM character_ability WHERE character_id = ?",
+                    (snap["id"],))
+        con.execute("DELETE FROM character_skill WHERE character_id = ?",
+                    (snap["id"],))
+        con.execute("DELETE FROM character WHERE id = ?", (snap["id"],))
+        cols = [c for c in snap if c not in ("skills", "abilities")]
+        con.execute(
+            f'INSERT INTO "character" ({cols_sql(cols)}) VALUES ({ph(len(cols))})',
+            [snap[c] for c in cols],
+        )
+        for sk in snap.get("skills") or []:
+            skcols = [c for c in sk if c != "sort"]
+            con.execute(
+                f'INSERT INTO "character_skill" ({cols_sql(skcols)}) '
+                f'VALUES ({ph(len(skcols))})',
+                [sk[c] for c in skcols],
+            )
+        for a in snap.get("abilities") or []:
+            acols = [c for c in a if c != "sort"]
+            con.execute(
+                f'INSERT INTO "character_ability" ({cols_sql(acols)}) '
+                f'VALUES ({ph(len(acols))})',
+                [a[c] for c in acols],
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
+def character_sync_diff(char_id: int) -> dict:
+    """对比本地与云端单驾驶员的差异（主行 / 技能 / 能力）。"""
+    local = _character_local(char_id)
+    if not local:
+        return {"ok": False, "error": "本地不存在该驾驶员"}
+    try:
+        with _connect_pg(direct_cloud_url()) as conn:
+            with conn.cursor() as cur:
+                cur.execute('SELECT * FROM "character" WHERE id = %s', (char_id,))
+                urow = cur.fetchone()
+                cc = _row_to_dict(cur, urow) if urow else None
+                cur.execute(
+                    'SELECT * FROM "character_skill" WHERE character_id = %s '
+                    "ORDER BY sort",
+                    (char_id,),
+                )
+                ck = {r["character_skill_id"]: r
+                      for r in (_row_to_dict(cur, x) for x in cur.fetchall())}
+                cur.execute(
+                    'SELECT * FROM "character_ability" WHERE character_id = %s '
+                    "ORDER BY sort",
+                    (char_id,),
+                )
+                ca = {r["ability_id"]: r
+                      for r in (_row_to_dict(cur, x) for x in cur.fetchall())}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"云端连接失败：{_friendly_cloud_error(exc)}"}
+    if not cc:
+        return {"ok": False, "error": "云端不存在该驾驶员（可先做全量上传）"}
+
+    diff: list[dict] = []
+    skip_char = {"id", "raw_path", "skills", "abilities"}
+    for k, v in local.items():
+        if k in skip_char:
+            continue
+        cv = cc.get(k)
+        if str(cv) != str(v):
+            diff.append({"section": "驾驶员", "field": k, "old": cv, "new": v})
+    skip_s = {"id", "character_id", "sort"}
+    for sk in local["skills"]:
+        csk = ck.get(sk.get("character_skill_id"))
+        if csk is None:
+            diff.append({"section": "技能", "field": sk.get("name") or sk.get("character_skill_id"),
+                         "old": "云端缺失", "new": "存在"})
+            continue
+        for k, v in sk.items():
+            if k in skip_s:
+                continue
+            if str(csk.get(k)) != str(v):
+                diff.append({"section": "技能", "field": f"{sk.get('name') or ''}·{k}",
+                             "old": csk.get(k), "new": v})
+    skip_a = {"id", "character_id", "sort"}
+    for a in local["abilities"]:
+        ca_row = ca.get(a.get("ability_id"))
+        if ca_row is None:
+            diff.append({"section": "能力", "field": a.get("name") or a.get("ability_id"),
+                         "old": "云端缺失", "new": "存在"})
+            continue
+        for k, v in a.items():
+            if k in skip_a:
+                continue
+            if str(ca_row.get(k)) != str(v):
+                diff.append({"section": "能力", "field": f"{a.get('name') or ''}·{k}",
+                             "old": ca_row.get(k), "new": v})
+    return {"ok": True, "identical": not diff, "diff": diff}
+
+
+def _ensure_cloud_character_columns(conn, table: str, rows: list[dict]) -> None:
+    """按本地行字段幂等补齐云端 character/character_skill/character_ability
+    缺失列（与 _ensure_cloud_weapon_columns 同理，防云端表早于本地新增列）。"""
+    for row in rows:
+        for col, val in row.items():
+            if col == "id":
+                continue
+            ctype = "BIGINT" if isinstance(val, int) else "TEXT"
+            conn.execute(
+                f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{col}" {ctype}'
+            )
+        return
+
+
+def character_sync_push(char_id: int) -> dict:
+    """把本地单驾驶员全量写入云端（character / skills / abilities 覆盖）。"""
+    local = _character_local(char_id)
+    if not local:
+        return {"ok": False, "error": "本地不存在该驾驶员"}
+    import psycopg  # noqa: F401
+
+    try:
+        with _connect_pg(direct_cloud_url()) as conn:
+            with conn.cursor() as cur:
+                char_cols = [c for c in local if c not in ("skills", "abilities")]
+                _ensure_cloud_character_columns(conn, "character",
+                                                [{c: local[c] for c in char_cols}])
+                _ensure_cloud_character_columns(conn, "character_skill",
+                                                local["skills"])
+                _ensure_cloud_character_columns(conn, "character_ability",
+                                                local["abilities"])
+                ccols_sql = ", ".join(f'"{c}"' for c in char_cols)
+                cph = ", ".join(["%s"] * len(char_cols))
+                cupd = ", ".join(
+                    f'"{c}" = EXCLUDED."{c}"' for c in char_cols if c != "id"
+                )
+                cur.execute(
+                    f'INSERT INTO "character" ({ccols_sql}) VALUES ({cph}) '
+                    f'ON CONFLICT ("id") DO UPDATE SET {cupd}',
+                    [local[c] for c in char_cols],
+                )
+                # 技能 / 能力整体替换（不写本地自增 id，交给云端分配，避免主键冲突）
+                cur.execute(
+                    'DELETE FROM "character_skill" WHERE character_id = %s',
+                    (char_id,),
+                )
+                for sk in local["skills"]:
+                    skcols = [c for c in sk if c not in ("id", "sort")]
+                    s_sql = ", ".join(f'"{c}"' for c in skcols)
+                    s_ph = ", ".join(["%s"] * len(skcols))
+                    cur.execute(
+                        f'INSERT INTO "character_skill" ({s_sql}) VALUES ({s_ph})',
+                        [sk[c] for c in skcols],
+                    )
+                cur.execute(
+                    'DELETE FROM "character_ability" WHERE character_id = %s',
+                    (char_id,),
+                )
+                for a in local["abilities"]:
+                    acols = [c for c in a if c not in ("id", "sort")]
+                    a_sql = ", ".join(f'"{c}"' for c in acols)
+                    a_ph = ", ".join(["%s"] * len(acols))
+                    cur.execute(
+                        f'INSERT INTO "character_ability" ({a_sql}) VALUES ({a_ph})',
+                        [a[c] for c in acols],
+                    )
+            conn.commit()
+        return {"ok": True, "message": "该驾驶员已同步到服务器"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"同步失败：{exc}"}
+
+
 def direct_cloud_url(url: str | None = None) -> str:
     """Neon 池化地址 -> 直连地址（同集群同账号，批量读写快得多）。
 

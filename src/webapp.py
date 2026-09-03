@@ -18,6 +18,8 @@ import re
 from . import config
 from .cloud import (
     cloud_diff,
+    character_sync_diff,
+    character_sync_push,
     last_cloud_error,
     restore_local_db_from_cloud,
     unit_sync_diff,
@@ -26,7 +28,11 @@ from .cloud import (
 )
 from .damage import CRITICAL_CORRECTION, CombatantStats, DamageContext, calculate_damage
 from . import pairing
-from .db import build_db
+from .db import (
+    build_db,
+    ingest_one_character,
+    recompute_character_derived,
+)
 from .fetch import fetch_all
 from .labels import (
     ACQUISITION_ROUTE,
@@ -68,7 +74,22 @@ _sync_state: dict = {
 }
 
 
-def _run_crawl_worker(preserve_ids: list[int]) -> None:
+def _parse_preserve(items) -> tuple[list[int], list[int]]:
+    """解析爬取保留列表：'U123' 为机体、'C456' 为驾驶员；纯数字按机体兼容。"""
+    unit_ids: list[int] = []
+    char_ids: list[int] = []
+    for x in items or []:
+        s = str(x).strip().upper()
+        if s.startswith("C") and s[1:].isdigit():
+            char_ids.append(int(s[1:]))
+        elif s.startswith("U") and s[1:].isdigit():
+            unit_ids.append(int(s[1:]))
+        elif s.isdigit():
+            unit_ids.append(int(s))
+    return unit_ids, char_ids
+
+
+def _run_crawl_worker(preserve: list | None) -> None:
     try:
         _crawl_state.update({
             "running": True,
@@ -76,22 +97,39 @@ def _run_crawl_worker(preserve_ids: list[int]) -> None:
             "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "error": None,
         })
-        from .cloud import _unit_local, restore_unit_locally
+        from .cloud import (
+            _character_local,
+            _unit_local,
+            restore_character_locally,
+            restore_unit_locally,
+        )
 
-        snapshots: dict[int, dict] = {}
-        for uid in preserve_ids:
+        unit_ids, char_ids = _parse_preserve(preserve)
+        unit_snaps: dict[int, dict] = {}
+        for uid in unit_ids:
             snap = _unit_local(uid)
             if snap:
-                snapshots[uid] = snap
+                unit_snaps[uid] = snap
+        char_snaps: dict[int, dict] = {}
+        for cid in char_ids:
+            snap = _character_local(cid)
+            if snap:
+                char_snaps[cid] = snap
         fetch_all()
         _crawl_state["step"] = "build"
         build_db()
-        for uid, snap in snapshots.items():
+        for uid, snap in unit_snaps.items():
             try:
                 restore_unit_locally(snap)
                 print(f"已保留机体编辑: {uid}")
             except Exception as exc:  # noqa: BLE001
                 print(f"保留机体 {uid} 失败: {exc}")
+        for cid, snap in char_snaps.items():
+            try:
+                restore_character_locally(snap)
+                print(f"已保留驾驶员编辑: {cid}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"保留驾驶员 {cid} 失败: {exc}")
         _crawl_state["step"] = "done"
     except Exception as exc:  # noqa: BLE001
         _crawl_state["error"] = str(exc)
@@ -103,16 +141,15 @@ def start_crawl(preserve: list | None = None) -> dict:
     with _crawl_lock:
         if _crawl_state["running"] or _sync_state["running"]:
             return {"ok": False, "message": "爬取已在进行中"}
-        preserve_ids = [
-            int(x) for x in (preserve or []) if str(x).strip().isdigit()
-        ]
+        unit_ids, char_ids = _parse_preserve(preserve)
+        n = len(unit_ids) + len(char_ids)
         threading.Thread(
-            target=_run_crawl_worker, args=(preserve_ids,), daemon=True
+            target=_run_crawl_worker, args=(preserve,), daemon=True
         ).start()
         return {
             "ok": True,
             "message": "已开始爬取，完成后自动构建数据库"
-            + (f"（保留 {len(preserve_ids)} 台机体的编辑）" if preserve_ids else ""),
+            + (f"（保留 {n} 台机体/驾驶员的编辑）" if n else ""),
         }
 
 
@@ -122,30 +159,69 @@ def crawl_status() -> dict:
 
 
 def api_crawl_edits() -> list:
-    """有本地编辑记录的机体列表（爬取前供用户勾选保留）。"""
+    """有本地编辑记录的机体/驾驶员列表（爬取前供用户勾选保留）。"""
     conn = _conn()
-    rows = conn.execute(
-        "SELECT u.id AS unit_id, u.name, COUNT(e.id) AS edits, "
+    out: list[dict] = []
+
+    def _rows(sql: str):
+        try:
+            return [dict(r) for r in conn.execute(sql).fetchall()]
+        except sqlite3.OperationalError:
+            return []
+
+    for r in _rows(
+        "SELECT u.id, u.name, COUNT(e.id) AS edits, "
         "MAX(e.edited_at) AS last_edited "
         "FROM unit_edit_log e JOIN unit u ON u.id = e.unit_id "
         "GROUP BY u.id ORDER BY last_edited DESC"
-    ).fetchall()
+    ):
+        out.append({"kind": "unit", "id": r["id"], "name": r["name"],
+                    "edits": r["edits"], "last_edited": r["last_edited"]})
+    for r in _rows(
+        "SELECT c.id, c.name, COUNT(e.id) AS edits, "
+        "MAX(e.edited_at) AS last_edited "
+        "FROM character_edit_log e JOIN character c ON c.id = e.character_id "
+        "GROUP BY c.id ORDER BY last_edited DESC"
+    ):
+        out.append({"kind": "character", "id": r["id"], "name": r["name"],
+                    "edits": r["edits"], "last_edited": r["last_edited"]})
     conn.close()
-    return [dict(r) for r in rows]
+    out.sort(key=lambda r: r["last_edited"] or "", reverse=True)
+    return out
 
 
 def api_edit_history(limit: int = 500) -> list:
-    """本地机体编辑历史详情。"""
+    """本地机体/驾驶员编辑历史详情（合并两类，按时间倒序）。"""
     conn = _conn()
-    rows = conn.execute(
-        "SELECT e.id, e.unit_id, COALESCE(u.name, '?') AS unit_name, "
+    merged: list[dict] = []
+
+    def _rows(sql: str, args=()):
+        try:
+            return [dict(r) for r in conn.execute(sql, args).fetchall()]
+        except sqlite3.OperationalError:
+            return []
+
+    for r in _rows(
+        "SELECT e.id, e.unit_id, COALESCE(u.name, '?') AS name, "
         "e.field, e.old_value, e.new_value, e.edited_at, e.source "
         "FROM unit_edit_log e LEFT JOIN unit u ON u.id = e.unit_id "
         "ORDER BY e.edited_at DESC, e.id DESC LIMIT ?",
         (int(limit),),
-    ).fetchall()
+    ):
+        r["kind"] = "机体"
+        merged.append(r)
+    for r in _rows(
+        "SELECT e.id, e.character_id, COALESCE(c.name, '?') AS name, "
+        "e.field, e.old_value, e.new_value, e.edited_at, e.source "
+        "FROM character_edit_log e LEFT JOIN character c ON c.id = e.character_id "
+        "ORDER BY e.edited_at DESC, e.id DESC LIMIT ?",
+        (int(limit),),
+    ):
+        r["kind"] = "驾驶员"
+        merged.append(r)
     conn.close()
-    return [dict(r) for r in rows]
+    merged.sort(key=lambda r: (r["edited_at"] or "", r["id"] or 0), reverse=True)
+    return merged[:int(limit)]
 
 
 def refetch_unit_diff(unit_id: int) -> dict:
@@ -287,6 +363,152 @@ def refetch_unit_apply(unit_id: int) -> dict:
         return {"ok": False, "error": f"覆盖失败：{exc}"}
     conn.close()
     return {"ok": True, "message": f"已用网页数据覆盖机体 {unit_id}",
+            "name": new_raw.get("name")}
+
+
+def _fetch_character_list():
+    """重取整表驾驶员列表原始数据。"""
+    from . import api
+
+    try:
+        return api.http_get_json("/character", {"order_by": "rarity:desc"}), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"爬取失败：{exc}"
+
+
+def _find_character_entry(chars, char_id: int):
+    for c in chars or []:
+        try:
+            if int(c.get("id")) == char_id:
+                return c
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def refetch_character_diff(char_id: int) -> dict:
+    """重取单驾驶员最新数据 → 内存库规范化 → 与本地逐字段对比。"""
+    from .db import SCHEMA, _build_tag_map, ingest_one_character
+
+    chars, err = _fetch_character_list()
+    if err:
+        return {"ok": False, "error": err}
+    new_raw = _find_character_entry(chars, char_id)
+    if not new_raw:
+        return {"ok": False, "error": "新数据中未找到该驾驶员"}
+    src = _conn()
+    try:
+        tag_map = _build_tag_map()
+        mem = sqlite3.connect(":memory:")
+        mem.row_factory = sqlite3.Row
+        mem.executescript(SCHEMA)
+        try:
+            series_by_id = {}
+            ingest_one_character(mem, new_raw, tag_map, series_by_id,
+                                 "character.json")
+            nrow = mem.execute(
+                "SELECT * FROM character WHERE id = ?", (char_id,)
+            ).fetchone()
+            if not nrow:
+                return {"ok": False, "error": "新数据规范化后未生成驾驶员行"}
+            nc = dict(nrow)
+            n_skills = [dict(s) for s in mem.execute(
+                "SELECT * FROM character_skill WHERE character_id = ? ORDER BY sort",
+                (char_id,)).fetchall()]
+            n_abilities = [dict(a) for a in mem.execute(
+                "SELECT * FROM character_ability WHERE character_id = ? ORDER BY sort",
+                (char_id,)).fetchall()]
+        finally:
+            mem.close()
+        lrow = src.execute(
+            "SELECT * FROM character WHERE id = ?", (char_id,)
+        ).fetchone()
+        if not lrow:
+            return {"ok": False, "error": "本地不存在该驾驶员"}
+        lc = dict(lrow)
+        l_skills = [dict(s) for s in src.execute(
+            "SELECT * FROM character_skill WHERE character_id = ? ORDER BY sort",
+            (char_id,)).fetchall()]
+        l_abilities = [dict(a) for a in src.execute(
+            "SELECT * FROM character_ability WHERE character_id = ? ORDER BY sort",
+            (char_id,)).fetchall()]
+    finally:
+        src.close()
+
+    diff: list[dict] = []
+    skip_c = {"id", "raw_path"}
+    for k, v in nc.items():
+        if k in skip_c:
+            continue
+        cv = lc.get(k)
+        if str(cv) != str(v):
+            diff.append({"section": "驾驶员", "field": k, "old": cv, "new": v})
+    # 技能 / 能力按 id 配对
+    def keyed(items, key):
+        out = {}
+        for i, it in enumerate(items):
+            k = it.get(key)
+            out[k if k not in (None, "") else f"#new{i}"] = it
+        return out
+
+    for section, key, n_list, l_list in (
+        ("技能", "character_skill_id", n_skills, l_skills),
+        ("能力", "ability_id", n_abilities, l_abilities),
+    ):
+        nm, lm = keyed(n_list, key), keyed(l_list, key)
+        skip = {"id", "character_id", "sort"}
+        for k in sorted(set(nm) | set(lm), key=lambda x: str(x)):
+            nrow, lrow = nm.get(k), lm.get(k)
+            label = (nrow or lrow).get("name") or k
+            if nrow is None:
+                diff.append({"section": section, "field": f"{label}",
+                             "old": "本地存在", "new": "已移除"})
+                continue
+            if lrow is None:
+                diff.append({"section": section, "field": f"{label}",
+                             "old": "本地缺失", "new": "新增"})
+                continue
+            for f in nrow:
+                if f in skip:
+                    continue
+                if str(lrow.get(f)) != str(nrow[f]):
+                    diff.append({"section": section,
+                                 "field": f"{label}·{f}",
+                                 "old": lrow.get(f), "new": nrow[f]})
+    return {"ok": True, "name": nc.get("name"),
+            "identical": not diff, "diff": diff}
+
+
+def refetch_character_apply(char_id: int) -> dict:
+    """重新爬取单驾驶员并以网页数据覆盖本地。"""
+    from . import api as _api
+    from .db import _build_tag_map, ingest_one_character
+
+    chars, err = _fetch_character_list()
+    if err:
+        return {"ok": False, "error": err}
+    new_raw = _find_character_entry(chars, char_id)
+    if not new_raw:
+        return {"ok": False, "error": "新数据中未找到该驾驶员"}
+    # 保存整表 raw JSON（覆盖本地 character.json，与 fetch_characters 一致）
+    _api.atomic_write_json(config.RAW_DIR / "character.json", chars or [])
+    conn = _write_conn()
+    try:
+        conn.execute("DELETE FROM character_skill WHERE character_id = ?", (char_id,))
+        conn.execute("DELETE FROM character_ability WHERE character_id = ?", (char_id,))
+        conn.execute("DELETE FROM character WHERE id = ?", (char_id,))
+        tag_map = _build_tag_map()
+        series_by_id = {
+            r[0]: r[1] for r in conn.execute("SELECT id, name FROM series").fetchall()
+        }
+        ingest_one_character(conn, new_raw, tag_map, series_by_id, "character.json")
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        conn.close()
+        return {"ok": False, "error": f"覆盖失败：{exc}"}
+    conn.close()
+    return {"ok": True, "message": f"已用网页数据覆盖驾驶员 {char_id}",
             "name": new_raw.get("name")}
 
 
@@ -1912,6 +2134,12 @@ _TERRAIN_LABELS = {
     "surface": "水面", "underwater": "水中",
 }
 
+_CHAR_STAT_KEYS = ("ranged", "melee", "defense", "reaction", "awaken")
+_CHAR_STAT_LABELS = {
+    "ranged": "射击", "melee": "格斗", "defense": "防御",
+    "reaction": "反应", "awaken": "觉醒",
+}
+
 
 def _clean_int(value, field: str, minimum=0) -> int:
     try:
@@ -1921,6 +2149,35 @@ def _clean_int(value, field: str, minimum=0) -> int:
     if v < minimum:
         raise ValueError(f"{field} 不能小于 {minimum}")
     return v
+
+
+def _opt_int(value):
+    """可空整数：None/空串 -> None，否则 int(value)。"""
+    try:
+        if value is None or str(value).strip() == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _opt_bool(value):
+    """可空布尔：None/空串 -> None，否则 1/0。"""
+    v = _opt_int(value)
+    return None if v is None else (1 if v else 0)
+
+
+def _trim_content(values) -> str:
+    """把技能/能力一行字段压成展示文本（截断长描述）。"""
+    parts = []
+    for v in values:
+        if v is None:
+            continue
+        s = str(v)
+        if not s or s == "[]":
+            continue
+        parts.append(s[:80] + ("…" if len(s) > 80 else ""))
+    return " · ".join(parts) if parts else "—"
 
 
 def api_unit_edit(payload: dict, preview: bool = True) -> dict:
@@ -2188,6 +2445,211 @@ def api_unit_edit(payload: dict, preview: bool = True) -> dict:
                 "INSERT INTO unit_edit_log (unit_id, field, old_value, "
                 "new_value, edited_at, source) VALUES (?,?,?,?,?,?)",
                 (unit_id, f"{item['section']}·{item['field']}",
+                 str(item["old"]), str(item["new"]), now, "web"),
+            )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        conn.close()
+        return {"ok": False, "error": f"写入失败: {exc}"}
+    conn.close()
+    return {"ok": True, "diff": diff, "message": "已保存到本地"}
+
+
+def _ensure_char_edit_log(conn) -> None:
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS character_edit_log ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  character_id INTEGER,"
+        "  field TEXT,"
+        "  old_value TEXT,"
+        "  new_value TEXT,"
+        "  edited_at TEXT,"
+        "  source TEXT);"
+        "CREATE INDEX IF NOT EXISTS idx_char_edit_log_char "
+        "ON character_edit_log(character_id);"
+    )
+
+
+def api_character_edit(payload: dict, preview: bool = True) -> dict:
+    """驾驶员编辑：校验 + 差异对比；preview=False 时写库并记录 edit_log。"""
+    char_id = _clean_int(payload.get("character_id"), "character_id")
+    conn = _write_conn()
+    row = conn.execute(
+        "SELECT * FROM character WHERE id = ?", (char_id,)
+    ).fetchone()
+    c = dict(row) if row else None
+    if not c:
+        conn.close()
+        return {"ok": False, "error": "驾驶员不存在"}
+    diff: list[dict] = []
+
+    def add_diff(section: str, field: str, old, new) -> None:
+        diff.append({"section": section, "field": field, "old": old, "new": new})
+
+    # ---- 类型 / 稀有度 / 描述 ----
+    role = _clean_int(payload.get("role"), "类型")
+    if role not in (1, 2, 3):
+        conn.close()
+        return {"ok": False, "error": "类型只能为 1=攻击型 / 2=耐久型 / 3=支援型"}
+    rarity = _clean_int(payload.get("rarity"), "稀有度", minimum=1)
+    if rarity not in CHAR_LEVEL_CAPS:
+        conn.close()
+        return {"ok": False, "error": "稀有度只能为 1~5"}
+    desc = str(payload.get("desc") or "")
+    if role != (c["role"] or 0):
+        add_diff("驾驶员", "类型",
+                 ROLE_NAMES.get(c["role"], c["role"]),
+                 ROLE_NAMES.get(role, role))
+    if rarity != (c["rarity"] or 0):
+        add_diff("驾驶员", "稀有度", c["rarity"] or 0, rarity)
+    if str(c.get("desc") or "") != desc:
+        add_diff("驾驶员", "描述", c.get("desc") or "", desc)
+
+    # ---- 标签 ----
+    tags_now = [str(t) for t in _json_list(c["tags"])]
+    tags_new = [str(t).strip() for t in (payload.get("tags") or []) if str(t).strip()]
+    tags_new = list(dict.fromkeys(tags_new))
+    removed = [t for t in tags_now if t not in tags_new]
+    added = [t for t in tags_new if t not in tags_now]
+    if removed:
+        add_diff("标签", "删除", "、".join(removed), "")
+    if added:
+        add_diff("标签", "添加", "", "、".join(added))
+
+    # ---- 满级属性（默认形态 + SP 形态）----
+    stats = payload.get("stats") or {}
+    def_stats = stats.get("default") or {}
+    sp_stats = stats.get("sp")
+    max_new: dict[str, int] = {}
+    for key in _CHAR_STAT_KEYS:
+        if key not in def_stats:
+            conn.close()
+            return {"ok": False, "error": f"缺少属性 {_CHAR_STAT_LABELS[key]}"}
+        max_new[key] = _clean_int(def_stats[key], _CHAR_STAT_LABELS[key])
+    for key in _CHAR_STAT_KEYS:
+        old = c.get(f"max_{key}") or 0
+        if max_new[key] != old:
+            add_diff("属性", f"{_CHAR_STAT_LABELS[key]}（满级）", old, max_new[key])
+    has_sp = rarity < 5
+    sp_new: dict[str, int] | None = None
+    if has_sp:
+        if sp_stats is None:
+            conn.close()
+            return {"ok": False, "error": "缺少 SP 满级属性"}
+        sp_new = {}
+        for key in _CHAR_STAT_KEYS:
+            if key not in sp_stats:
+                conn.close()
+                return {"ok": False, "error": f"缺少 SP {_CHAR_STAT_LABELS[key]}"}
+            sp_new[key] = _clean_int(sp_stats[key], f"SP {_CHAR_STAT_LABELS[key]}")
+        for key in _CHAR_STAT_KEYS:
+            old = c.get(f"sp_max_{key}") or 0
+            if sp_new[key] != old:
+                add_diff("属性", f"SP {_CHAR_STAT_LABELS[key]}（满级）",
+                         old, sp_new[key])
+
+    # ---- 技能 / 能力列表差异 ----
+    def content_of(item: dict, fields) -> tuple:
+        return tuple(item.get(f) for f in fields)
+
+    def list_diff(section: str, old_items: list, new_items: list,
+                  keyname: str, label: str, fields) -> None:
+        def mapit(items):
+            out: dict = {}
+            n = 0
+            for it in items:
+                k = it.get(keyname)
+                if k not in (None, ""):
+                    out[f"id:{k}"] = it
+                else:
+                    n += 1
+                    out[f"new:{n}"] = it
+            return out
+
+        om, nm = mapit(old_items), mapit(new_items)
+        for k in om.keys() | nm.keys():
+            o, nn = om.get(k), nm.get(k)
+            if o is None:
+                add_diff(section, f"新增「{label(nn)}」", "—", "新增")
+            elif nn is None:
+                add_diff(section, f"删除「{label(o)}」", "存在", "删除")
+            elif content_of(o, fields) != content_of(nn, fields):
+                add_diff(section, f"修改「{label(nn)}」",
+                         _trim_content(content_of(o, fields)),
+                         _trim_content(content_of(nn, fields)))
+
+    old_skills = [dict(r) for r in conn.execute(
+        "SELECT * FROM character_skill WHERE character_id = ? ORDER BY sort",
+        (char_id,)).fetchall()]
+    old_abilities = [dict(r) for r in conn.execute(
+        "SELECT * FROM character_ability WHERE character_id = ? ORDER BY sort",
+        (char_id,)).fetchall()]
+    new_skills = [dict(s) for s in (payload.get("skills") or [])]
+    new_abilities = [dict(a) for a in (payload.get("abilities") or [])]
+    skill_fields = ("character_skill_id", "level", "name", "desc", "sp",
+                    "duration", "is_auto_usage", "auto_usage_priority", "traits")
+    ability_fields = ("ability_id", "level", "name", "desc", "ability_type",
+                      "traits")
+    list_diff("技能", old_skills, new_skills, "character_skill_id",
+              lambda s: s.get("name") or s.get("character_skill_id") or "技能",
+              skill_fields)
+    list_diff("能力", old_abilities, new_abilities, "ability_id",
+              lambda a: a.get("name") or a.get("ability_id") or "能力",
+              ability_fields)
+
+    if preview:
+        conn.close()
+        return {"ok": True, "diff": diff, "changed": len(diff) > 0}
+
+    # ---- 写库 ----
+    _ensure_char_edit_log(conn)  # 事务前补表，保证编辑写入原子提交
+    try:
+        conn.execute(
+            "UPDATE character SET role=?, rarity=?, desc=?, tags=?, "
+            "max_ranged=?, max_melee=?, max_defense=?, max_reaction=?, max_awaken=?, "
+            "sp_max_ranged=?, sp_max_melee=?, sp_max_defense=?, "
+            "sp_max_reaction=?, sp_max_awaken=? WHERE id=?",
+            (role, rarity, desc,
+             json.dumps(tags_new, ensure_ascii=False),
+             max_new["ranged"], max_new["melee"], max_new["defense"],
+             max_new["reaction"], max_new["awaken"],
+             (sp_new["ranged"] if sp_new else c.get("sp_max_ranged")),
+             (sp_new["melee"] if sp_new else c.get("sp_max_melee")),
+             (sp_new["defense"] if sp_new else c.get("sp_max_defense")),
+             (sp_new["reaction"] if sp_new else c.get("sp_max_reaction")),
+             (sp_new["awaken"] if sp_new else c.get("sp_max_awaken")),
+             char_id),
+        )
+        conn.execute("DELETE FROM character_skill WHERE character_id = ?", (char_id,))
+        for i, sk in enumerate(new_skills):
+            conn.execute(
+                "INSERT INTO character_skill (character_id, character_skill_id, "
+                "sort, level, name, desc, sp, duration, is_auto_usage, "
+                "auto_usage_priority, traits) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (char_id, _opt_int(sk.get("character_skill_id")), i + 1,
+                 _opt_int(sk.get("level")), sk.get("name") or "",
+                 sk.get("desc") or "", _opt_int(sk.get("sp")),
+                 _opt_int(sk.get("duration")), _opt_bool(sk.get("is_auto_usage")),
+                 _opt_int(sk.get("auto_usage_priority")), sk.get("traits") or "[]"),
+            )
+        conn.execute("DELETE FROM character_ability WHERE character_id = ?", (char_id,))
+        for i, ab in enumerate(new_abilities):
+            conn.execute(
+                "INSERT INTO character_ability (character_id, ability_id, sort, "
+                "level, name, desc, ability_type, traits) VALUES (?,?,?,?,?,?,?,?)",
+                (char_id, _opt_int(ab.get("ability_id")), i + 1,
+                 _opt_int(ab.get("level")), ab.get("name") or "",
+                 ab.get("desc") or "", _opt_int(ab.get("ability_type")),
+                 ab.get("traits") or "[]"),
+            )
+        recompute_character_derived(conn, char_id)
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        for item in diff:
+            conn.execute(
+                "INSERT INTO character_edit_log (character_id, field, old_value, "
+                "new_value, edited_at, source) VALUES (?,?,?,?,?,?)",
+                (char_id, f"{item['section']}·{item['field']}",
                  str(item["old"]), str(item["new"]), now, "web"),
             )
         conn.commit()
@@ -3377,6 +3839,24 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 uid = 0
             return self._send_json(refetch_unit_apply(uid))
+        if path == "/api/char-sync-diff":
+            try:
+                cid = int(q.get("char_id", ["0"])[0])
+            except ValueError:
+                cid = 0
+            return self._send_json(character_sync_diff(cid))
+        if path == "/api/refetch-char-diff":
+            try:
+                cid = int(q.get("char_id", ["0"])[0])
+            except ValueError:
+                cid = 0
+            return self._send_json(refetch_character_diff(cid))
+        if path == "/api/refetch-char-apply":
+            try:
+                cid = int(q.get("char_id", ["0"])[0])
+            except ValueError:
+                cid = 0
+            return self._send_json(refetch_character_apply(cid))
         if path == "/api/export":
             if not config.DB_PATH.exists():
                 return self._send_json({"error": "数据库不存在"}, 404)
@@ -3608,6 +4088,39 @@ class Handler(BaseHTTPRequestHandler):
                     "preview", ["0"]
                 )[0] == "1"
                 return self._send_json(api_unit_edit(body, preview=preview))
+            if api_path == "/api/char-edit":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        parsed = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                preview = parse_qs(urlparse(self.path).query).get(
+                    "preview", ["0"]
+                )[0] == "1"
+                return self._send_json(api_character_edit(body, preview=preview))
+            if api_path == "/api/char-sync":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        parsed = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                try:
+                    cid = int(body.get("char_id") or 0)
+                except (TypeError, ValueError):
+                    cid = 0
+                return self._send_json(character_sync_push(cid))
             if api_path == "/api/unit-sync":
                 length = int(self.headers.get("Content-Length") or 0)
                 body = {}
@@ -3656,6 +4169,12 @@ class Handler(BaseHTTPRequestHandler):
 def run_server(port: int = 8765) -> None:
     if not config.DB_PATH.exists():
         print(f"提示：本地数据库不存在（{config.DB_PATH}），概览页可导入数据库文件。")
+    else:
+        # 幂等补建驾驶员编辑日志表（已有数据库不会自动跑 SCHEMA）
+        try:
+            _ensure_char_edit_log(_write_conn())
+        except Exception as exc:  # noqa: BLE001
+            print(f"补建 character_edit_log 失败：{exc}")
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.daemon_threads = True
     print(f"GGE 资料库已启动：http://127.0.0.1:{port}")

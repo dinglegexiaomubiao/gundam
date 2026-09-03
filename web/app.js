@@ -196,36 +196,6 @@ function statCellBar(value, key) {
   </span>`;
 }
 
-/* SVG 雷达图：stats = [{k, v, max}, ...]（最多 6 维） */
-function radarChart(stats, size = 200) {
-  const n = stats.length;
-  if (!n) return "";
-  const cx = size / 2, cy = size / 2, r = size / 2 - 32;
-  const angle = (i) => (Math.PI * 2 * i) / n - Math.PI / 2;
-  const pt = (i, rr) => [cx + Math.cos(angle(i)) * rr, cy + Math.sin(angle(i)) * rr];
-  let grid = "";
-  for (let g = 1; g <= 4; g++) {
-    const rr = (r * g) / 4;
-    const poly = stats.map((_, i) => pt(i, rr).join(",")).join(" ");
-    grid += `<polygon class="radar-grid" points="${poly}"/>`;
-  }
-  let axes = "", labels = "", dots = "";
-  const shapePts = stats.map((s, i) => {
-    const rr = (r * Math.min(1, (Number(s.v) || 0) / (s.max || 1)));
-    const [x, y] = pt(i, rr);
-    axes += `<line class="radar-axis" x1="${cx}" y1="${cy}" x2="${pt(i, r)[0]}" y2="${pt(i, r)[1]}"/>`;
-    const [lx, ly] = pt(i, r + 14);
-    labels += `<text class="radar-label" x="${lx}" y="${ly + 3}">${esc(s.k)}</text>`;
-    const [vx, vy] = pt(i, r + 26);
-    labels += `<text class="radar-value" x="${vx}" y="${vy + 3}">${fmtNum(s.v)}</text>`;
-    dots += `<circle class="radar-dot" cx="${x}" cy="${y}" r="2.4"/>`;
-    return `${x},${y}`;
-  }).join(" ");
-  return `<svg class="radar-chart" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="属性雷达图">
-    ${grid}${axes}<polygon class="radar-shape" points="${shapePts}"/>${dots}${labels}
-  </svg>`;
-}
-
 /* Staggered Reveal：为列表行添加错峰淡入动画 */
 function applyStagger(rootSel) {
   const root = typeof rootSel === "string" ? document.querySelector(rootSel) : rootSel;
@@ -286,19 +256,25 @@ function bindTagChips(root) {
 }
 
 function bindSearchLinks() {
-  document.querySelectorAll(".link-name").forEach((b) =>
+  document.querySelectorAll(".link-name").forEach((b) => {
+    if (b._linkBound) return;
+    b._linkBound = true;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       searchByName(b.dataset.type, b.dataset.name);
-    }));
+    });
+  });
 }
 
 function bindEffectChips() {
-  document.querySelectorAll(".effect-chip").forEach((b) =>
+  document.querySelectorAll(".effect-chip").forEach((b) => {
+    if (b._effectBound) return;
+    b._effectBound = true;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       searchByName("weapon", b.dataset.name);
-    }));
+    });
+  });
 }
 
 function bindSupporterConds() {
@@ -823,7 +799,7 @@ function bindOverviewActions(d) {
     const rows = items.length ? items.map((x) => `
       <tr>
         <td class="mono">${esc(x.edited_at || "")}</td>
-        <td>${esc(x.unit_name || "")}</td>
+        <td><span class="muted">${esc(x.kind || "")}</span> ${esc(x.name || "")}</td>
         <td>${esc(x.field || "")}</td>
         <td class="mono" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.old_value || "")}">${esc(x.old_value || "")}</td>
         <td class="mono" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.new_value || "")}">${esc(x.new_value || "")}</td>
@@ -833,7 +809,7 @@ function bindOverviewActions(d) {
     showModal("查看编辑历史",
       `<div class="sync-info"><div>共 ${items.length} 条记录（仅保存在本地）</div></div>
        <div style="max-height:55vh;overflow:auto">
-       <table><tr><th>时间</th><th>机体</th><th>字段</th><th>原值</th><th>新值</th><th>来源</th></tr>${rows}</table>
+       <table><tr><th>时间</th><th>对象</th><th>字段</th><th>原值</th><th>新值</th><th>来源</th></tr>${rows}</table>
        </div>
        <div class="calc-actions"><button id="edit-history-close" class="cond-btn">关闭</button></div>`);
     $("#edit-history-close").addEventListener("click", () => $("#modal").classList.add("hidden"));
@@ -845,9 +821,9 @@ function bindOverviewActions(d) {
     } catch (e) { /* 忽略 */ }
     if (edits.length) {
       showModal("爬取数据",
-        `<p class="desc">全量爬取会用原始数据重建数据库，以下机体有本地编辑记录。勾选需要保留的编辑，未勾选的将被新数据覆盖：</p>
+        `<p class="desc">全量爬取会用原始数据重建数据库，以下机体/驾驶员有本地编辑记录。勾选需要保留的编辑，未勾选的将被新数据覆盖：</p>
          <div id="crawl-keep-list" class="tags">${edits.map((x) =>
-           `<label class="chip sel-tag"><input type="checkbox" value="${x.unit_id}" checked> ${esc(x.name)}（${x.edits} 项编辑）</label>`).join("")}</div>
+           `<label class="chip sel-tag"><input type="checkbox" value="${x.kind === "character" ? "C" : "U"}${x.id}" checked> ${esc(x.name)}（${x.edits} 项编辑）</label>`).join("")}</div>
          <div class="calc-actions">
            <button id="crawl-keep" class="cond-btn">爬取并保留勾选编辑</button>
            <button id="crawl-overwrite" class="cond-btn">不保留，全部覆盖</button>
@@ -1339,7 +1315,7 @@ function renderUnitWfx(u, formKey) {
   }
   const chips = WFX_OPTIONS.filter((o) => match.has(o.value));
   wrap.innerHTML = chips.length
-    ? `<h3>备注（点击可搜索）</h3><div class="tags">${chips.map((o) => `<button class="chip wfx-chip" data-wfx="${esc(o.value)}">${esc(o.label)}</button>`).join("")}</div>`
+    ? `<h3 class="ds-sec">机体备注（点击可搜索）</h3><div class="tags">${chips.map((o) => `<button class="chip wfx-chip" data-wfx="${esc(o.value)}">${esc(o.label)}</button>`).join("")}</div>`
     : "";
   bindEffectChips();
   bindUnitInfoChips();
@@ -1350,9 +1326,6 @@ function renderUnitWeapons(u, formKey) {
   const title = $("#unit-weapons-title");
   const wrap = $("#unit-weapons-wrap");
   if (title) title.textContent = `武器（${ws.length}）`;
-  /* Step 5: 同步子tab 计数 */
-  const wTab = document.querySelector('.detail-subtab[data-pane="weapons"] .subtab-count');
-  if (wTab) wTab.textContent = ws.length;
   if (!wrap) return;
   const rows = ws.map((w) => `
     <tr>
@@ -1377,9 +1350,6 @@ function renderUnitAbilities(u, formKey) {
   const abs = formContent(u, formKey).abilities || [];
   const wrap = $("#unit-abilities-wrap");
   if (!wrap) return;
-  /* Step 5: 同步子tab 计数 */
-  const aTab = document.querySelector('.detail-subtab[data-pane="abilities"] .subtab-count');
-  if (aTab) aTab.textContent = abs.length;
   if (!abs.length) {
     wrap.innerHTML = '<div class="empty">暂无能力数据</div>';
     return;
@@ -1403,72 +1373,34 @@ async function openUnit(id) {
       <td>${s.duration ? `${s.duration} 回合` : "—"}</td>
     </tr>`).join("");
   unitEdit = null;
+  unitView.u = u;
+  unitView.formKey = "default";
+  unitView.star = (u.can_star && u.forms?.default?.stars?.length)
+    ? u.forms.default.stars.length - 1 : 0;
+  unitView.on.clear();
 
-  /* ---- 左侧 sticky 摘要：角色 + 描述 + 系列 + 标签 + 关键属性 + 雷达图 ---- */
-  const df = u.forms?.default || u.forms?.[Object.keys(u.forms || {})[0]] || {};
-  const maxStarDf = df.stars ? df.stars[df.stars.length - 1] : null;
-  const stDf = maxStarDf?.stats || {};
-  const movDf = df.movement ? df.movement[1] : u.max_movement;
-  const radarStats = [
-    { k: "HP",   v: stDf.hp?.max ?? 0,        max: STAT_MAX.hp },
-    { k: "攻击", v: stDf.attack?.max ?? 0,    max: STAT_MAX.attack },
-    { k: "防御", v: stDf.defense?.max ?? 0,   max: STAT_MAX.defense },
-    { k: "机动", v: stDf.mobility?.max ?? 0,  max: STAT_MAX.mobility },
-    { k: "EN",   v: stDf.en?.max ?? 0,        max: STAT_MAX.en },
-    { k: "移动", v: movDf ?? 0,               max: STAT_MAX.movement },
-  ];
-  const dsStat = (k, v, b) => `<div class="ds-stat">
-    <span class="ds-k">${k}</span>
-    <span class="ds-v">${fmtNum(v ?? 0)}${b ? `<small>+${fmtNum(b)}</small>` : ""}</span>
-  </div>`;
   const seriesHtml = (u.series_names || []).length
     ? `<div class="tags" style="margin-bottom:12px">${u.series_names.map((s) =>
         `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : "";
   const tagsHtml = u.tags.length
     ? `<div class="tags" style="margin-bottom:12px">${u.tags.map((t) => tagChip(t)).join("")}</div>` : "";
 
+  /* 左列：角色 + desc + 系列 + 标签 + 机体备注(wfx) + 交互属性(#unit-attr) + 地形适性 */
   const summaryHtml = `
     <div class="ds-role-row">${roleBadge(u.role, u.role_label)} ${rarityBadge(u.rarity)}</div>
     <div class="ds-desc">${esc(u.desc || "暂无描述")}</div>
     ${seriesHtml}${tagsHtml}
-    <div class="ds-stats">
-      ${dsStat("HP", stDf.hp?.max, stDf.hp?.max_bonus)}
-      ${dsStat("EN", stDf.en?.max, stDf.en?.max_bonus)}
-      ${dsStat("攻击", stDf.attack?.max, stDf.attack?.max_bonus)}
-      ${dsStat("防御", stDf.defense?.max, stDf.defense?.max_bonus)}
-      ${dsStat("机动", stDf.mobility?.max, stDf.mobility?.max_bonus)}
-      ${dsStat("移动", movDf)}
-    </div>
-    ${radarChart(radarStats, 200)}`;
+    <div id="unit-wfx-wrap"></div>
+    <div id="unit-attr"></div>
+    <h3 class="ds-sec">地形适性</h3>
+    <div id="unit-terrain" class="tags"></div>`;
 
-  /* ---- 右侧内容：子tab + 各 pane（保留原有 ID 供 render 函数使用） ---- */
-  const defWeapons = (formContent(u, "default").weapons || []);
-  const defAbilities = (formContent(u, "default").abilities || []);
+  /* 右列：无 tab，直接堆叠武器 / 能力 / 单位技能 */
   const contentHtml = `
-    <div class="detail-subtabs" role="tablist">
-      <button class="detail-subtab active" data-pane="stats" role="tab">属性</button>
-      <button class="detail-subtab" data-pane="terrain" role="tab">地形</button>
-      <button class="detail-subtab" data-pane="weapons" role="tab">武器<span class="subtab-count">${defWeapons.length}</span></button>
-      <button class="detail-subtab" data-pane="abilities" role="tab">能力<span class="subtab-count">${defAbilities.length}</span></button>
-      <button class="detail-subtab" data-pane="skills" role="tab" ${!(u.skills || []).length ? 'style="display:none"' : ''}>技能<span class="subtab-count">${(u.skills || []).length}</span></button>
-    </div>
-    <div class="detail-pane active" data-pane="stats">
-      <div id="unit-stats"></div>
-    </div>
-    <div class="detail-pane" data-pane="terrain">
-      <h3>地形适性</h3><div id="unit-terrain" class="tags"></div>
-    </div>
-    <div class="detail-pane" data-pane="weapons">
-      <div id="unit-wfx-wrap"></div>
-      <h3 id="unit-weapons-title">武器（${defWeapons.length}）</h3>
-      <div id="unit-weapons-wrap"></div>
-    </div>
-    <div class="detail-pane" data-pane="abilities">
-      <div id="unit-abilities-wrap"></div>
-    </div>
-    <div class="detail-pane" data-pane="skills">
-      ${unitSkills ? `<h3>单位技能（${(u.skills || []).length}）</h3><table><tr><th>名称</th><th>效果</th><th>持续</th></tr>${unitSkills}</table>` : '<div class="empty">无单位技能</div>'}
-    </div>`;
+    <h3 id="unit-weapons-title">武器（0）</h3>
+    <div id="unit-weapons-wrap"></div>
+    <div id="unit-abilities-wrap"></div>
+    <div id="unit-skills-wrap"></div>`;
 
   showModal(
     `${esc(u.name)}<span class="unit-edit-btns">
@@ -1482,36 +1414,208 @@ async function openUnit(id) {
   const box = $("#modal .modal-box");
   if (box) box.classList.add("modal-detail");
 
-  renderUnitStats(u, 0, "default");
-  renderUnitTerrain(u, "default");
-  renderUnitWeapons(u, "default");
-  renderUnitAbilities(u, "default");
-  renderUnitWfx(u, "default");
+  renderUnitAttr();
+  renderUnitTerrain(u, unitView.formKey);
+  renderUnitWeapons(u, unitView.formKey);
+  renderUnitAbilities(u, unitView.formKey);
+  renderUnitWfx(u, unitView.formKey);
+  const sw = $("#unit-skills-wrap");
+  if (sw) sw.innerHTML = unitSkills
+    ? `<h3>单位技能（${(u.skills || []).length}）</h3><table><tr><th>名称</th><th>效果</th><th>持续</th></tr>${unitSkills}</table>`
+    : "";
+  bindUnitAttr();
   bindTagChips();
-  bindSearchLinks();
-  bindEffectChips();
   bindUnitInfoChips();
   bindUnitEditButtons(u);
-  bindDetailSubtabs();
 }
 
-/* Step 5: 子tab 切换 */
-function bindDetailSubtabs() {
-  document.querySelectorAll(".detail-subtab").forEach((b) =>
-    b.addEventListener("click", () => {
-      const pane = b.dataset.pane;
-      document.querySelectorAll(".detail-subtab").forEach((x) =>
-        x.classList.toggle("active", x === b));
-      document.querySelectorAll(".detail-pane").forEach((p) =>
-        p.classList.toggle("active", p.dataset.pane === pane));
-    }));
+/* ---------- 机体详情状态：形态(default/sp/ssp) · 星级 · 达成条件 开关 ---------- */
+const UNIT_STAT_LABELS = { hp: "HP", en: "EN", attack: "攻击", defense: "防御", mobility: "机动", movement: "移动" };
+const unitView = { u: null, formKey: "default", star: 0, on: new Set() };
+
+function unitForm() {
+  return unitView.u.forms[unitView.formKey] || unitView.u.forms.default;
+}
+
+function unitMoveVal() {
+  const f = unitForm();
+  return f.movement?.[1] ?? unitView.u.max_movement ?? 0;
+}
+
+/* 当前形态/星级下可用的条件加成行（复用 condPanel 的过滤规则） */
+function unitCondRows() {
+  const u = unitView.u;
+  return (u.conditional_bonuses || []).filter((c) => {
+    if (c._ssp_only && unitView.formKey !== "ssp") return false;
+    return c.forms?.[unitView.formKey]?.[unitView.star] != null;
+  });
+}
+
+/* 一条达成条件能力可能同时作用于多个 stat（同 name 多行），按 name 去重为一个开关 */
+function unitCondNames(rows) {
+  const out = [];
+  for (const r of rows) if (!out.includes(r.name)) out.push(r.name);
+  return out;
+}
+
+/* 形态/星级变化后，清理已不可用的选中项 */
+function unitPruneCond() {
+  const avail = new Set(unitCondNames(unitCondRows()));
+  for (const name of [...unitView.on]) if (!avail.has(name)) unitView.on.delete(name);
+}
+
+/* 某 stat 当前选中的加成%；同 stat HP 区间互斥取最大，否则求和 */
+function unitCondPct(stat) {
+  const sel = unitCondRows().filter((c) => c.stat === stat && unitView.on.has(c.name));
+  if (!sel.length) return 0;
+  let compat = true;
+  outer:
+  for (let i = 0; i < sel.length; i++) {
+    for (let j = i + 1; j < sel.length; j++) {
+      const a = sel[i], b = sel[j];
+      if (!a.has_hp_cond || !b.has_hp_cond) continue;
+      const au = a.hp_lte > 0 ? a.hp_lte : 100;
+      const bu = b.hp_lte > 0 ? b.hp_lte : 100;
+      if ((a.hp_gte || 0) > bu || (b.hp_gte || 0) > au) { compat = false; break outer; }
+    }
+  }
+  if (compat) return sel.reduce((s, c) => s + (c.pct || 0), 0);
+  return Math.max(...sel.map((c) => c.pct || 0));
+}
+
+function unitStatVal(key) {
+  const st = unitForm().stars[unitView.star].stats[key];
+  const starBase = st.max - (st.max_bonus || 0);
+  const basePct = (unitView.u.stat_bonuses || {})[key] || 0;
+  const condPct = unitCondPct(key);
+  const final = Math.floor(starBase * (100 + basePct + condPct) / 100);
+  return { final, delta: final - starBase };
+}
+
+function condRowHtml(rows, names) {
+  const chips = names.map((name) => {
+    const rs = rows.filter((r) => r.name === name);
+    const effect = rs.map((r) => `${UNIT_STAT_LABELS[r.stat] || r.stat} +${r.pct}%`).join("，");
+    const conds = [...new Set(rs.map((r) => r.condition).filter(Boolean))].join("；");
+    const tip = [
+      conds ? `条件：${conds}` : "",
+      effect ? `效果：${effect}` : "",
+      name ? `能力：${name}` : "",
+    ].filter(Boolean).join("\n");
+    return `<button class="chip cond-chip${unitView.on.has(name) ? " on" : ""}" data-name="${esc(name)}" title="${esc(tip)}">${esc(name)}</button>`;
+  }).join("");
+  return `<div class="cond-row"><span class="star-label">达成条件</span><div class="tags">${chips}</div></div>`;
+}
+
+/* 左侧属性区：形态/星级/达成条件按钮 + 六格数值（就地更新） */
+function renderUnitAttr() {
+  const wrap = $("#unit-attr");
+  if (!wrap) return;
+  const u = unitView.u;
+  const form = unitForm();
+  const formBtns = (u.can_star && u.has_sp)
+    ? `<span class="star-label">形态</span>` + [
+        ["default", `默认(${u.forms.default.level_cap}级)`],
+        ["sp", "SP(100级)"],
+        ...(u.has_ssp ? [["ssp", "SSP"]] : []),
+      ].map(([fk, label]) =>
+        `<button class="form-btn ${unitView.formKey === fk ? "active" : ""}" data-form="${fk}">${label}</button>`).join("")
+    : "";
+  const starBtns = u.can_star
+    ? `<span class="star-label">星级</span>` + form.stars.map((x) =>
+        `<button class="star-btn ${x.star === unitView.star ? "active" : ""}" data-star="${x.star}">${x.star}★ ${x.label}</button>`).join("")
+    : "";
+  const ultNote = !u.can_star ? `<span class="chip ult-tag">终极标签 · 暂不能升星 / SP</span>` : "";
+  const rows = unitCondRows();
+  const names = unitCondNames(rows);
+  const notes = [];
+  if (unitView.formKey === "ssp" && form.fallback) notes.push("SSP 数据暂未收录，暂以 SP 数值显示。");
+  if (!u.can_star) notes.push("终极标签机体暂不能升星 / SP，仅统计 0 星数据。");
+  notes.push(names.length ? "绿色 +N 为能力加成；点选「达成条件」会将对应加成并入数值。" : "绿色 +N 为无条件能力加成。");
+  const cells = [
+    ["HP", unitStatVal("hp")],
+    ["EN", unitStatVal("en")],
+    ["攻击", unitStatVal("attack")],
+    ["防御", unitStatVal("defense")],
+    ["机动", unitStatVal("mobility")],
+    ["移动", { final: unitMoveVal(), delta: 0 }],
+  ].map(([k, v]) => `<div class="ds-stat">
+    <span class="ds-k">${k}</span>
+    <span class="ds-v">${fmtNum(v.final)}${v.delta ? `<small>+${fmtNum(v.delta)}</small>` : ""}</span>
+  </div>`).join("");
+  wrap.innerHTML = `
+    <h3 class="ds-sec">机体属性（满级）</h3>
+    ${formBtns ? `<div class="star-bar">${formBtns}</div>` : ""}
+    <div class="star-bar">${starBtns ? `${starBtns} ` : ""}<span class="cap-chip">满级上限 ${form.level_cap}</span>${ultNote ? ` ${ultNote}` : ""}</div>
+    ${names.length ? condRowHtml(rows, names) : ""}
+    <div class="ds-stats">${cells}</div>
+    <p class="hint">${notes.map(esc).join(" ")}</p>`;
+}
+
+/* 属性区子元素每次整体重建，委托只需在 #unit-attr 上挂一次 */
+function bindUnitAttr() {
+  const box = $("#unit-attr");
+  if (!box || box._uvBound) return;
+  box._uvBound = true;
+  box.addEventListener("click", (e) => {
+    const btn = e.target.closest(".form-btn,.star-btn,.cond-chip");
+    if (!btn || !box.contains(btn)) return;
+    if (btn.classList.contains("form-btn")) return unitSetForm(btn.dataset.form);
+    if (btn.classList.contains("star-btn")) return unitSetStar(Number(btn.dataset.star));
+    return unitToggleCond(btn.dataset.name);
+  });
+}
+
+function unitSetForm(fk) {
+  const u = unitView.u;
+  if (!u.forms[fk]) return;
+  unitView.formKey = fk;
+  if (!u.can_star) unitView.star = 0;
+  else if (u.forms[fk].stars.length) {
+    unitView.star = Math.min(unitView.star, u.forms[fk].stars.length - 1);
+  }
+  unitPruneCond();
+  renderUnitView("form");
+}
+
+function unitSetStar(n) {
+  if (unitView.u.can_star) {
+    const f = unitForm();
+    unitView.star = Math.max(0, Math.min(f.stars.length - 1, Number(n) || 0));
+  } else {
+    unitView.star = 0;
+  }
+  unitPruneCond();
+  renderUnitView("star");
+}
+
+function unitToggleCond(name) {
+  if (unitView.on.has(name)) unitView.on.delete(name); else unitView.on.add(name);
+  renderUnitView("cond");
+}
+
+/* scope: form 才更新右侧武器/能力与左列地形/机体备注；star/cond 只重算左列数值 */
+function renderUnitView(scope) {
+  renderUnitAttr();
+  if (scope === "form") {
+    renderUnitTerrain(unitView.u, unitView.formKey);
+    renderUnitWfx(unitView.u, unitView.formKey);
+    renderUnitWeapons(unitView.u, unitView.formKey);
+    renderUnitAbilities(unitView.u, unitView.formKey);
+  }
 }
 
 function bindUnitInfoChips() {
-  document.querySelectorAll(".series-chip").forEach((b) =>
-    b.addEventListener("click", () => searchUnitsBySeries(Number(b.dataset.seriesId))));
-  document.querySelectorAll(".wfx-chip").forEach((b) =>
-    b.addEventListener("click", () => searchUnitsByWfx(b.dataset.wfx)));
+  document.querySelectorAll(".series-chip").forEach((b) => {
+    if (b._seriesBound) return;
+    b._seriesBound = true;
+    b.addEventListener("click", () => searchUnitsBySeries(Number(b.dataset.seriesId)));
+  });
+  document.querySelectorAll(".wfx-chip").forEach((b) => {
+    if (b._wfxBound) return;
+    b._wfxBound = true;
+    b.addEventListener("click", () => searchUnitsByWfx(b.dataset.wfx));
+  });
 }
 
 function searchUnitsByWfx(value) {
@@ -1991,6 +2095,7 @@ async function loadCharacters(page = state.characters.page) {
 }
 
 async function openCharacter(id) {
+  charEdit = null;
   const c = await api(`/api/characters/${id}`);
   const skills = c.skills.map((sk) => `
     <tr><td><button class="link-name" data-type="skill" data-name="${esc(sk.name)}">${esc(sk.name)}</button></td>
@@ -1998,7 +2103,12 @@ async function openCharacter(id) {
   const abilities = c.abilities.map((a) => `
     <tr><td><button class="link-name" data-type="ability" data-name="${esc(a.name)}">${esc(a.name)}</button></td>
       <td class="desc">${effectHtml(a.effects, a.desc, a.cond_entities)}</td></tr>`).join("");
-  showModal(c.name,
+  showModal(`${esc(c.name)}<span class="char-edit-btns">
+       <button id="char-edit-btn" class="cond-btn" title="进入编辑模式">修改驾驶员数据</button>
+       <button id="char-save-btn" class="cond-btn" title="保存修改到本地">保存修改到本地</button>
+       <button id="char-sync-btn" class="cond-btn" title="同步该驾驶员数据到服务器">同步驾驶员数据到服务器</button>
+       <button id="char-refetch-btn" class="cond-btn" title="重新从网站爬取该驾驶员数据并对比差异，确认后以网页数据覆盖本地">重新爬取</button>
+     </span>`,
     `<p class="desc">${roleBadge(c.role, c.role_label)} ${esc(c.desc || "暂无描述")}</p>
      ${(c.series_names || []).length ? `<h3>系列（点击可搜索）</h3><div class="tags">${c.series_names.map((s) => `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : ""}
      <div id="char-stats"></div>
@@ -2015,6 +2125,7 @@ async function openCharacter(id) {
   bindTagChips();
   bindSearchLinks();
   bindCharInfoChips();
+  bindCharacterEditButtons(c);
 }
 
 function bindCharInfoChips() {
@@ -2022,6 +2133,390 @@ function bindCharInfoChips() {
     b.addEventListener("click", () => searchCharactersBySeries(Number(b.dataset.seriesId))));
   document.querySelectorAll(".support-chip").forEach((b) =>
     b.addEventListener("click", () => searchCharactersBySupport(b.dataset.support)));
+}
+
+/* ---------- 驾驶员数据编辑 ---------- */
+let charEdit = null;
+const CHAR_ROLE_OPTS = [[1, "攻击型"], [2, "耐久型"], [3, "支援型"]];
+const CHAR_RARITY_OPTS = [[5, "UR"], [4, "SSR"], [3, "SR"], [2, "R"], [1, "N"]];
+const CHAR_STAT_KEYS = ["ranged", "melee", "defense", "reaction", "awaken"];
+const CHAR_STAT_LABELS = { ranged: "射击", melee: "格斗", defense: "防御", reaction: "反应", awaken: "觉醒" };
+const CHAR_SKILL_FIELDS = ["character_skill_id", "level", "name", "desc", "sp", "duration", "is_auto_usage", "auto_usage_priority", "traits"];
+const CHAR_ABILITY_FIELDS = ["ability_id", "level", "name", "desc", "ability_type", "traits"];
+const _pickKeys = (o, ks) => { const r = {}; for (const k of ks) if (o[k] !== undefined) r[k] = o[k]; return r; };
+
+function bindCharacterEditButtons(c) {
+  const editBtn = $("#char-edit-btn");
+  const saveBtn = $("#char-save-btn");
+  const syncBtn = $("#char-sync-btn");
+  const refetchBtn = $("#char-refetch-btn");
+  if (editBtn) editBtn.addEventListener("click", () => enterCharacterEdit(c));
+  if (saveBtn) saveBtn.addEventListener("click", () => saveCharacterEdit());
+  if (syncBtn) syncBtn.addEventListener("click", () => openCharSync(c.id));
+  if (refetchBtn) refetchBtn.addEventListener("click", () => refetchCurrentChar(c.id));
+}
+
+function enterCharacterEdit(c) {
+  const hasSp = (c.rarity || 5) < 5;
+  charEdit = {
+    id: c.id,
+    name: c.name,
+    role: c.role || 1,
+    rarity: c.rarity || 5,
+    desc: c.desc || "",
+    tags: (c.tags || []).slice(),
+    stats: {
+      default: {
+        ranged: c.max_ranged || 0, melee: c.max_melee || 0, defense: c.max_defense || 0,
+        reaction: c.max_reaction || 0, awaken: c.max_awaken || 0,
+      },
+      sp: hasSp ? {
+        ranged: c.sp_max_ranged || 0, melee: c.sp_max_melee || 0, defense: c.sp_max_defense || 0,
+        reaction: c.sp_max_reaction || 0, awaken: c.sp_max_awaken || 0,
+      } : null,
+    },
+    skills: (c.skills || []).map((s) => _pickKeys(s, CHAR_SKILL_FIELDS)),
+    abilities: (c.abilities || []).map((a) => _pickKeys(a, CHAR_ABILITY_FIELDS)),
+  };
+  renderCharacterEditForm();
+}
+
+function charNum(el) {
+  return el.value === "" ? null : Number(el.value) || 0;
+}
+
+function renderCharacterEditForm() {
+  const s = charEdit;
+  const statCell = (prefix) => (k) =>
+    `<td><input class="edit-input" data-stat="${prefix}" data-k="${k}" type="number" value="${s.stats[prefix][k] ?? ""}"></td>`;
+  const statRow = (prefix, label) =>
+    `<tr><th>${label}</th>${CHAR_STAT_KEYS.map(statCell(prefix)).join("")}</tr>`;
+  const tagHtml = s.tags.map((t, i) =>
+    `<span class="chip sel-tag">${esc(t)}<button class="chip-x" aria-label="移除" data-tag-i="${i}" title="删除">×</button></span>`).join("")
+    || '<span class="muted">无标签</span>';
+  const skillRows = s.skills.map((sk, i) => `
+    <tr>
+      <td><input class="edit-input" style="width:150px" data-skill="${i}" data-f="name" value="${esc(sk.name ?? "")}"></td>
+      <td><input class="edit-input" data-skill="${i}" data-f="sp" type="number" value="${sk.sp ?? ""}"></td>
+      <td><input class="edit-input" data-skill="${i}" data-f="duration" type="number" value="${sk.duration ?? ""}"></td>
+      <td><textarea class="edit-input" rows="2" data-skill="${i}" data-f="desc">${esc(sk.desc ?? "")}</textarea></td>
+      <td><button class="edit-remove" aria-label="删除技能" data-skill-del="${i}" title="删除技能">×</button></td>
+    </tr>`).join("");
+  const abilityRows = s.abilities.map((a, i) => `
+    <tr>
+      <td><input class="edit-input" style="width:150px" data-ability="${i}" data-f="name" value="${esc(a.name ?? "")}"></td>
+      <td><textarea class="edit-input" rows="2" data-ability="${i}" data-f="desc">${esc(a.desc ?? "")}</textarea></td>
+      <td><button class="edit-remove" aria-label="删除能力" data-ability-del="${i}" title="删除能力">×</button></td>
+    </tr>`).join("");
+  const body = `
+    <p class="desc">${esc("正在编辑驾驶员「" + s.name + "」。修改完成后点标题上的「保存修改到本地」提交，会先预览差异。")}</p>
+    <h3>类型 / 稀有度</h3>
+    <div class="edit-row">
+      <label>类型
+        <select id="edit-role" class="edit-select">${CHAR_ROLE_OPTS.map(([v, lb]) => `<option value="${v}" ${v == s.role ? "selected" : ""}>${lb}</option>`).join("")}</select>
+      </label>
+      <label>稀有度
+        <select id="edit-rarity" class="edit-select">${CHAR_RARITY_OPTS.map(([v, lb]) => `<option value="${v}" ${v == s.rarity ? "selected" : ""}>${lb}</option>`).join("")}</select>
+      </label>
+    </div>
+    <h3>属性（满级）</h3>
+    <table><tr><th></th>${CHAR_STAT_KEYS.map((k) => `<th>${CHAR_STAT_LABELS[k]}</th>`).join("")}</tr>
+      ${statRow("default", "默认")}
+      ${s.stats.sp ? statRow("sp", "SP 满级") : ""}
+    </table>
+    ${s.stats.sp ? "" : '<p class="edit-hint">UR 驾驶员不开放 SP 形态属性编辑。</p>'}
+    <h3>标签</h3>
+    <div class="tags" id="edit-tags">${tagHtml}</div>
+    <button id="edit-add-tag" class="cond-btn" style="margin-left:0">添加标签</button>
+    <h3>描述</h3>
+    <textarea id="edit-desc" class="edit-input wide" style="width:100%;min-height:60px" rows="3">${esc(s.desc)}</textarea>
+    <h3>技能（${s.skills.length}）</h3>
+    ${s.skills.length ? `<table><tr><th>名称</th><th>SP</th><th>持续</th><th>效果描述</th><th></th></tr>${skillRows}</table>` : '<div class="empty">无技能</div>'}
+    <button id="edit-add-skill" class="cond-btn" style="margin-left:0">添加技能</button>
+    <h3>能力（${s.abilities.length}）</h3>
+    ${s.abilities.length ? `<table><tr><th>名称</th><th>描述</th><th></th></tr>${abilityRows}</table>` : '<div class="empty">无能力</div>'}
+    <button id="edit-add-ability" class="cond-btn" style="margin-left:0">从全库能力选择…</button>
+    <button id="edit-add-ability-manual" class="cond-btn" style="margin-left:0">添加空能力</button>
+    <div class="calc-actions"><button id="edit-cancel" class="cond-btn">取消修改</button></div>
+    <span id="edit-msg" class="muted"></span>`;
+  $("#modal-body").innerHTML = body;
+  bindCharacterEditForm();
+}
+
+function bindCharacterEditForm() {
+  const body = $("#modal-body");
+  body.querySelectorAll("input[data-stat]").forEach((el) =>
+    el.addEventListener("input", () => {
+      charEdit.stats[el.dataset.stat][el.dataset.k] = charNum(el) || 0;
+    }));
+  body.querySelectorAll("[data-tag-i]").forEach((el) =>
+    el.addEventListener("click", () => {
+      charEdit.tags.splice(Number(el.dataset.tagI), 1);
+      renderCharacterEditForm();
+    }));
+  body.querySelectorAll("[data-skill]").forEach((el) =>
+    el.addEventListener("input", () => {
+      const sk = charEdit.skills[Number(el.dataset.skill)];
+      const f = el.dataset.f;
+      if (["sp", "duration", "level"].includes(f)) sk[f] = charNum(el);
+      else sk[f] = el.value;
+    }));
+  body.querySelectorAll("[data-ability]").forEach((el) =>
+    el.addEventListener("input", () => {
+      const a = charEdit.abilities[Number(el.dataset.ability)];
+      a[el.dataset.f] = el.value;
+    }));
+  body.querySelectorAll("[data-skill-del]").forEach((el) =>
+    el.addEventListener("click", () => {
+      charEdit.skills.splice(Number(el.dataset.skillDel), 1);
+      renderCharacterEditForm();
+    }));
+  body.querySelectorAll("[data-ability-del]").forEach((el) =>
+    el.addEventListener("click", () => {
+      charEdit.abilities.splice(Number(el.dataset.abilityDel), 1);
+      renderCharacterEditForm();
+    }));
+  const roleEl = $("#edit-role");
+  if (roleEl) roleEl.addEventListener("change", (e) => {
+    charEdit.role = Number(e.target.value);
+  });
+  const rarityEl = $("#edit-rarity");
+  if (rarityEl) rarityEl.addEventListener("change", (e) => {
+    charEdit.rarity = Number(e.target.value);
+    if (charEdit.rarity < 5 && !charEdit.stats.sp) {
+      charEdit.stats.sp = {};
+      CHAR_STAT_KEYS.forEach((k) => { charEdit.stats.sp[k] = charEdit.stats.default[k]; });
+    } else if (charEdit.rarity >= 5) {
+      charEdit.stats.sp = null;
+    }
+    renderCharacterEditForm();
+  });
+  const descEl = $("#edit-desc");
+  if (descEl) descEl.addEventListener("input", (e) => { charEdit.desc = e.target.value; });
+  const cancel = $("#edit-cancel");
+  if (cancel) cancel.addEventListener("click", () => {
+    const cid = charEdit.id;
+    charEdit = null;
+    openCharacter(cid);
+  });
+  const addTag = $("#edit-add-tag");
+  if (addTag) addTag.addEventListener("click", openCharTagPicker);
+  const addSkill = $("#edit-add-skill");
+  if (addSkill) addSkill.addEventListener("click", () => {
+    charEdit.skills.push({ name: "", desc: "", traits: "[]" });
+    renderCharacterEditForm();
+  });
+  const addAbility = $("#edit-add-ability");
+  if (addAbility) addAbility.addEventListener("click", openCharAbilityPicker);
+  const addAbilityManual = $("#edit-add-ability-manual");
+  if (addAbilityManual) addAbilityManual.addEventListener("click", () => {
+    charEdit.abilities.push({ name: "", desc: "", traits: "[]" });
+    renderCharacterEditForm();
+  });
+}
+
+function buildCharacterEditPayload() {
+  const s = charEdit;
+  return {
+    character_id: s.id,
+    role: s.role,
+    rarity: s.rarity,
+    desc: s.desc || "",
+    tags: s.tags.slice(),
+    stats: {
+      default: Object.assign({}, s.stats.default),
+      sp: s.stats.sp ? Object.assign({}, s.stats.sp) : null,
+    },
+    skills: s.skills.map((sk) => _pickKeys(sk, CHAR_SKILL_FIELDS)),
+    abilities: s.abilities.map((a) => _pickKeys(a, CHAR_ABILITY_FIELDS)),
+  };
+}
+
+async function saveCharacterEdit() {
+  const msg = $("#edit-msg");
+  if (!charEdit) return;
+  const payload = buildCharacterEditPayload();
+  try {
+    const r = await fetch("/api/char-edit?preview=1", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const res = await r.json();
+    if (!res.ok) { if (msg) msg.textContent = res.error || "校验失败"; return; }
+    if (!res.changed) { if (msg) msg.textContent = "没有修改"; return; }
+    showModal("确认保存修改",
+      `<p class="desc">以下为本次修改与本地数据库的差异，确认后将写入本地数据库并记录编辑历史：</p>
+       <table><tr><th>项目</th><th>字段</th><th>原值</th><th>新值</th></tr>
+       ${(res.diff || []).map((x) => `<tr><td>${esc(x.section)}</td><td>${esc(x.field)}</td><td class="desc">${esc(x.old)}</td><td class="desc">${esc(x.new)}</td></tr>`).join("")}</table>
+       <div class="calc-actions"><button id="edit-confirm" class="cond-btn">确认保存</button>
+       <button id="edit-confirm-cancel" class="cond-btn">取消</button></div>`);
+    $("#edit-confirm").addEventListener("click", async () => {
+      $("#modal").classList.add("hidden");
+      const r2 = await fetch("/api/char-edit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const res2 = await r2.json();
+      if (!res2.ok) { showModal("保存失败", `<p class="desc">${esc(res2.error || "未知错误")}</p>`); return; }
+      const cid = charEdit.id;
+      charEdit = null;
+      openCharacter(cid);
+    });
+    $("#edit-confirm-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+  } catch (e) {
+    if (msg) msg.textContent = "保存失败：" + (e.message || e);
+  }
+}
+
+async function openCharSync(charId) {
+  if (charEdit) {
+    $("#modal").classList.add("hidden");
+    showModal("提示", '<p class="desc">还有未保存的修改，请先「保存修改到本地」再同步到服务器。</p>');
+    return;
+  }
+  let d;
+  try {
+    d = await api(`/api/char-sync-diff?char_id=${charId}`);
+  } catch (e) {
+    showModal("同步失败", `<p class="desc">${esc(e.message || e)}</p>`);
+    return;
+  }
+  if (!d.ok) {
+    showModal("无法同步", `<p class="desc">${esc(d.error || "云端不可用")}</p>`);
+    return;
+  }
+  if (d.identical) {
+    showModal("同步驾驶员数据到服务器",
+      '<p class="desc" style="color:var(--ok)">本地与服务器该驾驶员数据一致，无需同步。</p>');
+    return;
+  }
+  showModal("同步驾驶员数据到服务器",
+    `<p class="desc">以下为本地与服务器该驾驶员的差异。确认后会把本地数据覆盖到服务器（仅这一个驾驶员，其他数据不变）：</p>
+     <table><tr><th>项目</th><th>字段</th><th>服务器</th><th>本地</th></tr>
+     ${(d.diff || []).map((x) => `<tr><td>${esc(x.section)}</td><td>${esc(x.field)}</td><td class="desc">${esc(x.old)}</td><td class="desc">${esc(x.new)}</td></tr>`).join("")}</table>
+     <div class="calc-actions"><button id="char-sync-confirm" class="cond-btn">确认同步到服务器</button>
+     <button id="char-sync-cancel" class="cond-btn">取消</button></div>`);
+  $("#char-sync-confirm").addEventListener("click", async () => {
+    $("#modal").classList.add("hidden");
+    try {
+      const r = await fetch("/api/char-sync", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ char_id: charId }),
+      });
+      const res = await r.json();
+      showModal("同步结果", `<p class="desc">${esc(res.message || res.error || "完成")}</p>`);
+    } catch (e) {
+      showModal("同步失败", `<p class="desc">${esc(e.message || e)}</p>`);
+    }
+  });
+  $("#char-sync-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+}
+
+/* 重新爬取单驾驶员：抓网页最新 → 对比本地差异 → 确认后以网页数据覆盖本地 → 刷新详情 */
+async function refetchCurrentChar(charId) {
+  if (charEdit) {
+    $("#modal").classList.add("hidden");
+    showModal("提示", '<p class="desc">还有未保存的修改，请先「保存修改到本地」再重新爬取。</p>');
+    return;
+  }
+  showModal("正在爬取", '<p class="desc">正在从网站获取最新数据并对比差异，请稍候…</p>');
+  let d;
+  try {
+    d = await api(`/api/refetch-char-diff?char_id=${charId}`);
+  } catch (e) {
+    showModal("爬取失败", `<p class="desc">${esc(e.message || e)}</p>`);
+    return;
+  }
+  if (!d.ok) {
+    showModal("无法爬取", `<p class="desc">${esc(d.error || "未知错误")}</p>`);
+    return;
+  }
+  if (d.identical) {
+    showModal("重新爬取驾驶员数据",
+      '<p class="desc" style="color:var(--ok)">网页数据与本地完全一致，无需覆盖。</p>');
+    return;
+  }
+  const diffRows = (d.diff || []).map((x) =>
+    `<tr><td>${esc(x.section)}</td><td>${esc(x.field)}</td><td class="desc">${esc(x.old)}</td><td class="desc">${esc(x.new)}</td></tr>`).join("");
+  showModal("重新爬取驾驶员数据",
+    `<p class="desc">以下为网页最新数据与本地数据库的差异（共 ${d.diff.length} 处）。确认后将以网页数据覆盖本地（仅这一个驾驶员，其他数据不变）：</p>
+     <table><tr><th>项目</th><th>字段</th><th>本地</th><th>网页</th></tr>${diffRows}</table>
+     <div class="calc-actions"><button id="refetch-confirm" class="cond-btn">确认以网页数据覆盖本地</button>
+     <button id="refetch-cancel" class="cond-btn">取消</button></div>`);
+  $("#refetch-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+  $("#refetch-confirm").addEventListener("click", async () => {
+    const btn = $("#refetch-confirm");
+    btn.disabled = true;
+    btn.textContent = "覆盖中…";
+    try {
+      const r = await api(`/api/refetch-char-apply?char_id=${charId}`);
+      if (r.ok) {
+        await openCharacter(charId);  /* 刷新详情（详情本身即覆盖成功的反馈） */
+        announceLive(`已用网页数据覆盖驾驶员 ${r.name || charId}`);
+      } else {
+        showModal("覆盖失败", `<p class="desc">${esc(r.error || "未知错误")}</p>`);
+      }
+    } catch (e) {
+      showModal("覆盖失败", `<p class="desc">${esc(e.message || e)}</p>`);
+    }
+  });
+}
+
+async function openCharTagPicker() {
+  const all = await api("/api/tags?kind=character");
+  showModal("添加标签",
+    `<p class="desc">当前驾驶员已有标签：${esc(charEdit.tags.join("、") || "无")}</p>
+     <input id="tag-pick-q" class="edit-input wide" placeholder="搜索标签…">
+     <div id="tag-pick-list" class="tags"></div>
+     <div class="calc-actions"><button id="tag-pick-ok" class="cond-btn">确定</button>
+     <button id="tag-pick-close" class="cond-btn">关闭</button></div>`);
+  const list = $("#tag-pick-list");
+  const render = () => {
+    const kw = $("#tag-pick-q").value.trim();
+    list.innerHTML = all.filter((t) => !kw || t.includes(kw)).map((t) =>
+      `<label class="chip sel-tag"><input type="checkbox" value="${esc(t)}" ${charEdit.tags.includes(t) ? "checked" : ""}> ${esc(t)}</label>`).join("")
+      || '<div class="empty">无匹配</div>';
+  };
+  render();
+  $("#tag-pick-q").addEventListener("input", render);
+  $("#tag-pick-ok").addEventListener("click", () => {
+    list.querySelectorAll("input:checked").forEach((el) => {
+      const t = el.value;
+      if (!charEdit.tags.includes(t)) charEdit.tags.push(t);
+    });
+    renderCharacterEditForm();
+  });
+  $("#tag-pick-close").addEventListener("click", () => $("#modal").classList.add("hidden"));
+}
+
+async function openCharAbilityPicker() {
+  const all = await api("/api/abilities");
+  showModal("添加能力",
+    `<p class="desc">从全库能力中选择（该库为全库能力汇总，驾驶员专属能力若不在其中可用「添加空能力」手动录入）。</p>
+     <input id="ab-pick-q" class="edit-input wide" placeholder="搜索能力…">
+     <div id="ab-pick-list" class="tags"></div>
+     <div class="calc-actions"><button id="ab-pick-ok" class="cond-btn">确定</button>
+     <button id="ab-pick-close" class="cond-btn">关闭</button></div>`);
+  const list = $("#ab-pick-list");
+  const render = () => {
+    const kw = $("#ab-pick-q").value.trim();
+    const have = new Set(charEdit.abilities.map((a) => String(a.ability_id)).filter(Boolean));
+    list.innerHTML = all.filter((x) => !kw || x.name.includes(kw)).map((x) =>
+      `<label class="chip sel-tag" ${have.has(String(x.ability_id)) ? 'style="opacity:.5"' : ""}><input type="checkbox" value="${x.ability_id}" ${have.has(String(x.ability_id)) ? "disabled" : ""}> ${esc(x.name)}</label>`).join("")
+      || '<div class="empty">无匹配</div>';
+  };
+  render();
+  $("#ab-pick-q").addEventListener("input", render);
+  $("#ab-pick-ok").addEventListener("click", () => {
+    list.querySelectorAll("input:checked").forEach((el) => {
+      const item = all.find((x) => String(x.ability_id) === el.value);
+      if (item && !charEdit.abilities.some((a) => String(a.ability_id) === String(item.ability_id))) {
+        charEdit.abilities.push(_pickKeys(item, CHAR_ABILITY_FIELDS));
+      }
+    });
+    renderCharacterEditForm();
+  });
+  $("#ab-pick-close").addEventListener("click", () => $("#modal").classList.add("hidden"));
 }
 
 function searchCharactersBySeries(seriesId) {
@@ -2332,54 +2827,6 @@ function condPanel(obj, current, kind) {
   </div>`;
 }
 
-function renderUnitStats(u, star, formKey) {
-  if (!u.can_star) star = 0;
-  const form = u.forms[formKey] || u.forms.default;
-  const s = form.stars[star];
-  const st = s.stats;
-  const cellM = (key) => statCell(st[key], "max");
-  const movM = form.movement[1] ?? u.max_movement;
-  const formBtns = (u.can_star && u.has_sp)
-    ? `<span class="star-label">形态</span>` + [
-        ["default", `默认(${u.level_cap}级)`],
-        ["sp", "SP(100级)"],
-        ...(u.has_ssp ? [["ssp", "SSP"]] : []),
-      ].map(([fk, label]) =>
-        `<button class="form-btn ${formKey === fk ? "active" : ""}" data-form="${fk}">${label}</button>`).join("")
-    : "";
-  const starBtns = u.can_star
-    ? `<span class="star-label">星级</span>` + form.stars.map((x) =>
-        `<button class="star-btn ${x.star === star ? "active" : ""}" data-star="${x.star}">${x.star}★ ${x.label}</button>`).join("")
-    : "";
-  const ultNote = !u.can_star
-    ? `<span class="chip ult-tag">终极标签 · 暂不能升星 / SP，仅显示 0 星数据</span>`
-    : "";
-  const sspNote = (formKey === "ssp" && form.fallback)
-    ? '<p class="hint">SSP 数据暂未收录，暂以 SP 数值显示（后续数据更新后自动生效）。</p>'
-    : "";
-  const hint = u.can_star
-    ? `绿色 +N 为无条件能力加成；${formKey === "default" ? `默认形态满级 ${form.level_cap}（稀有度上限）` : `${formKey.toUpperCase()} 形态满级 ${form.level_cap}`}，升星倍率 ${form.stars.map((x) => `${x.star}★=${x.label}`).join(" / ")}（HP、EN、攻击、防御、机动）。`
-    : "绿色 +N 为无条件能力加成；终极标签机体暂不能升星 / SP，仅统计 0 星数据。";
-  $("#unit-stats").innerHTML = `
-    <h3>机体属性（满级）</h3>
-    <div class="star-bar">
-      ${formBtns}
-      ${starBtns}
-      <span class="cap-chip">满级上限 ${form.level_cap}</span>
-      ${ultNote}
-      <button class="cond-btn" id="cond-toggle">查看条件加成</button>
-    </div>
-    <table>
-      <tr><th></th><th>HP</th><th>EN</th><th>攻击</th><th>防御</th><th>机动</th><th>移动</th></tr>
-      <tr><th>满级</th><td>${cellM("hp")}</td><td>${cellM("en")}</td><td>${cellM("attack")}</td>
-        <td>${cellM("defense")}</td><td>${cellM("mobility")}</td><td class="mono">${movM}</td></tr>
-    </table>
-    <p class="hint">${hint}</p>
-    ${sspNote}
-    ${condPanel(u, { form: formKey, star }, "unit")}`;
-  bindUnitControls(u, formKey, star);
-}
-
 function renderCharStats(c, formKey) {
   const form = c.forms[formKey];
   const st = form.stats;
@@ -2400,32 +2847,6 @@ function renderCharStats(c, formKey) {
     <p class="hint">绿色 +N 为无条件能力加成；驾驶员没有星级。SP 前满级 ${c.level_cap}（稀有度上限），SP 后满级 100。</p>
     ${condPanel(c, formKey, "character")}`;
   bindCharControls(c, formKey);
-}
-
-function bindUnitControls(u, formKey, star) {
-  $("#unit-stats").querySelectorAll(".form-btn").forEach((b) =>
-    b.addEventListener("click", () => {
-      const fk = b.dataset.form;
-      renderUnitStats(u, star, fk);
-      renderUnitTerrain(u, fk);
-      renderUnitWeapons(u, fk);
-      renderUnitAbilities(u, fk);
-      renderUnitWfx(u, fk);
-    }));
-  $("#unit-stats").querySelectorAll(".star-btn").forEach((b) =>
-    b.addEventListener("click", () => {
-      const sstar = Number(b.dataset.star);
-      renderUnitStats(u, sstar, formKey);
-      renderUnitWfx(u, formKey);
-    }));
-  const toggle = $("#cond-toggle");
-  if (!toggle) return;
-  toggle.addEventListener("click", () => {
-    const panel = $("#cond-panel");
-    if (!panel) return;
-    const hidden = panel.classList.toggle("hidden");
-    toggle.textContent = hidden ? "查看条件加成" : "收起条件加成";
-  });
 }
 
 function bindCharControls(c, formKey) {
