@@ -563,8 +563,9 @@ ROLE_NAMES = {1: "攻击型", 2: "耐久型", 3: "支援型"}
 
 _DMG_UP_RE = re.compile(r"(?<!爆击)损伤(?:再)?提升\s*(\d+)%")
 _DMG_DOWN_RE = re.compile(r"损伤(?:减轻|降低)\s*(\d+)%")
+# 防御力 = 机体（MS）数值词；驾驶员自身防御由「守备值」表达（见 _STAT_COMBO_RE）。
 _DEF_UP_RE = re.compile(
-    r"(?:防御力|守备值)(?:及|与|和)?(?:攻击力)?(?:再)?提升\s*(\d+)%"
+    r"(?:防御力)(?:及|与|和)?(?:攻击力)?(?:再)?提升\s*(\d+)%"
 )
 _ATK_UP_RE = re.compile(
     r"攻击力(?:及|与|和)?(?:防御力)?(?:再)?提升\s*(\d+)%"
@@ -578,12 +579,12 @@ _HP_RECOVER_RE = re.compile(
 _CRIT_DMG_RE = re.compile(r"爆击损伤提升\s*(\d+)%")
 _CRIT_RATE_RE = re.compile(r"爆击率提升\s*(\d+)%")
 _STAT_COMBO_RE = re.compile(
-    r"((?:射击值|格斗值|觉醒值|反应值)(?:及|与|和)?"
-    r"(?:射击值|格斗值|觉醒值|反应值)?)(?:再)?提升\s*(\d+)%"
+    r"((?:射击值|格斗值|守备值|觉醒值|反应值)(?:及|与|和)?"
+    r"(?:射击值|格斗值|守备值|觉醒值|反应值)?)(?:再)?提升\s*(\d+)%"
 )
 _STAT_ALIAS = {
     "射击值": "ranged", "格斗值": "melee",
-    "觉醒值": "awaken", "反应值": "reaction",
+    "守备值": "defense", "觉醒值": "awaken", "反应值": "reaction",
 }
 _WA_MAP = {"Physical": 1, "Beam": 2, "Special": 3}
 
@@ -3603,8 +3604,14 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
         + sum_kind(def_unit_ab, on["def_u"], "dmg_down")
     )
     atk_unit_extra = sum_kind(atk_unit_ab, on["atk_u"], "atk_pct")
-    def_unit_extra = sum_kind(def_unit_ab, on["def_u"], "def_pct")
-    def_pilot_extra = sum_kind(def_pilot_ab, on["def_p"], "def_pct")
+    # 驾驶员能力里的「防御力提升」（如支援防御时自身防御力提升20%）提升的是所搭乘
+    # 机体的防御基础值，因此与机体能力一起累加进 def_unit_extra（机体防御）；
+    # 驾驶员自身的守备值提升才计入其自身防御（def_pilot_defense，走 stat_pct）。
+    def_unit_extra = (
+        sum_kind(def_unit_ab, on["def_u"], "def_pct")
+        + sum_kind(def_pilot_ab, on["def_p"], "def_pct")
+    )
+    def_pilot_stat_def = sum_stat(def_pilot_ab, on["def_p"], "defense")
     try:
         atk_us_pct = float(atk_unit_skill or 0)
     except (TypeError, ValueError):
@@ -3694,7 +3701,7 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
     if def_pilot:
         def_pilot_defense = star_value(
             def_pilot["stats"]["defense"],
-            def_pilot["bonuses"].get("defense", 0) + def_pilot_extra,
+            def_pilot["bonuses"].get("defense", 0) + def_pilot_stat_def,
             0,
         )[0]
 

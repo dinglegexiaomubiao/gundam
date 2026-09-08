@@ -18,10 +18,12 @@ UNIT_STAT_KEYWORDS = {
     "防御力": "defense",
     "机动力": "mobility",
 }
+# 驾驶员自身属性词：只有「守备值」指驾驶员自身防御；
+# 「防御力」是机体（MS）的数值词，出现在驾驶员能力里时按机体防御处理，
+# 不应累加到驾驶员自己的防御属性上（见 support-defense 计算规则）。
 CHAR_STAT_KEYWORDS = {
     "射击值": "ranged",
     "格斗值": "melee",
-    "防御力": "defense",
     "守备值": "defense",
     "反应值": "reaction",
     "觉醒值": "awaken",

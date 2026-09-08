@@ -77,8 +77,9 @@ _UNVERIFIABLE_KEYS = (
 # 效果正则（与伤害计算一致）
 _DMG_UP_RE = re.compile(r"(?<!爆击)损伤(?:再)?提升\s*(\d+)%")
 _DMG_DOWN_RE = re.compile(r"损伤(?:减轻|降低)\s*(\d+)%")
+# 防御力 = 机体（MS）数值词；驾驶员自身防御由「守备值」表达（见 _STAT_COMBO_RE）。
 _DEF_UP_RE = re.compile(
-    r"(?:防御力|守备值)(?:及|与|和)?(?:攻击力)?(?:再)?提升\s*(\d+)%"
+    r"(?:防御力)(?:及|与|和)?(?:攻击力)?(?:再)?提升\s*(\d+)%"
 )
 _ATK_UP_RE = re.compile(
     r"攻击力(?:及|与|和)?(?:防御力)?(?:再)?提升\s*(\d+)%"
@@ -90,12 +91,12 @@ _HP_RECOVER_RE = re.compile(r"自身HP为(\d+)%以下时，\s*自身HP恢复(\d+
 _CRIT_DMG_RE = re.compile(r"爆击损伤提升\s*(\d+)%")
 _CRIT_RATE_RE = re.compile(r"爆击率提升\s*(\d+)%")
 _STAT_COMBO_RE = re.compile(
-    r"((?:射击值|格斗值|觉醒值|反应值)(?:及|与|和)?"
-    r"(?:射击值|格斗值|觉醒值|反应值)?)(?:再)?提升\s*(\d+)%"
+    r"((?:射击值|格斗值|守备值|觉醒值|反应值)(?:及|与|和)?"
+    r"(?:射击值|格斗值|守备值|觉醒值|反应值)?)(?:再)?提升\s*(\d+)%"
 )
 _STAT_ALIAS = {
     "射击值": "ranged", "格斗值": "melee",
-    "觉醒值": "awaken", "反应值": "reaction",
+    "守备值": "defense", "觉醒值": "awaken", "反应值": "reaction",
 }
 _EXTRA_ACTION_RE = re.compile(r"额外行动")
 _SUPPORT_WORD_RE = re.compile(r"支援(?:攻击|防御)|反击|支援攻击|支援防御")
@@ -549,6 +550,18 @@ def _full_stat(row: dict, bonuses: dict, key: str, form: str) -> int:
     return mx * (100 + pct) // 100
 
 
+def _effective_stat(pilot: dict, key: str, cond_pct) -> int:
+    """驾驶员某项属性的有效值 = 基础值 × (100 + 无条件% + 命中条件%)。
+
+    与属性页「条件加成」预览一致：无条件加成不预先折入再叠乘，否则会重复计算
+    （如多个守备值提升25% 应为 ×1.5，而非 ×1.25×1.25）。
+    注意：驾驶员能力中的「防御力提升」（机体数值词）不在此列，见 _score_defense。
+    """
+    base = pilot["stat_bases"].get(key, 0)
+    uncond = pilot["stat_bonus_pct"].get(key, 0)
+    return base * (100 + uncond + int(cond_pct or 0)) // 100
+
+
 def _counter_guard_ids(conn) -> set[int]:
     ids: set[int] = set()
     for cid, name, traits in conn.execute(
@@ -601,8 +614,12 @@ def _build_pilots() -> list:
             row = dict(c)
             rarity = row.get("rarity") or 5
             form = "sp" if rarity < 5 else "default"
+            prefix = "sp_" if form == "sp" else ""
             bonuses = _json_dict(row.get("stat_bonuses"))
             stats = {k: _full_stat(row, bonuses, k, form) for k in STAT_KEYS}
+            stat_bases = {
+                k: row.get(prefix + "max_" + k) or 0 for k in STAT_KEYS
+            }
             abilities = [
                 _parse_ability(
                     a["name"], a["traits"], _TAG_NAME, _SERIES_NAME
@@ -664,6 +681,8 @@ def _build_pilots() -> list:
                 "tags": set(_json_list(row.get("tags"))),
                 "support_label": lbl,
                 "stats": stats,
+                "stat_bases": stat_bases,
+                "stat_bonus_pct": dict(bonuses),
                 "abilities": abilities,
                 "skills": skills,
                 "base_mech": base_mech,
@@ -808,7 +827,7 @@ def _score_attack(
     dep_keys = ATTACK_ATTR_KEYS.get(int(weapon_row.get("attack_attr") or 1)) \
         or ["ranged"]
     dep_val = max(
-        pilot["stats"][k] * (100 + tot["stat_pct"].get(k, 0.0)) // 100
+        _effective_stat(pilot, k, tot["stat_pct"].get(k, 0.0))
         for k in dep_keys
     )
     tags = set(_json_list(unit_row.get("tags")))
@@ -948,15 +967,21 @@ def _score_defense(
                 recoveries.append(it["eff"]["hp_recover"])
             if it["eff"].get("def_stack"):
                 stacks.append(it["eff"]["def_stack"])
-    def_pct = tot["def_pct"] + tot["stat_pct"].get("defense", 0.0)
-    def_val = pilot["stats"]["defense"] * (100 + def_pct) // 100
+    # 驾驶员能力里的「防御力提升」（如支援防御时自身防御力提升20%）提升的是
+    # 所搭乘机体的防御基础值，多个效果叠加在同一条机体基础值上相加
+    # （base × (1 + a% + b%)），因此计入 unit_def；
+    # 驾驶员自身防御只有「守备值」提升，作为条件加成计入 def_val。
+    unit_def_pct = unit_tot["def_pct"] + tot["def_pct"]
+    def_val = _effective_stat(
+        pilot, "defense", tot["stat_pct"].get("defense", 0.0)
+    )
     # 机体满星满级防御 / HP
     tags = set(_json_list(unit_row.get("tags")))
     star = 0 if ULTIMATE_TAG in tags else 3
     bonuses = _json_dict(unit_row.get("stat_bonuses"))
     unit_def = star_value(
         unit_row.get("max_defense") or 0,
-        bonuses.get("defense", 0) + unit_tot["def_pct"]
+        bonuses.get("defense", 0) + unit_def_pct
         + ext.get("pct", 0.0),
         star,
     )[0]
