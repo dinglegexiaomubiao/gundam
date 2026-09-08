@@ -659,6 +659,7 @@ def _build_pilots() -> list:
                 "rarity": rarity,
                 "role": row.get("role") or 0,
                 "role_label": ROLE_NAMES.get(row.get("role"), "—"),
+                "acquisition": row.get("acquisition") or 0,
                 "series_ids": _pilot_series_ids(row),
                 "tags": set(_json_list(row.get("tags"))),
                 "support_label": lbl,
@@ -881,6 +882,7 @@ def _score_attack(
         "rarity": pilot["rarity"],
         "role": pilot["role"],
         "role_label": pilot["role_label"],
+        "acquisition": pilot.get("acquisition") or 0,
         "score": score,
         "damage": damage,
         "crit_damage": crit_damage,
@@ -1048,6 +1050,7 @@ def _score_defense(
         "rarity": pilot["rarity"],
         "role": pilot["role"],
         "role_label": pilot["role_label"],
+        "acquisition": pilot.get("acquisition") or 0,
         "score": expected,
         "survive": survive,
         "survive_crit": survive_crit,
@@ -1200,13 +1203,15 @@ def match_pilot(
             "crit_ov": str(enemy.get("crit_ov") or "").strip(),
             "critdmg_ov": str(enemy.get("critdmg_ov") or "").strip(),
         }
-        for p in _pilots:
+        candidates = _apply_pilot_constraints(_pilots, filters)
+        for p in candidates:
             rows.append(_score_attack(
                 p, unit_ctx, weapon_row, bench_cfg, unit_row, unit_tot, cfg
             ))
         rows.sort(key=lambda x: x["score"], reverse=True)
     else:
-        for p in _pilots:
+        candidates = _apply_pilot_constraints(_pilots, filters)
+        for p in candidates:
             rows.append(_score_defense(
                 p, unit_ctx, unit_row, enemy_cfg, unit_abilities, ext
             ))
@@ -1339,48 +1344,66 @@ def default_enemy() -> dict:
     }
 
 
-def _apply_pair_filters(rows: list, f: dict, action: str) -> list:
-    """对匹配结果应用驾驶员搜索筛选与排序。"""
+def _pair_pred(r: dict, f: dict) -> bool:
+    """驾驶员是否满足前置条件（作用于原始驾驶员或已打分行，字段结构一致）。"""
     q = (f.get("q") or "").strip()
-    if q:
-        rows = [r for r in rows if q in (r.get("name") or "")]
+    if q and q not in (r.get("name") or ""):
+        return False
     rarity = f.get("rarity") or ""
-    if rarity:
-        rows = [r for r in rows if str(r.get("rarity")) == rarity]
+    if rarity and str(r.get("rarity")) != rarity:
+        return False
+    acq = f.get("acq") or ""
+    if acq:
+        val = r.get("acquisition") or 0
+        if acq == "other":
+            if val == 1:
+                return False
+        elif str(val) != acq:
+            return False
     ptype = f.get("type") or ""
-    if ptype:
-        rows = [r for r in rows if str(r.get("role")) == ptype]
+    if ptype and str(r.get("role")) != ptype:
+        return False
     series = f.get("series") or ""
     if series and series.isdigit():
         sid = int(series)
-        rows = [r for r in rows if sid in (r.get("series_ids") or set())]
+        if sid not in (r.get("series_ids") or set()):
+            return False
     tags = [t for t in str(f.get("tags") or "").split(",") if t]
     skills = [s for s in str(f.get("skills") or "").split(",") if s]
     if tags or skills:
         match_and = (f.get("match") or "and") == "and"
         tag_all = (f.get("tag_mode") or "all") == "all"
         skill_any = (f.get("skill_mode") or "any") == "any"
-
-        def pred(r):
-            conds = []
-            if tags:
-                rt = set(r.get("tags") or [])
-                conds.append(
-                    all(t in rt for t in tags) if tag_all
-                    else any(t in rt for t in tags)
-                )
-            if skills:
-                rs = {s.get("name") for s in (r.get("skills") or [])}
-                conds.append(
-                    any(s in rs for s in skills) if skill_any
-                    else all(s in rs for s in skills)
-                )
-            return all(conds) if match_and else any(conds)
-
-        rows = [r for r in rows if pred(r)]
+        conds = []
+        if tags:
+            rt = set(r.get("tags") or [])
+            conds.append(
+                all(t in rt for t in tags) if tag_all
+                else any(t in rt for t in tags)
+            )
+        if skills:
+            rs = {s.get("name") for s in (r.get("skills") or [])}
+            conds.append(
+                any(s in rs for s in skills) if skill_any
+                else all(s in rs for s in skills)
+            )
+        if not (all(conds) if match_and else any(conds)):
+            return False
     support = f.get("support") or ""
-    if support:
-        rows = [r for r in rows if (r.get("support_label") or "") == support]
+    if support and (r.get("support_label") or "") != support:
+        return False
+    return True
+
+
+def _apply_pilot_constraints(pilots: list, f: dict | None) -> list:
+    """匹配前先用约束条件圈定候选驾驶员（在全量池上筛选，再做打分）。"""
+    f = f or {}
+    return [p for p in pilots if _pair_pred(p, f)]
+
+
+def _apply_pair_filters(rows: list, f: dict, action: str) -> list:
+    """对匹配结果应用驾驶员搜索筛选与排序。"""
+    rows = _apply_pilot_constraints(rows, f)
     sort = f.get("sort") or "score"
     order_desc = (f.get("order") or "desc") != "asc"
 

@@ -3890,8 +3890,8 @@ class Handler(BaseHTTPRequestHandler):
                 enemy[key] = q.get(param, [""])[0]
             filters = {}
             for key, param in (
-                ("q", "pq"), ("rarity", "prarity"), ("series", "pseries"),
-                ("type", "ptype"), ("tags", "ptags"),
+                ("q", "pq"), ("rarity", "prarity"), ("acq", "pacq"),
+                ("series", "pseries"), ("type", "ptype"), ("tags", "ptags"),
                 ("tag_mode", "ptag_mode"), ("skills", "pskills"),
                 ("skill_mode", "pskill_mode"), ("support", "psupport"),
                 ("match", "pmatch"), ("sort", "sort"), ("order", "order"),

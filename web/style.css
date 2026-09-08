@@ -368,11 +368,8 @@ textarea.edit-input { width: 240px; min-height: 40px; resize: vertical; font-fam
   background: var(--panel2); border: 1px solid var(--line); border-radius: 999px;
   padding: 4px 12px; font-size: 12px; color: var(--muted);
 }
-.stat-val { font-variant-numeric: tabular-nums; font-weight: 600; }
 .add { color: var(--ok); font-size: 12px; }
 .hint { color: var(--muted); font-size: 12px; margin: 6px 0 10px; }
-.cond-panel { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 14px; margin-top: 10px; background: var(--panel2); }
-.cond-panel h4 { color: var(--accent2); font-size: 14px; margin-bottom: 6px; }
 .calc-wrap { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: 14px; align-items: start; }
 .calc-side { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
 .mods-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; align-items: end; }
@@ -532,7 +529,6 @@ textarea.edit-input { width: 240px; min-height: 40px; resize: vertical; font-fam
   flex-wrap: wrap;
   font-size: 15px;
 }
-.pair-result-panel .pair-filter-bar { margin: 12px 0 6px; }
 .pair-result-panel table .sort-th {
   background: transparent;
   border: none;
@@ -580,6 +576,10 @@ textarea.edit-input { width: 240px; min-height: 40px; resize: vertical; font-fam
 .seg-btn:hover { color: var(--accent); }
 .seg-btn.active { background: var(--accent2); color: #241a05; font-weight: 600; }
 .pair-match-btn { margin-left: auto; }
+.pair-filter-row { align-items: flex-start; padding-top: 10px; }
+.pair-filter-wrap { flex: 1 1 420px; min-width: 0; }
+.pair-filter-wrap .toolbar { margin: 0; row-gap: 8px; }
+.pair-filter-wrap .tagbar { margin: 8px 0 0; min-height: 22px; }
 .pair-selected {
   flex: 1;
   min-width: 260px;
@@ -713,7 +713,7 @@ p, .effect, .desc, .skill-desc, .ability-desc, .notes, td, li, .list-row, .sub {
   text-wrap: pretty;
 }
 /* 数字表格列全局等宽对齐 */
-.num, .mono, .stat-card .v, .cond-panel td, .weapon-table td.num {
+.num, .mono, .stat-card .v, .weapon-table td.num {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
 }

@@ -1442,7 +1442,7 @@ function unitMoveVal() {
   return f.movement?.[1] ?? unitView.u.max_movement ?? 0;
 }
 
-/* 当前形态/星级下可用的条件加成行（复用 condPanel 的过滤规则） */
+/* 当前形态/星级下可用的条件加成行（按 forms[form][star] 过滤） */
 function unitCondRows() {
   const u = unitView.u;
   return (u.conditional_bonuses || []).filter((c) => {
@@ -1697,6 +1697,9 @@ function enterUnitEdit(u) {
 }
 
 function renderUnitEditForm() {
+  /* 编辑模式回单栏全宽，避免被详情弹窗的两栏网格挤压 */
+  const _box = $("#modal .modal-box");
+  if (_box) _box.classList.remove("modal-detail");
   const s = unitEdit;
   const roleOpts = [[1, "攻击型"], [2, "耐久型"], [3, "支援型"]];
   const attrOpts = [[1, "射击"], [2, "格斗"], [3, "特殊"], [7, "EX"]];
@@ -2097,35 +2100,180 @@ async function loadCharacters(page = state.characters.page) {
 async function openCharacter(id) {
   charEdit = null;
   const c = await api(`/api/characters/${id}`);
+  charView.c = c;
+  charView.formKey = "default";
+  charView.on.clear();
   const skills = c.skills.map((sk) => `
     <tr><td><button class="link-name" data-type="skill" data-name="${esc(sk.name)}">${esc(sk.name)}</button></td>
       <td>${sk.sp ?? "—"}</td><td>${sk.duration ?? "—"}</td><td class="desc">${effectHtml(sk.effects, sk.desc, sk.cond_entities)}</td></tr>`).join("");
   const abilities = c.abilities.map((a) => `
     <tr><td><button class="link-name" data-type="ability" data-name="${esc(a.name)}">${esc(a.name)}</button></td>
       <td class="desc">${effectHtml(a.effects, a.desc, a.cond_entities)}</td></tr>`).join("");
+  const seriesHtml = (c.series_names || []).length
+    ? `<div class="tags" style="margin-bottom:10px">${c.series_names.map((s) => `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : "";
+  const tagsHtml = (c.tags || []).length
+    ? `<div class="tags" style="margin-bottom:10px">${c.tags.map((t) => tagChip(t)).join("")}</div>` : "";
+  const noteChips = [
+    c.support_label ? `<button class="chip support-chip" data-support="${esc(c.support_label)}">${esc(c.support_label)}</button>` : "",
+    c.counter_guard ? `<button class="chip support-chip" data-support="反击援防">反击援防</button>` : "",
+  ].filter(Boolean);
+  const noteHtml = noteChips.length
+    ? `<h3 class="ds-sec">支援 / 备注（点击可搜索）</h3><div class="tags">${noteChips.join("")}</div>` : "";
+  const summaryHtml = `
+    <div class="ds-role-row">${roleBadge(c.role, c.role_label)} ${rarityBadge(c.rarity)}</div>
+    <div class="ds-desc">${esc(c.desc || "暂无描述")}</div>
+    ${seriesHtml}${tagsHtml}
+    <div id="char-attr"></div>
+    ${noteHtml}`;
+  const contentHtml = `
+    <h3>技能（${c.skills.length}）</h3>
+    <table><tr><th>名称</th><th>SP</th><th>持续</th><th>效果</th></tr>${skills || '<tr><td colspan="4" class="empty">无</td></tr>'}</table>
+    <h3>能力（${c.abilities.length}）</h3>
+    <table><tr><th>名称</th><th>效果</th></tr>${abilities || '<tr><td colspan="2" class="empty">无</td></tr>'}</table>`;
   showModal(`${esc(c.name)}<span class="char-edit-btns">
        <button id="char-edit-btn" class="cond-btn" title="进入编辑模式">修改驾驶员数据</button>
        <button id="char-save-btn" class="cond-btn" title="保存修改到本地">保存修改到本地</button>
        <button id="char-sync-btn" class="cond-btn" title="同步该驾驶员数据到服务器">同步驾驶员数据到服务器</button>
        <button id="char-refetch-btn" class="cond-btn" title="重新从网站爬取该驾驶员数据并对比差异，确认后以网页数据覆盖本地">重新爬取</button>
      </span>`,
-    `<p class="desc">${roleBadge(c.role, c.role_label)} ${esc(c.desc || "暂无描述")}</p>
-     ${(c.series_names || []).length ? `<h3>系列（点击可搜索）</h3><div class="tags">${c.series_names.map((s) => `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : ""}
-     <div id="char-stats"></div>
-     ${c.tags.length ? `<h3>标签（点击可搜索）</h3><div class="tags">${c.tags.map((t) => tagChip(t)).join("")}</div>` : ""}
-     ${(c.support_label || c.counter_guard) ? `<h3>备注（点击可搜索）</h3><div class="tags">${[
-       c.support_label ? `<button class="chip support-chip" data-support="${esc(c.support_label)}">${esc(c.support_label)}</button>` : "",
-       c.counter_guard ? `<button class="chip support-chip" data-support="反击援防">反击援防</button>` : "",
-     ].join("")}</div>` : ""}
-     <h3>技能（${c.skills.length}）</h3>
-     <table><tr><th>名称</th><th>SP</th><th>持续</th><th>效果</th></tr>${skills || '<tr><td colspan="4" class="empty">无</td></tr>'}</table>
-     <h3>能力</h3>
-     <table><tr><th>名称</th><th>效果</th></tr>${abilities || '<tr><td colspan="2" class="empty">无</td></tr>'}</table>`);
-  renderCharStats(c, "default");
+    `<div class="detail-summary">${summaryHtml}</div><div class="detail-content">${contentHtml}</div>`);
+  const box = $("#modal .modal-box");
+  if (box) box.classList.add("modal-detail");
+  renderCharAttr();
+  bindCharAttr();
   bindTagChips();
   bindSearchLinks();
+  bindEffectChips();
   bindCharInfoChips();
   bindCharacterEditButtons(c);
+}
+
+/* ---------- 驾驶员详情属性区：默认/SP 切换 + 达成条件开关（与机体一致） ---------- */
+const charView = { c: null, formKey: "default", on: new Set() };
+
+function charForm() {
+  return charView.c.forms[charView.formKey] || charView.c.forms.default;
+}
+
+/* 当前形态下可用的条件加成行（角色的条件加成按 values 区分形态） */
+function charCondRows() {
+  const fk = charView.formKey;
+  return (charView.c.conditional_bonuses || []).filter((r) => r.values?.[fk] != null);
+}
+
+function charCondNames(rows) {
+  const out = [];
+  for (const r of rows) if (!out.includes(r.name)) out.push(r.name);
+  return out;
+}
+
+function charPruneCond() {
+  const avail = new Set(charCondNames(charCondRows()));
+  for (const name of [...charView.on]) if (!avail.has(name)) charView.on.delete(name);
+}
+
+/* 某属性当前选中的加成%；同 stat 有 HP 区间冲突时取最大，否则求和 */
+function charCondPct(stat) {
+  const sel = charCondRows().filter((r) => r.stat === stat && charView.on.has(r.name));
+  if (!sel.length) return 0;
+  let compat = true;
+  outer:
+  for (let i = 0; i < sel.length; i++) {
+    for (let j = i + 1; j < sel.length; j++) {
+      const a = sel[i], b = sel[j];
+      if (!a.has_hp_cond || !b.has_hp_cond) continue;
+      const au = a.hp_lte > 0 ? a.hp_lte : 100;
+      const bu = b.hp_lte > 0 ? b.hp_lte : 100;
+      if ((a.hp_gte || 0) > bu || (b.hp_gte || 0) > au) { compat = false; break outer; }
+    }
+  }
+  if (compat) return sel.reduce((s, r) => s + (r.pct || 0), 0);
+  return Math.max(...sel.map((r) => r.pct || 0));
+}
+
+function charStatVal(key) {
+  const st = charForm().stats[key];
+  const base = st.max - (st.max_bonus || 0);
+  const basePct = (charView.c.stat_bonuses || {})[key] || 0;
+  const condPct = charCondPct(key);
+  const final = Math.floor(base * (100 + basePct + condPct) / 100);
+  return { final, delta: final - base };
+}
+
+function charCondRowHtml(rows, names) {
+  const chips = names.map((name) => {
+    const rs = rows.filter((r) => r.name === name);
+    const effect = rs.map((r) => `${CHAR_STAT_LABELS[r.stat] || r.stat} +${r.pct}%`).join("，");
+    const conds = [...new Set(rs.map((r) => r.condition).filter(Boolean))].join("；");
+    const tip = [
+      conds ? `条件：${conds}` : "",
+      effect ? `效果：${effect}` : "",
+      name ? `能力：${name}` : "",
+    ].filter(Boolean).join("\n");
+    return `<button class="chip cond-chip${charView.on.has(name) ? " on" : ""}" data-name="${esc(name)}" title="${esc(tip)}">${esc(name)}</button>`;
+  }).join("");
+  return `<div class="cond-row"><span class="star-label">达成条件</span><div class="tags">${chips}</div></div>`;
+}
+
+const CHAR_STAT_ORDER = ["ranged", "melee", "defense", "awaken", "reaction"];
+
+function renderCharAttr() {
+  const wrap = $("#char-attr");
+  if (!wrap) return;
+  const c = charView.c;
+  const form = charForm();
+  const formBtns = c.has_sp
+    ? `<span class="star-label">形态</span>` + [
+        ["default", `默认(${c.forms.default.level_cap}级)`],
+        ["sp", "SP(100级)"],
+      ].map(([fk, label]) =>
+        `<button class="form-btn ${charView.formKey === fk ? "active" : ""}" data-form="${fk}">${label}</button>`).join("")
+    : "";
+  const rows = charCondRows();
+  const names = charCondNames(rows);
+  const notes = [];
+  if (!c.has_sp) notes.push("驾驶员没有星级；UR 驾驶员暂不开放 SP 形态。");
+  else notes.push("驾驶员没有星级；默认形态为稀有度等级上限，SP 后满级 100。");
+  notes.push(names.length ? "绿色 +N 为能力加成；点选「达成条件」会将对应加成并入数值。" : "绿色 +N 为能力加成。");
+  const cells = CHAR_STAT_ORDER.map((key) => {
+    const v = charStatVal(key);
+    return `<div class="ds-stat">
+      <span class="ds-k">${CHAR_STAT_LABELS[key]}</span>
+      <span class="ds-v">${fmtNum(v.final)}${v.delta ? `<small>+${fmtNum(v.delta)}</small>` : ""}</span>
+    </div>`;
+  }).join("");
+  wrap.innerHTML = `
+    <h3 class="ds-sec">属性（满级）</h3>
+    ${formBtns ? `<div class="star-bar">${formBtns}</div>` : ""}
+    <div class="star-bar"><span class="cap-chip">满级上限 ${form.level_cap}</span></div>
+    ${names.length ? charCondRowHtml(rows, names) : ""}
+    <div class="ds-stats">${cells}</div>
+    <p class="hint">${notes.map(esc).join(" ")}</p>`;
+}
+
+/* 属性区整体重建，委托只需在 #char-attr 上挂一次 */
+function bindCharAttr() {
+  const box = $("#char-attr");
+  if (!box || box._cvBound) return;
+  box._cvBound = true;
+  box.addEventListener("click", (e) => {
+    const btn = e.target.closest(".form-btn,.cond-chip");
+    if (!btn || !box.contains(btn)) return;
+    if (btn.classList.contains("form-btn")) return charSetForm(btn.dataset.form);
+    return charToggleCond(btn.dataset.name);
+  });
+}
+
+function charSetForm(fk) {
+  if (!charView.c.forms[fk]) return;
+  charView.formKey = fk;
+  charPruneCond();
+  renderCharAttr();
+}
+
+function charToggleCond(name) {
+  if (charView.on.has(name)) charView.on.delete(name); else charView.on.add(name);
+  renderCharAttr();
 }
 
 function bindCharInfoChips() {
@@ -2186,6 +2334,9 @@ function charNum(el) {
 }
 
 function renderCharacterEditForm() {
+  /* 编辑模式回单栏全宽，避免被详情弹窗的两栏网格挤压 */
+  const _box = $("#modal .modal-box");
+  if (_box) _box.classList.remove("modal-detail");
   const s = charEdit;
   const statCell = (prefix) => (k) =>
     `<td><input class="edit-input" data-stat="${prefix}" data-k="${k}" type="number" value="${s.stats[prefix][k] ?? ""}"></td>`;
@@ -2718,149 +2869,6 @@ $("#sr-type").addEventListener("change", () => {
   $("#sr-kind").disabled = weapon;
   if (weapon) $("#sr-kind").value = "unit";
 });
-
-/* ---------- 星级与属性加成 ---------- */
-const STAT_NAMES = {
-  unit: { hp: "HP", en: "EN", attack: "攻击", defense: "防御", mobility: "机动" },
-  character: { ranged: "射击", melee: "格斗", defense: "防御", reaction: "反应", awaken: "觉醒" },
-};
-
-function statCell(d, level) {
-  const v = level === "max" ? d.max : d.lv1;
-  const b = level === "max" ? d.max_bonus : d.lv1_bonus;
-  return `<span class="stat-val">${fmtNum(v)}</span> <span class="add">+${fmtNum(b)}</span>`;
-}
-
-function condPanel(obj, current, kind) {
-  // 过滤条件加成：default/sp 形态不显示 SSP 专属条件
-  const formKey = kind === "character" ? current : current.form;
-  const items = (obj.conditional_bonuses || []).filter((c) => {
-    // unit 时 SSP 专属条件只在 ssp 形态下显示
-    if (kind === "unit" && c._ssp_only && formKey !== "ssp") return false;
-    const cs = kind === "character"
-      ? c.values?.[current]
-      : c.forms?.[current.form]?.[current.star];
-    return cs != null;
-  });
-  const rows = items.map((c) => {
-    const cs = kind === "character"
-      ? c.values[current]
-      : c.forms[current.form][current.star];
-    return `<tr>
-      <td class="desc">${esc(c.condition || "—")}</td>
-      <td>${STAT_NAMES[kind][c.stat] ?? c.stat}</td>
-      <td class="mono">+${c.pct}%</td>
-      <td class="mono">${fmtNum(cs.max)}</td>
-      <td class="desc">${esc(c.name || "")}</td>
-    </tr>`;
-  }).join("");
-  if (!rows) return "";
-
-  // 构建「全部条件达成」合计行（也需要按当前form过滤哪些条件被计入）
-  let allMetRows = "";
-  const allMet = obj.cond_all_met;
-  if (allMet && kind !== "character") {
-    const form = obj.forms?.[current.form];
-    const star = current.star;
-    if (form && form.stars?.[star]) {
-      const st = form.stars[star].stats;
-      const bonuses = obj.stat_bonuses || {};
-      // 按当前 form 重新计算 all-met pct（剔除 ssp 专属条件）
-      const byStat = {};
-      for (const c of items) {
-        byStat[c.stat] = (byStat[c.stat] || 0) + (c.pct || 0);
-      }
-      // 如果当前 form 有互斥条件，需要同样逻辑处理
-      // 先检查同 stat 条件之间的 HP 互斥
-      const grouped = {};
-      for (const c of items) {
-        (grouped[c.stat] = grouped[c.stat] || []).push(c);
-      }
-      const effectivePct = {};
-      for (const [stat, csList] of Object.entries(grouped)) {
-        let allCompat = true;
-        for (let i = 0; i < csList.length && allCompat; i++) {
-          for (let j = i + 1; j < csList.length && allCompat; j++) {
-            const a = csList[i], b = csList[j];
-            if (!a.has_hp_cond || !b.has_hp_cond) continue;
-            const a_upper = a.hp_lte > 0 ? a.hp_lte : 100;
-            const b_upper = b.hp_lte > 0 ? b.hp_lte : 100;
-            if ((a.hp_gte || 0) > b_upper || (b.hp_gte || 0) > a_upper) allCompat = false;
-          }
-        }
-        if (allCompat) {
-          effectivePct[stat] = csList.reduce((s, c) => s + (c.pct || 0), 0);
-        } else {
-          effectivePct[stat] = Math.max(...csList.map((c) => c.pct || 0));
-        }
-      }
-      allMetRows = Object.entries(effectivePct).map(([stat, condPct]) => {
-        const basePct = bonuses[stat] || 0;
-        // st[stat].max 已含无条件加成，star_base = max - max_bonus
-        const maxVal = st[stat]?.max ?? 0;
-        const maxBonus = st[stat]?.max_bonus ?? 0;
-        const starBase = maxVal - maxBonus;
-        const allMetVal = Math.floor(starBase * (100 + basePct + condPct) / 100);
-        const delta = allMetVal - maxVal;
-        const statLabel = STAT_NAMES[kind][stat] ?? stat;
-        return `<tr class="all-met-row">
-          <td class="desc"><strong>所有能力都达成</strong></td>
-          <td><strong>${statLabel}</strong></td>
-          <td class="mono"><strong>+${condPct}%</strong></td>
-          <td class="mono"><strong>${fmtNum(allMetVal)}</strong> <span class="add">(+${fmtNum(delta)})</span></td>
-          <td class="desc">合计</td>
-        </tr>`;
-      }).join("");
-    }
-  }
-
-  const title = kind === "character"
-    ? (current === "sp" ? "SP" : "默认")
-    : `${current.form === "default" ? "默认" : current.form.toUpperCase()} · ${current.star}★`;
-  return `<div id="cond-panel" class="cond-panel hidden">
-    <h4>达成条件后的数值（${title}）</h4>
-    <p class="hint">以下数值 = 当前形态满级基础值 ×（1 + 无条件加成% + 该条件加成%），即该条件达成后的满级属性。</p>
-    <table><tr><th>条件</th><th>属性</th><th>加成</th><th>满级</th><th>来源能力</th></tr>
-    ${rows}
-    ${allMetRows}
-    </table>
-  </div>`;
-}
-
-function renderCharStats(c, formKey) {
-  const form = c.forms[formKey];
-  const st = form.stats;
-  const cellM = (key) => statCell(st[key], "max");
-  $("#char-stats").innerHTML = `
-    <h3>属性（满级）</h3>
-    <div class="star-bar">
-      <span class="star-label">形态：${formKey === "sp" ? "SP" : "默认"}</span>
-      <span class="cap-chip">满级上限 ${form.level_cap}</span>
-      ${c.has_sp ? `<button id="sp-toggle" class="cond-btn ${formKey === "sp" ? "active" : ""}">SP 解锁满级 100</button>` : ""}
-      <button class="cond-btn" id="cond-toggle">查看条件加成</button>
-    </div>
-    <table>
-      <tr><th></th><th>射击</th><th>格斗</th><th>防御</th><th>觉醒</th><th>反应</th></tr>
-      <tr><th>满级</th><td>${cellM("ranged")}</td><td>${cellM("melee")}</td><td>${cellM("defense")}</td>
-        <td>${cellM("awaken")}</td><td>${cellM("reaction")}</td></tr>
-    </table>
-    <p class="hint">绿色 +N 为无条件能力加成；驾驶员没有星级。SP 前满级 ${c.level_cap}（稀有度上限），SP 后满级 100。</p>
-    ${condPanel(c, formKey, "character")}`;
-  bindCharControls(c, formKey);
-}
-
-function bindCharControls(c, formKey) {
-  const sp = $("#sp-toggle");
-  if (sp) sp.addEventListener("click", () => renderCharStats(c, formKey === "sp" ? "default" : "sp"));
-  const toggle = $("#cond-toggle");
-  if (!toggle) return;
-  toggle.addEventListener("click", () => {
-    const panel = $("#cond-panel");
-    if (!panel) return;
-    const hidden = panel.classList.toggle("hidden");
-    toggle.textContent = hidden ? "查看条件加成" : "收起条件加成";
-  });
-}
 
 /* ---------- 关卡敌人 ---------- */
 async function loadStages(page = state.stages.page) {
@@ -3901,7 +3909,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* ---------- 配对 ---------- */
-const pairFilterState = { q:"", rarity:"", series:"", type:"", tags: [], tag_mode: "all", skills: [], skill_mode: "any", support: "", match: "and", sort: "score", order: "desc" };
+const pairFilterState = { q:"", rarity:"", acq:"", series:"", type:"", tags: [], tag_mode: "all", skills: [], skill_mode: "any", support: "", match: "and", sort: "score", order: "desc" };
 let pairFilterData = null;
 let pairLastQuery = "";
 const pairState = {
@@ -4264,6 +4272,10 @@ async function runPairMatch() {
     q.set("hp_pct", $("#pair-ext-hp").value);
     q.set("hp_fixed", $("#pair-ext-hpf").value);
   }
+  collectPairFilterInputs();
+  pairFilterState.sort = "score";
+  pairFilterState.order = "desc";
+  appendPairFilterParams(q);
   pairLastQuery = q.toString();
   msg.textContent = "正在匹配…";
   try {
@@ -4348,57 +4360,19 @@ function renderPairResult(res) {
     ${unitAb ? `<div>单位能力：${unitAb}</div>` : ""}
     ${unitSk ? `<div>单位技能：${unitSk}</div>` : ""}
   `;
-  const filterBar = `
-    <div class="toolbar pair-filter-bar">
-      <input id="pr-q" placeholder="搜索驾驶员名称…" autocomplete="off" aria-label="搜索驾驶员名称">
-      <select id="pr-rarity" aria-label="稀有度筛选">
-        <option value="">全部稀有度</option>
-        <option value="5">UR</option><option value="4">SSR</option>
-        <option value="3">SR</option><option value="2">R</option><option value="1">N</option>
-      </select>
-      <div class="sbox" id="pr-series-box">
-        <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列">
-        <div class="sbox-list hidden"></div>
-        <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除筛选">×</button>
-      </div>
-      <select id="pr-type" aria-label="类型筛选">
-        <option value="">全部类型</option>
-        <option value="1">攻击型</option><option value="2">耐久型</option><option value="3">支援型</option>
-      </select>
-      <div class="sbox" id="pr-tag-box">
-        <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签">
-        <div class="sbox-list hidden"></div>
-      </div>
-      <select id="pr-tag-mode" aria-label="标签匹配模式">
-        <option value="all">含全部标签</option><option value="any">含任一标签</option>
-      </select>
-      <div class="sbox" id="pr-skill-box">
-        <input class="sbox-input" placeholder="搜索/添加人物技能…" autocomplete="off" aria-label="搜索或添加人物技能">
-        <div class="sbox-list hidden"></div>
-      </div>
-      <select id="pr-skill-mode" aria-label="技能匹配模式">
-        <option value="any" selected>含任一技能</option><option value="all">含全部技能</option>
-      </select>
-      <select id="pr-support" aria-label="支援次数筛选"><option value="">全部支援次数</option></select>
-      <select id="pr-match" aria-label="筛选条件匹配模式">
-        <option value="and">交集（全部满足）</option><option value="or">并集（任一满足）</option>
-      </select>
-      <button id="pr-search">查询</button>
-      <button id="pr-reset" class="reset-btn" title="重置筛选">重置</button>
-    </div>
-    <div id="pr-tag-chips" class="tagbar"></div>
-    <div id="pr-skill-chips" class="tagbar"></div>
-    <div id="pr-count" class="result-count">共 ${res.total ?? res.pilots.length} 条结果</div>`;
+  const hasCond = Boolean(
+    pairFilterState.q || pairFilterState.rarity || pairFilterState.acq ||
+    pairFilterState.series || pairFilterState.type || pairFilterState.tags.length ||
+    pairFilterState.skills.length || pairFilterState.support);
   $("#pair-result").innerHTML = `
     <div class="pair-result-panel">
       ${headInfo}
-      ${filterBar}
+      <div class="result-count">共 ${res.total ?? res.pilots.length} 名驾驶员${hasCond ? "（已按条件筛选）" : ""}</div>
       <div style="max-height:60vh;overflow:auto">
         <table>${head}${rows}</table>
       </div>
     </div>`;
-  bindPairFilterBar();
-  renderPairFilterChips();
+  bindPairResultSort();
   document.querySelectorAll(".pair-pilot").forEach((r) =>
     r.addEventListener("click", () => openCharacter(r.dataset.id)));
   document.querySelectorAll(".pair-to-damage").forEach((b) =>
@@ -4423,63 +4397,7 @@ function buildPairHead(isAtk) {
     : `<tr><th>#</th>${t("name","名称")}${t("rarity","稀有度")}${t("role","类型")}${t("score","得分（期望抵御）")}${t("survive","非暴击")}${t("survive_crit","暴击")}${t("first_damage","首次伤害")}${t("defense","驾驶员防御")}${t("dmg_down","减伤%")}<th>触发的能力</th><th>有可能触发</th><th>不能触发</th><th>驾驶员技能</th><th></th></tr>`;
 }
 
-function renderPairFilterChips() {
-  const tagsHtml = pairFilterState.tags.map((t) =>
-    `<span class="chip sel-tag">${esc(t)}<button class="chip-x" aria-label="移除" data-t="${esc(t)}" title="移除">×</button></span>`).join("");
-  const skillsHtml = pairFilterState.skills.map((s) =>
-    `<span class="chip sel-tag">${esc(s)}<button class="chip-x" aria-label="移除" data-s="${esc(s)}" title="移除">×</button></span>`).join("");
-  $("#pr-tag-chips").innerHTML = tagsHtml;
-  $("#pr-skill-chips").innerHTML = skillsHtml;
-  $("#pr-tag-chips").querySelectorAll(".chip-x").forEach((b) =>
-    b.addEventListener("click", () => {
-      pairFilterState.tags = pairFilterState.tags.filter((t) => t !== b.dataset.t);
-      renderPairFilterChips();
-    }));
-  $("#pr-skill-chips").querySelectorAll(".chip-x").forEach((b) =>
-    b.addEventListener("click", () => {
-      pairFilterState.skills = pairFilterState.skills.filter((s) => s !== b.dataset.s);
-      renderPairFilterChips();
-    }));
-}
-
-function bindPairFilterBar() {
-  if (!pairFilterData) {
-    setTimeout(bindPairFilterBar, 300);
-    return;
-  }
-  $("#pr-q").value = pairFilterState.q;
-  $("#pr-rarity").value = pairFilterState.rarity;
-  $("#pr-type").value = pairFilterState.type;
-  $("#pr-tag-mode").value = pairFilterState.tag_mode;
-  $("#pr-skill-mode").value = pairFilterState.skill_mode;
-  $("#pr-support").value = pairFilterState.support;
-  $("#pr-match").value = pairFilterState.match;
-  $("#pr-support").innerHTML = '<option value="">全部支援次数</option>' +
-    pairFilterData.supportLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join("");
-  $("#pr-support").value = pairFilterState.support;
-  initCombobox("#pr-series-box", pairFilterData.seriesOpts, () => pairFilterState.series,
-    (v) => { pairFilterState.series = String(v); }, true);
-  initCombobox("#pr-tag-box", pairFilterData.charTags, () => "",
-    (v) => { if (v && !pairFilterState.tags.includes(v)) { pairFilterState.tags.push(v); renderPairFilterChips(); } }, false);
-  initCombobox("#pr-skill-box", pairFilterData.skillNames, () => "",
-    (v) => { if (v && !pairFilterState.skills.includes(v)) { pairFilterState.skills.push(v); renderPairFilterChips(); } }, false);
-  $("#pr-q").addEventListener("keydown", (e) => { if (e.key === "Enter") refreshPairResult(); });
-  $("#pr-search").addEventListener("click", refreshPairResult);
-  $("#pr-reset").addEventListener("click", () => {
-    pairFilterState.q = ""; pairFilterState.rarity = ""; pairFilterState.series = "";
-    pairFilterState.type = ""; pairFilterState.tags = []; pairFilterState.tag_mode = "all";
-    pairFilterState.skills = []; pairFilterState.skill_mode = "any";
-    pairFilterState.support = ""; pairFilterState.match = "and";
-    pairFilterState.sort = "score"; pairFilterState.order = "desc";
-    $("#pr-q").value = ""; $("#pr-rarity").value = ""; $("#pr-type").value = "";
-    $("#pr-tag-mode").value = "all"; $("#pr-skill-mode").value = "any";
-    $("#pr-support").value = ""; $("#pr-match").value = "and";
-    syncCombobox("#pr-series-box");
-    renderPairFilterChips();
-    refreshPairResult();
-  });
-  ["#pr-rarity", "#pr-type", "#pr-tag-mode", "#pr-skill-mode", "#pr-support", "#pr-match"]
-    .forEach((sel) => $(sel).addEventListener("change", refreshPairResult));
+function bindPairResultSort() {
   document.querySelectorAll(".pair-result-panel .sort-th").forEach((b) =>
     b.addEventListener("click", () => {
       const sort = b.dataset.sort;
@@ -4489,22 +4407,53 @@ function bindPairFilterBar() {
         pairFilterState.sort = sort;
         pairFilterState.order = "desc";
       }
-      refreshPairResult();
+      if (pairLastQuery) refreshPairResult();
     }));
 }
 
-async function refreshPairResult() {
-  if (!pairLastQuery) return;
+function refreshAfterFilterChange() {
+  if (pairLastQuery) refreshPairResult();
+}
+
+function renderPairFilterChips() {
+  const tagBox = $("#pr-tag-chips");
+  const skillBox = $("#pr-skill-chips");
+  if (!tagBox || !skillBox) return;
+  const tagsHtml = pairFilterState.tags.map((t) =>
+    `<span class="chip sel-tag">${esc(t)}<button class="chip-x" aria-label="移除" data-t="${esc(t)}" title="移除">×</button></span>`).join("");
+  const skillsHtml = pairFilterState.skills.map((s) =>
+    `<span class="chip sel-tag">${esc(s)}<button class="chip-x" aria-label="移除" data-s="${esc(s)}" title="移除">×</button></span>`).join("");
+  tagBox.innerHTML = tagsHtml;
+  skillBox.innerHTML = skillsHtml;
+  tagBox.querySelectorAll(".chip-x").forEach((b) =>
+    b.addEventListener("click", () => {
+      pairFilterState.tags = pairFilterState.tags.filter((t) => t !== b.dataset.t);
+      renderPairFilterChips();
+      refreshAfterFilterChange();
+    }));
+  skillBox.querySelectorAll(".chip-x").forEach((b) =>
+    b.addEventListener("click", () => {
+      pairFilterState.skills = pairFilterState.skills.filter((s) => s !== b.dataset.s);
+      renderPairFilterChips();
+      refreshAfterFilterChange();
+    }));
+}
+
+function collectPairFilterInputs() {
   pairFilterState.q = $("#pr-q").value.trim();
   pairFilterState.rarity = $("#pr-rarity").value;
+  pairFilterState.acq = $("#pr-acq").value;
   pairFilterState.type = $("#pr-type").value;
   pairFilterState.tag_mode = $("#pr-tag-mode").value;
   pairFilterState.skill_mode = $("#pr-skill-mode").value;
   pairFilterState.support = $("#pr-support").value;
   pairFilterState.match = $("#pr-match").value;
-  const q = new URLSearchParams(pairLastQuery);
+}
+
+function appendPairFilterParams(q) {
   q.set("pq", pairFilterState.q);
   q.set("prarity", pairFilterState.rarity);
+  q.set("pacq", pairFilterState.acq);
   q.set("pseries", pairFilterState.series);
   q.set("ptype", pairFilterState.type);
   q.set("ptags", pairFilterState.tags.join(","));
@@ -4515,6 +4464,57 @@ async function refreshPairResult() {
   q.set("pmatch", pairFilterState.match);
   q.set("sort", pairFilterState.sort);
   q.set("order", pairFilterState.order);
+}
+
+function bindPairFilterRow() {
+  if (!pairFilterData) {
+    setTimeout(bindPairFilterRow, 300);
+    return;
+  }
+  $("#pr-q").value = pairFilterState.q;
+  $("#pr-rarity").value = pairFilterState.rarity;
+  $("#pr-acq").value = pairFilterState.acq;
+  $("#pr-type").value = pairFilterState.type;
+  $("#pr-tag-mode").value = pairFilterState.tag_mode;
+  $("#pr-skill-mode").value = pairFilterState.skill_mode;
+  $("#pr-support").innerHTML = '<option value="">全部支援次数</option>' +
+    pairFilterData.supportLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join("");
+  $("#pr-support").value = pairFilterState.support;
+  $("#pr-match").value = pairFilterState.match;
+  initCombobox("#pr-series-box", pairFilterData.seriesOpts, () => pairFilterState.series,
+    (v) => { pairFilterState.series = String(v); refreshAfterFilterChange(); }, true);
+  initCombobox("#pr-tag-box", pairFilterData.charTags, () => "",
+    (v) => { if (v && !pairFilterState.tags.includes(v)) { pairFilterState.tags.push(v); renderPairFilterChips(); refreshAfterFilterChange(); } }, false);
+  initCombobox("#pr-skill-box", pairFilterData.skillNames, () => "",
+    (v) => { if (v && !pairFilterState.skills.includes(v)) { pairFilterState.skills.push(v); renderPairFilterChips(); refreshAfterFilterChange(); } }, false);
+  $("#pr-q").addEventListener("keydown", (e) => { if (e.key === "Enter") runPairMatch(); });
+  $("#pr-search").addEventListener("click", runPairMatch);
+  $("#pr-reset").addEventListener("click", resetPairFilter);
+  ["#pr-rarity", "#pr-acq", "#pr-type", "#pr-tag-mode", "#pr-skill-mode", "#pr-support", "#pr-match"]
+    .forEach((sel) => $(sel).addEventListener("change", refreshAfterFilterChange));
+  renderPairFilterChips();
+}
+
+function resetPairFilter() {
+  pairFilterState.q = ""; pairFilterState.rarity = ""; pairFilterState.acq = "";
+  pairFilterState.series = ""; pairFilterState.type = "";
+  pairFilterState.tags = []; pairFilterState.tag_mode = "all";
+  pairFilterState.skills = []; pairFilterState.skill_mode = "any";
+  pairFilterState.support = ""; pairFilterState.match = "and";
+  pairFilterState.sort = "score"; pairFilterState.order = "desc";
+  $("#pr-q").value = ""; $("#pr-rarity").value = ""; $("#pr-acq").value = "";
+  $("#pr-type").value = ""; $("#pr-tag-mode").value = "all";
+  $("#pr-skill-mode").value = "any"; $("#pr-support").value = ""; $("#pr-match").value = "and";
+  syncCombobox("#pr-series-box");
+  renderPairFilterChips();
+  if (pairLastQuery) refreshPairResult();
+}
+
+async function refreshPairResult() {
+  if (!pairLastQuery) return;
+  collectPairFilterInputs();
+  const q = new URLSearchParams(pairLastQuery);
+  appendPairFilterParams(q);
   try {
     const res = await api("/api/pairing/match?" + q);
     renderPairResult(res);
@@ -4646,4 +4646,5 @@ function initPairing() {
 initFilterControls();
 initColumnResize();
 initPairing();
+bindPairFilterRow();
 loadSummary();
