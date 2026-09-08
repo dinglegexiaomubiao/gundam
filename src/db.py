@@ -378,6 +378,16 @@ CREATE TABLE IF NOT EXISTS character_edit_log (
   source TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_char_edit_log_char ON character_edit_log(character_id);
+
+CREATE TABLE IF NOT EXISTS unit_pilot (
+  unit_id INTEGER PRIMARY KEY,
+  pilot_id INTEGER NOT NULL,
+  unit_name TEXT,
+  pilot_name TEXT,
+  score INTEGER,
+  signal TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_unit_pilot_pilot ON unit_pilot(pilot_id);
 """
 
 
@@ -1237,3 +1247,12 @@ def build_db() -> None:
     conn.commit()
     conn.close()
     print(f"数据库已写入 {config.DB_PATH}（{built_at}）")
+
+    # 生成机体→原作驾驶员显式映射表（懒加载，避免模块级循环依赖）
+    from . import pairing
+    stats = pairing.build_unit_pilot()
+    print(
+        f"原作驾驶员映射表：{stats['total']} 条"
+        f"（主动驾驶 {stats.get('active', 0)} / 名字出现 {stats.get('mention', 0)}"
+        f" / 系列类型兜底 {stats.get('role', 0)} / 未匹配 {stats.get('none', 0)}）"
+    )

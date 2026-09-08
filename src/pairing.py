@@ -1369,6 +1369,484 @@ def default_enemy() -> dict:
     }
 
 
+def _supporter_bonus(conn, supporter_id: int, break_step: int) -> dict | None:
+    """解析支援角色在指定突破阶段的全能力值% + 固定攻击/HP + 词条对象（系列/标签 id）。"""
+    s = conn.execute(
+        "SELECT id, rarity, name, max_attack_addition_value, max_hp_addition_value "
+        "FROM supporter WHERE id = ?", (supporter_id,),
+    ).fetchone()
+    if not s:
+        return None
+    step = min(max(int(break_step or 3), 0), 3)
+    pcts = [0, 0, 0, 0]
+    series_ids: set[int] = set()
+    tag_ids: set[int] = set()
+    for r in conn.execute(
+        "SELECT limit_break_step, traits FROM supporter_skill "
+        "WHERE supporter_id = ? AND skill_type = 'leader' ORDER BY limit_break_step",
+        (supporter_id,),
+    ):
+        st = min(max(int(r["limit_break_step"] or 0), 0), 3)
+        sp = 0
+        for t in _json_list(r["traits"]):
+            tv = (t.get("trait_content") or {}).get("trait_value") or {}
+            try:
+                sp = max(sp, int(tv.get("value") or 0))
+            except (TypeError, ValueError):
+                pass
+        pcts[st] = max(pcts[st], sp)
+        for t in _json_list(r["traits"]):
+            for c in t.get("trait_condition") or []:
+                if not isinstance(c, dict):
+                    continue
+                for x in str(c.get("unit_series") or "").split(","):
+                    if x.strip().isdigit():
+                        series_ids.add(int(x))
+                for x in str(c.get("unit_tags") or "").split(","):
+                    if x.strip().isdigit():
+                        tag_ids.add(int(x))
+    last = 0
+    for i in range(4):
+        if pcts[i]:
+            last = pcts[i]
+        else:
+            pcts[i] = last
+    active_skills = []
+    seen_active: set[str] = set()
+    for r in conn.execute(
+        "SELECT name, desc, range_type, effect_range, is_auto_usage "
+        "FROM supporter_skill WHERE supporter_id = ? AND skill_type = 'active' "
+        "ORDER BY limit_break_step",
+        (supporter_id,),
+    ):
+        name = (r["name"] or "").strip() or "主动技能"
+        if name in seen_active:
+            continue
+        seen_active.add(name)
+        active_skills.append({
+            "name": name,
+            "desc": r["desc"] or "",
+            "range_type": r["range_type"],
+            "effect_range": r["effect_range"],
+            "is_auto_usage": r["is_auto_usage"],
+        })
+    return {
+        "id": s["id"],
+        "name": s["name"],
+        "rarity": s["rarity"],
+        "break_step": step,
+        "leader_pct": pcts[step],
+        "leader_pcts": pcts,
+        "atk_add": s["max_attack_addition_value"] or 0,
+        "hp_add": s["max_hp_addition_value"] or 0,
+        "series_ids": series_ids,
+        "tag_ids": tag_ids,
+        "active_skills": active_skills,
+        "conds": [{
+            "series": sorted(_SERIES_NAME.get(x, f"系列{x}") for x in series_ids),
+            "tags": sorted(_TAG_NAME.get(x, f"标签{x}") for x in tag_ids),
+        }],
+    }
+
+
+def _supporter_applies(unit_ctx: dict, sup: dict | None) -> bool:
+    """机体是否命中支援角色的词条对象（系列/标签任一匹配）。"""
+    if not sup:
+        return False
+    if sup["series_ids"] and (unit_ctx["series_ids"] & sup["series_ids"]):
+        return True
+    if sup["tag_ids"] and (unit_ctx["tag_ids"] & sup["tag_ids"]):
+        return True
+    return False
+
+
+def team_score(pairs, supporter_id=None, break_step=3, bench="low",
+               custom_enemy=None) -> dict:
+    """组队评分：给定若干组（机体/星级/武器/驾驶员）+ 支援角色，返回每组的最终多项属性。
+
+    数值口径：
+    - 攻击/防御/HP/机动 = 星级基础值 × (1 + 无条件% + 条件攻/防% + 支援全能力%) + 支援固定值
+    - 驾驶员五项 = 有效值（无条件% + 命中条件%）
+    - 武器伤害 = 对我方/自定义基准敌人的单次伤害（未选武器为 null）
+    支援全能力值只对词条对象（系列/标签）命中的机体生效。
+    """
+    conn = _conn()
+    _build_pilots()
+
+    if bench == "custom":
+        ce = custom_enemy or {}
+        unit_def = float(ce.get("unit_defense") or 0)
+        char_def = float(ce.get("character_defense") or 0)
+        bench_label = "自定义敌人"
+    else:
+        bcfg = PAIR_BENCH.get(bench or "low", PAIR_BENCH["low"])
+        unit_def = float(bcfg["unit_defense"])
+        char_def = float(bcfg["character_defense"])
+        bench_label = bcfg["label"]
+
+    sup = _supporter_bonus(conn, supporter_id, break_step) if supporter_id else None
+
+    out_pairs = []
+    for p in pairs:
+        try:
+            unit_id = int(p.get("unit_id") or 0)
+        except (TypeError, ValueError):
+            unit_id = 0
+        try:
+            star = int(p.get("star") or 3)
+        except (TypeError, ValueError):
+            star = 3
+        try:
+            pilot_id = int(p.get("pilot_id") or 0)
+        except (TypeError, ValueError):
+            pilot_id = 0
+        try:
+            weapon_id = int(p.get("weapon_id") or 0)
+        except (TypeError, ValueError):
+            weapon_id = 0
+
+        unit_row = conn.execute(
+            "SELECT * FROM unit WHERE id = ?", (unit_id,)
+        ).fetchone()
+        if not unit_row:
+            out_pairs.append({"unit_id": unit_id, "error": "机体不存在"})
+            continue
+        unit_row = dict(unit_row)
+
+        tags = set(_json_list(unit_row.get("tags")))
+        if ULTIMATE_TAG in tags:
+            star = 0
+
+        weapon_row = None
+        if weapon_id:
+            wq = conn.execute(
+                "SELECT * FROM unit_weapon WHERE id = ? AND unit_id = ?",
+                (weapon_id, unit_id),
+            ).fetchone()
+            weapon_row = dict(wq) if wq else None
+
+        unit_ctx = _unit_ctx(conn, unit_id, weapon_row)
+
+        unit_abilities = [
+            _parse_ability(a["name"], a["traits"], _TAG_NAME, _SERIES_NAME)
+            for a in conn.execute(
+                "SELECT name, traits FROM unit_ability WHERE unit_id = ?",
+                (unit_id,),
+            )
+        ]
+        unit_tot = _zero_eff()
+        for ab in unit_abilities:
+            t, _, _, _ = _apply_ability(ab, unit_ctx, "attack")
+            _add_eff(unit_tot, t)
+
+        pilot = None
+        pilot_tot = _zero_eff()
+        if pilot_id:
+            pilot = next((x for x in _pilots if x["id"] == pilot_id), None)
+            if pilot:
+                for ab in pilot["abilities"]:
+                    t, _, _, _ = _apply_ability(ab, unit_ctx, "attack")
+                    _add_eff(pilot_tot, t)
+
+        applied = _supporter_applies(unit_ctx, sup)
+        leader_pct = sup["leader_pct"] if applied else 0.0
+        atk_add = sup["atk_add"] if applied else 0
+        hp_add = sup["hp_add"] if applied else 0
+
+        bonuses = _json_dict(unit_row.get("stat_bonuses"))
+
+        def final_stat(key: str) -> int:
+            pct = bonuses.get(key, 0) + leader_pct
+            if key == "attack":
+                pct += unit_tot["atk_pct"] + pilot_tot["atk_pct"]
+            elif key == "defense":
+                pct += unit_tot["def_pct"] + pilot_tot["def_pct"]
+            return star_value(unit_row.get("max_" + key) or 0, pct, star)[0]
+
+        stats = {
+            "attack": int(final_stat("attack") + atk_add),
+            "defense": int(final_stat("defense")),
+            "hp": int(final_stat("hp") + hp_add),
+            "mobility": int(final_stat("mobility")),
+        }
+
+        pilot_stats = None
+        if pilot:
+            pilot_stats = {
+                k: _effective_stat(pilot, k, pilot_tot["stat_pct"].get(k, 0.0))
+                for k in STAT_KEYS
+            }
+
+        weapon_info = None
+        if weapon_row and pilot:
+            dep_keys = ATTACK_ATTR_KEYS.get(
+                int(weapon_row.get("attack_attr") or 1)
+            ) or ["ranged"]
+            dep_val = max(
+                _effective_stat(pilot, k, pilot_tot["stat_pct"].get(k, 0.0))
+                for k in dep_keys
+            )
+            power = _weapon_power(weapon_row)
+            dmg_percent = [
+                x for x in (unit_tot["dmg_up"], pilot_tot["dmg_up"]) if x
+            ]
+            att = CombatantStats(
+                unit_attack=float(stats["attack"]),
+                unit_defense=0.0,
+                character_attack=float(dep_val),
+                character_defense=0.0,
+            )
+            defender = CombatantStats(
+                unit_attack=0.0,
+                unit_defense=unit_def,
+                character_attack=0.0,
+                character_defense=char_def,
+            )
+            ctx = DamageContext(
+                weapon_power=power,
+                terrain_correction=1.0,
+                defensive_correction=DEFENSE_CORRECTION,
+                attacker_damage_dealt_percent=dmg_percent,
+                attacker_vigor="normal",
+            )
+            damage = int(calculate_damage(att, defender, ctx)["final_damage"])
+            weapon_info = {
+                "id": weapon_row["id"],
+                "name": weapon_row.get("name"),
+                "power": power,
+                "attack_attr": int(weapon_row.get("attack_attr") or 1),
+                "dep_label": ATTACK_ATTR_DEP_LABEL.get(
+                    int(weapon_row.get("attack_attr") or 1), "—"
+                ),
+                "dep_value": dep_val,
+                "damage": damage,
+            }
+
+        out_pairs.append({
+            "unit": {
+                "id": unit_id,
+                "name": unit_row.get("name"),
+                "rarity": unit_row.get("rarity"),
+                "role": unit_row.get("role"),
+                "star": star,
+                "ultimate": ULTIMATE_TAG in tags,
+            },
+            "pilot": None if not pilot else {
+                "id": pilot["id"],
+                "name": pilot["name"],
+                "rarity": pilot["rarity"],
+                "role_label": pilot["role_label"],
+            },
+            "supporter_applied": applied,
+            "stats": stats,
+            "pilot_stats": pilot_stats,
+            "weapon": weapon_info,
+        })
+
+    conn.close()
+    return {
+        "ok": True,
+        "bench": bench_label,
+        "bench_def": {"unit_defense": unit_def, "character_defense": char_def},
+        "supporter": None if not sup else {
+            "id": sup["id"],
+            "name": sup["name"],
+            "rarity": sup["rarity"],
+            "break_step": sup["break_step"],
+            "leader_pct": sup["leader_pct"],
+            "leader_pcts": sup["leader_pcts"],
+            "atk_add": sup["atk_add"],
+            "hp_add": sup["hp_add"],
+            "active_skills": sup["active_skills"],
+            "conds": sup["conds"],
+            "matched_units": [
+                r["unit"]["id"] for r in out_pairs
+                if r.get("supporter_applied")
+            ],
+        },
+        "pairs": out_pairs,
+    }
+
+
+def _unit_series_ids(row: dict) -> set[int]:
+    ids: set[int] = set()
+    if row.get("series_id"):
+        try:
+            ids.add(int(row["series_id"]))
+        except (TypeError, ValueError):
+            pass
+    for x in _json_list(row.get("series_ids")):
+        try:
+            ids.add(int(x))
+        except (TypeError, ValueError):
+            pass
+    return ids
+
+
+def _canonical_score(name: str, desc: str, role, rarity, t_role, t_rarity) -> int:
+    """原作关联打分：主动驾驶（name+搭乘/驾驶）> 名字出现 > 同类型 > 同稀有度。"""
+    score = 0
+    if name and desc:
+        if re.search(re.escape(name) + r"(?:搭乘|驾驶)(?!的)", desc):
+            score += 2000
+        elif name in desc:
+            score += 1000
+    if role == t_role:
+        score += 100
+    if rarity == t_rarity:
+        score += 10
+    return score
+
+
+def _find_canonical_pilot(unit_row: dict) -> tuple[dict, int] | None:
+    """前向：机体 → 原作驾驶员（返回 (pilot, score)，无则 None）。"""
+    desc = unit_row.get("desc") or ""
+    series = _unit_series_ids(unit_row)
+    role = unit_row.get("role")
+    rarity = unit_row.get("rarity")
+    best = None
+    best_score = -1
+    for p in _pilots:
+        if not (p["series_ids"] & series):
+            continue
+        score = _canonical_score(p["name"], desc, p["role"], p["rarity"], role, rarity)
+        if score > best_score:
+            best = p
+            best_score = score
+    if not best:
+        return None
+    return best, best_score
+
+
+def _pilot_brief(p: dict) -> dict:
+    return {"id": p["id"], "name": p["name"], "rarity": p["rarity"],
+            "role": p["role"], "role_label": p["role_label"]}
+
+
+def _unit_brief(u: dict) -> dict:
+    return {"id": u["id"], "name": u["name"], "rarity": u["rarity"],
+            "role": u["role"], "role_label": ROLE_NAMES.get(u.get("role"), "—")}
+
+
+def canonical_assoc(unit_id=None, pilot_id=None) -> dict | None:
+    """机体 ↔ 原作驾驶员关联。
+
+    优先读显式映射表 unit_pilot（可人工修正），缺失时回退启发式
+    （主动驾驶 > 名字出现 > 同类型 > 同稀有度）。
+    """
+    conn = _conn()
+    _build_pilots()
+    if unit_id:
+        row = conn.execute(
+            "SELECT pilot_id FROM unit_pilot WHERE unit_id = ?", (unit_id,)
+        ).fetchone()
+        if row:
+            p = next((x for x in _pilots if x["id"] == row["pilot_id"]), None)
+            conn.close()
+            if p:
+                return {"pilot": _pilot_brief(p)}
+        unit_row = conn.execute(
+            "SELECT * FROM unit WHERE id = ?", (unit_id,)
+        ).fetchone()
+        conn.close()
+        if not unit_row:
+            return None
+        r = _find_canonical_pilot(dict(unit_row))
+        if not r:
+            return None
+        return {"pilot": _pilot_brief(r[0])}
+    if pilot_id:
+        row = conn.execute(
+            "SELECT unit_id FROM unit_pilot WHERE pilot_id = ? "
+            "ORDER BY score DESC LIMIT 1", (pilot_id,)
+        ).fetchone()
+        if row:
+            u = conn.execute(
+                "SELECT id, name, rarity, role FROM unit WHERE id = ?",
+                (row["unit_id"],),
+            ).fetchone()
+            conn.close()
+            if u:
+                return {"unit": _unit_brief(dict(u))}
+        pilot = next((p for p in _pilots if p["id"] == int(pilot_id)), None)
+        if not pilot:
+            conn.close()
+            return None
+        name = pilot["name"]
+        series = pilot["series_ids"]
+        role = pilot["role"]
+        rarity = pilot["rarity"]
+        best = None
+        best_score = -1
+        for row in conn.execute("SELECT * FROM unit"):
+            u = dict(row)
+            if not (_unit_series_ids(u) & series):
+                continue
+            score = _canonical_score(name, u.get("desc") or "", u.get("role"), u.get("rarity"), role, rarity)
+            if score > best_score:
+                best = u
+                best_score = score
+        conn.close()
+        if not best:
+            return None
+        return {"unit": _unit_brief(best)}
+    conn.close()
+    return None
+
+
+def build_unit_pilot() -> dict:
+    """生成 unit → 原作驾驶员 显式映射表，写入 unit_pilot 表。
+
+    返回统计：total / active / mention / role / none。
+    """
+    # 只读的 _conn() 无法写表，这里单独开读写连接
+    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS unit_pilot ("
+        "unit_id INTEGER PRIMARY KEY, pilot_id INTEGER NOT NULL, "
+        "unit_name TEXT, pilot_name TEXT, score INTEGER, signal TEXT)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_unit_pilot_pilot ON unit_pilot(pilot_id)"
+    )
+    _build_pilots()
+    units = [dict(r) for r in conn.execute(
+        "SELECT id, name, desc, role, rarity, series_id, series_ids FROM unit"
+    )]
+    rows = []
+    stats = {"total": 0, "active": 0, "mention": 0, "role": 0, "none": 0}
+    for u in units:
+        r = _find_canonical_pilot(u)
+        if not r:
+            stats["none"] += 1
+            continue
+        best, score = r
+        desc = u.get("desc") or ""
+        if best["name"] and desc and re.search(
+            re.escape(best["name"]) + r"(?:搭乘|驾驶)(?!的)", desc
+        ):
+            signal = "active"
+        elif best["name"] and best["name"] in desc:
+            signal = "mention"
+        else:
+            signal = "role"
+        rows.append((u["id"], best["id"], u["name"], best["name"], score, signal))
+        stats["total"] += 1
+        stats[signal] = stats.get(signal, 0) + 1
+    conn.execute("DELETE FROM unit_pilot")
+    conn.executemany(
+        "INSERT INTO unit_pilot (unit_id, pilot_id, unit_name, pilot_name, score, signal) "
+        "VALUES (?,?,?,?,?,?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+    return stats
+
+
 def _pair_pred(r: dict, f: dict) -> bool:
     """驾驶员是否满足前置条件（作用于原始驾驶员或已打分行，字段结构一致）。"""
     q = (f.get("q") or "").strip()

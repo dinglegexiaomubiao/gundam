@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(python scripts/pipeline.py serve --port 8767)",
+      "Bash(curl -s \"http://127.0.0.1:8767/api/canonical?unit_id=1370005950\")",
+      "Bash(curl -s \"http://127.0.0.1:8767/api/canonical?pilot_id=1370003701\")",
+      "Bash(kill %1)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/pairing.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/db.py',encoding='utf-8'\\).read\\(\\)\\); print\\('py OK'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python scripts/build_unit_pilot.py --low)",
+      "Bash(PYTHONIOENCODING=utf-8 python scripts/build_unit_pilot.py)",
+      "Bash(tasklist)",
+      "Bash(wmic process *)",
+      "Bash(taskkill //PID 23760 //F)",
+      "Bash(taskkill //PID 27084 //F)",
+      "Bash(taskkill //PID 20132 //F)",
+      "Bash(taskkill //PID 10128 //F)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/db.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/pairing.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/webapp.py',encoding='utf-8'\\).read\\(\\)\\); print\\('py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/webapp.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/db.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/pairing.py',encoding='utf-8'\\).read\\(\\)\\); print\\('py OK'\\)\")",
+      "Bash(python -c \"import playwright; print\\('playwright ok'\\)\")",
+      "Bash(python -c \"import selenium; print\\('selenium ok'\\)\")",
+      "Read(//c/Users/lzf/.cache/**)",
+      "Bash(npm ls *)",
+      "Read(//c/Program Files \\(x86\\)/Microsoft/Edge/Application/**)",
+      "Read(//c/Program Files/Microsoft/Edge/Application/**)",
+      "Read(//c/Program Files/Google/Chrome/Application/**)",
+      "Bash(npm install *)",
+      "Bash(node _repro2.js)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/pairing.py',encoding='utf-8'\\).read\\(\\)\\); print\\('py OK'\\)\")",
+      "Bash(python -c \"import psycopg; print\\('psycopg', psycopg.__version__\\)\")",
+      "Bash(python -c \"import psycopg2; print\\('psycopg2', psycopg2.__version__\\)\")",
+      "Bash(python -m pip list)",
+      "Bash(python -m pip install \"psycopg[binary]\")",
+      "Bash(python -c \"import psycopg; print\\('psycopg', psycopg.__version__, 'OK'\\)\")"
+    ]
+  }
+}

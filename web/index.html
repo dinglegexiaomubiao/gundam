@@ -39,6 +39,8 @@
       <button data-tab="search"     role="tab" aria-selected="false" data-tab-color="role2">技能/能力/效果</button>
       <button data-tab="damage"     role="tab" aria-selected="false" data-tab-color="hud-amber">伤害计算</button>
       <button data-tab="pairing"    role="tab" aria-selected="false" data-tab-color="hud-green">配对</button>
+      <button data-tab="team"       role="tab" aria-selected="false" data-tab-color="hud-red">组队</button>
+      <button data-tab="mapping"    role="tab" aria-selected="false" data-tab-color="hud-amber">原作映射</button>
     </nav>
     <div class="hud-light-bar" aria-hidden="true">
       <span></span><span></span><span></span>
@@ -576,6 +578,38 @@
         </div>
       </div>
       <div id="pair-result"></div>
+    </section>
+
+    <section id="tab-team" class="tab" role="tabpanel" aria-label="组队">
+      <div class="toolbar team-toolbar">
+        <button id="team-add" class="cond-btn" title="新增一支队伍">＋ 新增队伍</button>
+        <span class="muted">敌方基准</span>
+        <button id="team-bench-low" class="cond-btn active">低防本</button>
+        <button id="team-bench-mid" class="cond-btn">中防本</button>
+        <button id="team-bench-custom" class="cond-btn">自定义</button>
+        <span id="team-custom-wrap" class="hidden">
+          <label class="team-custom-field">机体防御 <input id="team-custom-udef" type="number" value="1060" min="0"></label>
+          <label class="team-custom-field">驾驶员防御 <input id="team-custom-cdef" type="number" value="109" min="0"></label>
+        </span>
+      </div>
+      <div id="team-list"></div>
+    </section>
+
+    <section id="tab-mapping" class="tab" role="tabpanel" aria-label="原作映射">
+      <div class="toolbar">
+        <input id="map-q" placeholder="搜索机体/驾驶员名…" aria-label="搜索映射">
+        <select id="map-signal" aria-label="信号筛选">
+          <option value="">全部</option>
+          <option value="manual">人工修正</option>
+          <option value="active">主动驾驶</option>
+          <option value="mention">名字出现</option>
+          <option value="role">系列类型</option>
+        </select>
+        <button id="map-search">查询</button>
+      </div>
+      <div id="map-count" class="result-count"></div>
+      <div id="map-list"></div>
+      <div id="map-pager" class="pager"></div>
     </section>
   </main>
 

@@ -2124,6 +2124,71 @@ def api_supporter_panel() -> list:
     return out
 
 
+def api_unit_pilot_list(signal: str = "", q: str = "", limit: int = 50,
+                        offset: int = 0) -> dict:
+    """原作映射表列表（可按 signal 筛选、按机体/驾驶员名搜索）。"""
+    conn = _conn()
+    where = []
+    args = []
+    if signal:
+        where.append("signal = ?")
+        args.append(signal)
+    if q:
+        like = f"%{_like_escape(q)}%"
+        where.append("(unit_name LIKE ? OR pilot_name LIKE ?)")
+        args.extend([like, like])
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM unit_pilot{wsql}", args
+    ).fetchone()[0]
+    rows = conn.execute(
+        f"SELECT unit_id, pilot_id, unit_name, pilot_name, score, signal "
+        f"FROM unit_pilot{wsql} "
+        f"ORDER BY CASE signal WHEN 'manual' THEN -1 WHEN 'active' THEN 0 "
+        f"WHEN 'mention' THEN 1 ELSE 2 END, score DESC, unit_id "
+        f"LIMIT ? OFFSET ?",
+        args + [limit, offset],
+    ).fetchall()
+    conn.close()
+    return {"total": total, "items": [dict(r) for r in rows]}
+
+
+def api_unit_pilot_edit(payload: dict) -> dict:
+    """修正/删除某机体的原作驾驶员映射。pilot_id 为空/0 表示删除。"""
+    try:
+        unit_id = int(payload.get("unit_id") or 0)
+    except (TypeError, ValueError):
+        unit_id = 0
+    if not unit_id:
+        return {"ok": False, "error": "缺少 unit_id"}
+    pilot_id = payload.get("pilot_id")
+    conn = _write_conn()
+    if pilot_id in (None, 0, "", "0"):
+        conn.execute("DELETE FROM unit_pilot WHERE unit_id = ?", (unit_id,))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "deleted": True}
+    try:
+        pid = int(pilot_id)
+    except (TypeError, ValueError):
+        conn.close()
+        return {"ok": False, "error": "pilot_id 无效"}
+    pilot = _one(conn, "SELECT name FROM character WHERE id = ?", (pid,))
+    unit = _one(conn, "SELECT name FROM unit WHERE id = ?", (unit_id,))
+    if not pilot or not unit:
+        conn.close()
+        return {"ok": False, "error": "机体或驾驶员不存在"}
+    conn.execute(
+        "INSERT OR REPLACE INTO unit_pilot "
+        "(unit_id, pilot_id, unit_name, pilot_name, score, signal) "
+        "VALUES (?,?,?,?,?,'manual')",
+        (unit_id, pid, unit["name"], pilot["name"], 9999),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 _UNIT_STAT_KEYS = ("hp", "en", "attack", "defense", "mobility", "movement")
 _UNIT_STAT_LABELS = {
     "hp": "HP", "en": "EN", "attack": "攻击", "defense": "防御",
@@ -3876,6 +3941,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(api_skillnames())
         if path == "/api/support-labels":
             return self._send_json(api_support_labels())
+        if path == "/api/canonical":
+            try:
+                unit_id = int(q.get("unit_id", ["0"])[0])
+            except ValueError:
+                unit_id = 0
+            try:
+                pilot_id = int(q.get("pilot_id", ["0"])[0])
+            except ValueError:
+                pilot_id = 0
+            return self._send_json(pairing.canonical_assoc(
+                unit_id=unit_id, pilot_id=pilot_id
+            ))
+        if path == "/api/unit-pilot":
+            limit = min(int(q.get("limit", ["50"])[0]), 200)
+            offset = max(int(q.get("offset", ["0"])[0]), 0)
+            return self._send_json(api_unit_pilot_list(
+                q.get("signal", [""])[0], q.get("q", [""])[0], limit, offset
+            ))
         if path == "/api/pairing/match":
             try:
                 unit_id = int(q.get("unit_id", ["0"])[0])
@@ -4165,6 +4248,38 @@ class Handler(BaseHTTPRequestHandler):
                     "message": "导入成功，数据库已保存到本地",
                     "counts": info["counts"],
                 })
+            if api_path == "/api/team/score":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        parsed = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                return self._send_json(pairing.team_score(
+                    body.get("pairs") or [],
+                    supporter_id=body.get("supporter_id"),
+                    break_step=body.get("break_step", 3),
+                    bench=body.get("bench", "low"),
+                    custom_enemy=body.get("custom_enemy"),
+                ))
+            if api_path == "/api/unit-pilot/edit":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        parsed = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                return self._send_json(api_unit_pilot_edit(body))
             return self._send_json({"error": "unknown api"}, 404)
         except Exception as exc:  # 兜底：避免连接挂死
             try:

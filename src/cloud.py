@@ -778,6 +778,8 @@ def _friendly_cloud_error(exc: Exception) -> str:
     """Convert common cloud connection errors to actionable Chinese hints."""
     text = str(exc)
     low = text.lower()
+    if "no module named 'psycopg'" in low or "no module named psycopg" in low:
+        return "缺少 psycopg 驱动，请运行 pip install \"psycopg[binary]\" 后重试"
     if "permission denied" in low or "10013" in text or "wsaeacces" in low:
         return (
             "云端连接被系统拦截（网络权限不足，错误 10013）。"

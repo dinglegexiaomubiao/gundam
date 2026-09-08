@@ -153,6 +153,16 @@ async function api(path) {
   return r.json();
 }
 
+async function apiPost(path, body) {
+  const r = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  if (!r.ok) throw new Error(`API ${r.status}`);
+  return r.json();
+}
+
 function rarityBadge(r) {
   const label = { 5: "UR", 4: "SSR", 3: "SR", 2: "R", 1: "N" }[r] ?? r;
   return `<span class="badge r${r}">${label}</span>`;
@@ -476,13 +486,14 @@ function activateTab(name) {
   });
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("active", t.id === `tab-${name}`));
-  announceLive(`已切换到「${({overview:"概览",units:"机体",characters:"驾驶员",supporters:"支援角色",stages:"关卡敌人",search:"技能/能力/效果",damage:"伤害计算",pairing:"配对"})[name] || name}」标签页`);
+  announceLive(`已切换到「${({overview:"概览",units:"机体",characters:"驾驶员",supporters:"支援角色",stages:"关卡敌人",search:"技能/能力/效果",damage:"伤害计算",pairing:"配对",team:"组队",mapping:"原作映射"})[name] || name}」标签页`);
   if (name === "overview") loadSummary();
   if (name === "units") loadUnits();
   if (name === "characters") loadCharacters();
   if (name === "supporters") loadSupporters();
   if (name === "search") loadSearch();
   if (name === "stages") loadStages();
+  if (name === "mapping") loadMapping();
 }
 
 function announceLive(msg) {
@@ -1043,27 +1054,62 @@ function initCombobox(boxId, options, getVal, onPick, clearable) {
   const box = $(boxId);
   if (!box) return;
   const input = box.querySelector(".sbox-input");
-  const list = box.querySelector(".sbox-list");
   const clear = box.querySelector(".sbox-clear");
-  comboboxes[boxId] = { options, getVal };
+  const prev = comboboxes[boxId];
+  // 下拉首次挂到 body 后就不在 box 里了，重入时复用缓存引用（幂等）
+  let list = prev && prev.list ? prev.list : box.querySelector(".sbox-list");
+  if (!list) return;
+  if (list.parentNode !== document.body) {
+    document.body.appendChild(list);
+    list.style.position = "fixed";
+  }
+  comboboxes[boxId] = { options, getVal, list, input, clear, onPick, clearable };
+
+  const cur = () => comboboxes[boxId];
   const render = () => {
-    const kw = input.value.trim().toLowerCase();
-    const opts = options.filter((o) => !kw || o.label.toLowerCase().includes(kw));
-    list.innerHTML = opts.slice(0, 60).map((o) =>
+    const c = cur();
+    const kw = c.input.value.trim().toLowerCase();
+    const opts = c.options.filter((o) => !kw || o.label.toLowerCase().includes(kw));
+    c.list.innerHTML = opts.slice(0, 60).map((o) =>
       `<button class="sbox-item" data-v="${esc(String(o.value))}">${esc(o.label)}</button>`).join("")
       || '<div class="empty">无匹配</div>';
-    list.querySelectorAll(".sbox-item").forEach((b) =>
+    c.list.querySelectorAll(".sbox-item").forEach((b) =>
       b.addEventListener("click", () => {
-        onPick(b.dataset.v, b.textContent);
-        if (!clearable) input.value = "";
+        c.onPick(b.dataset.v, b.textContent);
+        if (!c.clearable) c.input.value = "";
         syncCombobox(boxId);
-        list.classList.add("hidden");
+        c.list.classList.add("hidden");
       }));
   };
-  input.addEventListener("focus", () => { render(); list.classList.remove("hidden"); });
-  input.addEventListener("input", render);
-  input.addEventListener("blur", () => setTimeout(() => list.classList.add("hidden"), 150));
-  if (clear) clear.addEventListener("click", () => { onPick("", ""); syncCombobox(boxId); });
+  const close = () => cur().list.classList.add("hidden");
+  const position = () => {
+    const c = cur();
+    const r = c.input.getBoundingClientRect();
+    const w = Math.max(r.width, 220);
+    c.list.style.left = Math.min(r.left, window.innerWidth - w - 8) + "px";
+    c.list.style.width = w + "px";
+    const h = c.list.offsetHeight || 0;
+    if (window.innerHeight - r.bottom < h + 8 && r.top > h + 8) {
+      c.list.style.top = Math.max(8, r.top - h - 4) + "px";
+    } else {
+      c.list.style.top = r.bottom + 4 + "px";
+    }
+  };
+  const open = () => {
+    render();
+    cur().list.classList.remove("hidden");
+    position();
+  };
+
+  if (!prev) {
+    input.addEventListener("focus", open);
+    input.addEventListener("click", () => { if (cur().list.classList.contains("hidden")) open(); });
+    input.addEventListener("input", () => { render(); position(); });
+    input.addEventListener("blur", () => setTimeout(close, 150));
+    window.addEventListener("scroll", () => { const c = cur(); if (c && !c.list.classList.contains("hidden")) position(); }, true);
+    window.addEventListener("resize", () => { const c = cur(); if (c && !c.list.classList.contains("hidden")) position(); });
+    if (clear) clear.addEventListener("click", () => { onPick("", ""); syncCombobox(boxId); });
+  }
   syncCombobox(boxId);
 }
 
@@ -1365,7 +1411,10 @@ function renderUnitAbilities(u, formKey) {
 }
 
 async function openUnit(id) {
-  const u = await api(`/api/units/${id}`);
+  const [u, canonical] = await Promise.all([
+    api(`/api/units/${id}`),
+    api(`/api/canonical?unit_id=${id}`),
+  ]);
   const unitSkills = (u.skills || []).map((s) => `
     <tr>
       <td>${esc(s.name || "单位技能")}</td>
@@ -1386,8 +1435,10 @@ async function openUnit(id) {
     ? `<div class="tags" style="margin-bottom:12px">${u.tags.map((t) => tagChip(t)).join("")}</div>` : "";
 
   /* 左列：角色 + desc + 系列 + 标签 + 机体备注(wfx) + 交互属性(#unit-attr) + 地形适性 */
+  const canonicalHtml = canonical && canonical.pilot ? canonicalJumpHtml("unit", canonical.pilot, id) : "";
   const summaryHtml = `
     <div class="ds-role-row">${roleBadge(u.role, u.role_label)} ${rarityBadge(u.rarity)}</div>
+    ${canonicalHtml}
     <div class="ds-desc">${esc(u.desc || "暂无描述")}</div>
     ${seriesHtml}${tagsHtml}
     <div id="unit-wfx-wrap"></div>
@@ -2099,7 +2150,10 @@ async function loadCharacters(page = state.characters.page) {
 
 async function openCharacter(id) {
   charEdit = null;
-  const c = await api(`/api/characters/${id}`);
+  const [c, canonical] = await Promise.all([
+    api(`/api/characters/${id}`),
+    api(`/api/canonical?pilot_id=${id}`),
+  ]);
   charView.c = c;
   charView.formKey = "default";
   charView.on.clear();
@@ -2119,8 +2173,10 @@ async function openCharacter(id) {
   ].filter(Boolean);
   const noteHtml = noteChips.length
     ? `<h3 class="ds-sec">支援 / 备注（点击可搜索）</h3><div class="tags">${noteChips.join("")}</div>` : "";
+  const canonicalHtml = canonical && canonical.unit ? canonicalJumpHtml("pilot", canonical.unit, id) : "";
   const summaryHtml = `
     <div class="ds-role-row">${roleBadge(c.role, c.role_label)} ${rarityBadge(c.rarity)}</div>
+    ${canonicalHtml}
     <div class="ds-desc">${esc(c.desc || "暂无描述")}</div>
     ${seriesHtml}${tagsHtml}
     <div id="char-attr"></div>
@@ -2945,11 +3001,12 @@ function togglePickerFilters() {
   });
 }
 
-async function openPicker(kind, onPick, side) {
+async function openPicker(kind, onPick, side, weaponUnit) {
   Object.assign(pickerState, {
     kind, side: side || "", q: "", source: "library",
     rarity: "", type: "", series: "", tags: "",
     sort: "rarity", order: "desc", page: 0, onPick,
+    weaponUnit: weaponUnit || null,
   });
   $("#picker-title").textContent =
     kind === "unit" ? "选择机体" : kind === "pilot" ? "选择驾驶员"
@@ -2985,6 +3042,24 @@ async function loadPicker(page = pickerState.page) {
   pickerState.page = page;
   const s = pickerState;
   if (s.kind === "weapon") {
+    if (s.weaponUnit) {
+      const d = await api(`/api/units/${s.weaponUnit.id}`);
+      const weapons = d.weapons || [];
+      $("#picker-list").innerHTML = weapons.length ? weapons.map((w) => `
+        <div class="picker-row" data-w="${w.id}">
+          <span class="name">${esc(w.name)}</span>
+          <span class="muted">威力 ${w.power_lv5 ?? w.power}</span>
+          <span class="muted">${esc(`${w.attack_attr_label ?? ""}/${w.attrs_label ?? w.weapon_attr_label ?? ""}`)} ${esc(w.pilot_stat ?? "")}</span>
+        </div>`).join("") : '<div class="empty">该机体暂无武器数据</div>';
+      $("#picker-list").querySelectorAll(".picker-row").forEach((r) =>
+        r.addEventListener("click", () => {
+          const w = weapons.find((x) => String(x.id) === r.dataset.w);
+          $("#picker-modal").classList.add("hidden");
+          if (s.onPick) s.onPick(w);
+        }));
+      $("#picker-pager").innerHTML = "";
+      return;
+    }
     const u = calcSel.atkUnit;
     if (!u || u.source !== "library") {
       $("#picker-list").innerHTML = '<div class="empty">请先在攻击方「选择机体」选一台机体库中的机体</div>';
@@ -3908,6 +3983,44 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// 数值框聚焦时自动全选，点一下即可直接覆盖输入
+document.addEventListener("focusin", (e) => {
+  if (e.target && e.target.matches && e.target.matches("input[type='number']")) {
+    e.target.select();
+  }
+});
+
+/* 原作关联跳转：机体↔驾驶员详情互跳 + 就地修改映射 */
+function canonicalJumpHtml(type, entity, contextId) {
+  const jump = type === "unit" ? "character" : "unit";
+  const label = type === "unit" ? "原作驾驶" : "原作搭乘机体";
+  const editType = type === "unit" ? "pilot" : "unit";
+  return `<div class="ds-canonical">${label}：<button class="chip jump-chip" data-jump="${jump}" data-id="${entity.id}">${esc(entity.name)}</button>
+    <button class="chip jump-edit" data-edit-type="${editType}" data-ctx="${contextId}" title="修改原作映射">改</button></div>`;
+}
+document.addEventListener("click", (e) => {
+  const ed = e.target.closest(".jump-edit");
+  if (ed) {
+    const ctx = Number(ed.dataset.ctx);
+    if (ed.dataset.editType === "pilot") {
+      openPicker("pilot", async (p) => {
+        await apiPost("/api/unit-pilot/edit", { unit_id: ctx, pilot_id: p.id });
+        openUnit(ctx);
+      });
+    } else {
+      openPicker("unit", async (u) => {
+        await apiPost("/api/unit-pilot/edit", { unit_id: u.id, pilot_id: ctx });
+        openCharacter(ctx);
+      });
+    }
+    return;
+  }
+  const j = e.target.closest(".jump-chip");
+  if (!j) return;
+  if (j.dataset.jump === "character") openCharacter(j.dataset.id);
+  else if (j.dataset.jump === "unit") openUnit(j.dataset.id);
+});
+
 /* ---------- 配对 ---------- */
 const pairFilterState = { q:"", rarity:"", acq:"", series:"", type:"", tags: [], tag_mode: "all", skills: [], skill_mode: "any", support: "", match: "and", sort: "score", order: "desc" };
 let pairFilterData = null;
@@ -4683,9 +4796,409 @@ function initPairing() {
     .forEach((sel) => $(sel).addEventListener("change", () => ppLoad(0)));
 }
 
+/* ---------- 组队 ---------- */
+const teamState = {
+  bench: "low",
+  customEnemy: { unit_defense: 1060, character_defense: 109 },
+  teams: [],
+};
+const TEAM_LS_KEY = "gundam.teams.v1";
+let teamResults = {};
+
+function newTeamSlot() { return { unit: null, star: 3, weapon: null, pilot: null }; }
+function newTeam() {
+  return { id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    supporter: null, breakStep: 3,
+    slots: [newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot()] };
+}
+
+function saveTeamState() {
+  try {
+    localStorage.setItem(TEAM_LS_KEY, JSON.stringify({
+      bench: teamState.bench, customEnemy: teamState.customEnemy, teams: teamState.teams,
+    }));
+  } catch (_) {}
+}
+
+function loadTeamState() {
+  try {
+    const raw = localStorage.getItem(TEAM_LS_KEY);
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (!d || !Array.isArray(d.teams)) return;
+    teamState.bench = d.bench || "low";
+    teamState.customEnemy = d.customEnemy || { unit_defense: 1060, character_defense: 109 };
+    teamState.teams = d.teams.map((t) => ({
+      id: t.id || newTeam().id,
+      supporter: t.supporter || null,
+      breakStep: t.breakStep ?? 3,
+      slots: (Array.isArray(t.slots) && t.slots.length === 5)
+        ? t.slots.map((s) => ({ unit: s.unit || null, star: s.star ?? 3, weapon: s.weapon || null, pilot: s.pilot || null }))
+        : [newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot()],
+    }));
+  } catch (_) {}
+}
+
+function teamBenchConfig() {
+  if (teamState.bench === "custom") {
+    return {
+      bench: "custom",
+      custom_enemy: {
+        unit_defense: Number($("#team-custom-udef").value) || 0,
+        character_defense: Number($("#team-custom-cdef").value) || 0,
+      },
+    };
+  }
+  return { bench: teamState.bench };
+}
+
+function collectTeamPairs(team) {
+  return team.slots.map((s) => ({
+    unit_id: s.unit ? s.unit.id : 0,
+    star: s.star,
+    weapon_id: s.weapon ? s.weapon.id : 0,
+    pilot_id: s.pilot ? s.pilot.id : 0,
+  }));
+}
+
+async function computeTeam(teamId) {
+  const team = teamState.teams.find((t) => t.id === teamId);
+  if (!team) return;
+  const body = Object.assign({}, teamBenchConfig(), {
+    supporter_id: team.supporter ? team.supporter.id : null,
+    break_step: team.breakStep,
+    pairs: collectTeamPairs(team),
+  });
+  try {
+    const r = await apiPost("/api/team/score", body);
+    if (r && r.ok) {
+      teamResults[teamId] = r;
+      renderTeam();
+    }
+  } catch (_) {}
+}
+
+function renderTeam() {
+  const list = $("#team-list");
+  if (!list) return;
+  if (!teamState.teams.length) {
+    list.innerHTML = '<div class="empty">还没有队伍，点击上方「＋ 新增队伍」创建。</div>';
+    return;
+  }
+  list.innerHTML = teamState.teams.map((t) => renderTeamRow(t)).join("");
+}
+
+function renderTeamRow(team) {
+  const res = teamResults[team.id];
+  const sup = res ? res.supporter : null;
+  const unitCards = team.slots.map((s, i) => renderUnitCard(team, s, i, res ? res.pairs[i] : null)).join("");
+  const pilotCards = team.slots.map((s, i) => renderPilotCard(team, s, i, res ? res.pairs[i] : null)).join("");
+  const matched = sup ? sup.matched_units.length : 0;
+  return `
+    <div class="pair-panel team-row">
+      <div class="team-row-head">
+        <span class="team-title">队伍</span>
+        ${sup ? `<span class="muted">支援「${esc(sup.name)}」全能力 +${sup.leader_pct}% · 匹配机体 ${matched}/5</span>`
+          : (team.supporter ? '<span class="muted">计算中…</span>' : '<span class="muted">未选择支援角色</span>')}
+        <button class="cond-btn team-remove" data-team="${esc(team.id)}" title="删除本队">删除</button>
+      </div>
+      <div class="team-grid">
+        ${renderSupporterCard(team, sup)}
+        ${unitCards}
+        ${pilotCards}
+      </div>
+    </div>`;
+}
+
+function renderSupporterCard(team, sup) {
+  const s = team.supporter;
+  if (!s) {
+    return `<div class="team-card team-supporter-card" data-team="${esc(team.id)}" data-kind="supporter">
+      <div class="team-card-empty">＋ 选择支援角色</div></div>`;
+  }
+  const breakOpts = [0, 1, 2, 3].map((b) => {
+    const pct = sup && sup.leader_pcts ? sup.leader_pcts[b] : "";
+    return `<option value="${b}" ${b === team.breakStep ? "selected" : ""}>突破 ${b}${pct !== "" ? `（${pct}%）` : ""}</option>`;
+  }).join("");
+  const conds = sup && sup.conds ? sup.conds.map((c) =>
+    ["系列：" + (c.series || []).join("、"), "标签：" + (c.tags || []).join("、")]
+      .filter((x) => !x.endsWith("：")).join(" · ")
+  ).filter(Boolean).join("；") : "";
+  const skillsHtml = sup && sup.active_skills && sup.active_skills.length
+    ? `<div class="team-skills">` + sup.active_skills.map((sk) =>
+        `<div class="team-skill" title="${esc(sk.desc || "")}">${esc(sk.name)}${sk.is_auto_usage ? "（自动）" : ""}</div>`).join("") + `</div>`
+    : "";
+  return `<div class="team-card team-supporter-card" data-team="${esc(team.id)}" data-kind="supporter">
+    <div class="team-card-name">${rarityBadge(s.rarity)} ${esc(s.name)}</div>
+    <div class="team-card-ctl"><label>突破 <select class="team-break" data-team="${esc(team.id)}">${breakOpts}</select></label></div>
+    ${sup ? `<div class="team-card-stats">
+      <div class="team-stat"><span>全能力</span><b>+${sup.leader_pct}%</b></div>
+      <div class="team-stat"><span>固定攻击</span><b>+${sup.atk_add}</b></div>
+      <div class="team-stat"><span>固定HP</span><b>+${sup.hp_add}</b></div>
+    </div>` : '<div class="muted">计算中…</div>'}
+    ${skillsHtml}
+    ${conds ? `<div class="team-conds" title="词条对象">${esc(conds)}</div>` : ""}
+  </div>`;
+}
+
+function renderUnitCard(team, s, i, pr) {
+  let name, statsHtml, weaponHtml, badge = "";
+  if (s.unit) {
+    name = `${rarityBadge(s.unit.rarity)} ${esc(s.unit.name)}`;
+    const starOpts = [0, 1, 2, 3].map((b) => `<option value="${b}" ${b === s.star ? "selected" : ""}>${b} 星</option>`).join("");
+    const ultimate = s.unit.ultimate;
+    statsHtml = pr && pr.stats ? `
+      <div class="team-stat"><span>攻击</span><b>${fmtNum(pr.stats.attack)}</b></div>
+      <div class="team-stat"><span>防御</span><b>${fmtNum(pr.stats.defense)}</b></div>
+      <div class="team-stat"><span>HP</span><b>${fmtNum(pr.stats.hp)}</b></div>
+      <div class="team-stat"><span>机动</span><b>${fmtNum(pr.stats.mobility)}</b></div>` : '<div class="muted">计算中…</div>';
+    weaponHtml = s.weapon
+      ? `<div class="team-weapon">${esc(s.weapon.name)}${pr && pr.weapon && pr.weapon.damage != null ? ` · 伤害 ${fmtNum(pr.weapon.damage)}` : ""}</div>`
+      : `<button class="team-weapon-btn" data-team="${esc(team.id)}" data-slot="${i}">选择武器</button>`;
+    if (pr && pr.supporter_applied) badge = '<span class="team-applied" title="支援全能力生效">▲</span>';
+    return `<div class="team-card team-unit-card" data-team="${esc(team.id)}" data-slot="${i}" data-kind="unit">
+      ${badge}
+      <div class="team-card-name">${name}</div>
+      <div class="team-card-ctl"><label>星级 <select class="team-star" data-team="${esc(team.id)}" data-slot="${i}" ${ultimate ? "disabled" : ""}>${starOpts}</select></label></div>
+      <div class="team-card-stats">${statsHtml}</div>
+      ${weaponHtml}
+    </div>`;
+  }
+  return `<div class="team-card team-unit-card" data-team="${esc(team.id)}" data-slot="${i}" data-kind="unit">
+    <div class="team-card-empty">＋ 选择机体</div></div>`;
+}
+
+function renderPilotCard(team, s, i, pr) {
+  if (!s.pilot) {
+    return `<div class="team-card team-pilot-card" data-team="${esc(team.id)}" data-slot="${i}" data-kind="pilot">
+      <div class="team-card-empty">＋ 选择驾驶员</div></div>`;
+  }
+  const statsHtml = pr && pr.pilot_stats ? `
+    <div class="team-stat"><span>射击</span><b>${fmtNum(pr.pilot_stats.ranged)}</b></div>
+    <div class="team-stat"><span>格斗</span><b>${fmtNum(pr.pilot_stats.melee)}</b></div>
+    <div class="team-stat"><span>防御</span><b>${fmtNum(pr.pilot_stats.defense)}</b></div>
+    <div class="team-stat"><span>反应</span><b>${fmtNum(pr.pilot_stats.reaction)}</b></div>
+    <div class="team-stat"><span>觉醒</span><b>${fmtNum(pr.pilot_stats.awaken)}</b></div>` : '<div class="muted">计算中…</div>';
+  return `<div class="team-card team-pilot-card" data-team="${esc(team.id)}" data-slot="${i}" data-kind="pilot">
+    <div class="team-card-name">${rarityBadge(s.pilot.rarity)} ${esc(s.pilot.name)}</div>
+    <div class="team-card-stats">${statsHtml}</div></div>`;
+}
+
+function onTeamListClick(e) {
+  const removeBtn = e.target.closest(".team-remove");
+  if (removeBtn) {
+    const tid = removeBtn.dataset.team;
+    if (confirm("删除这支队伍？")) {
+      teamState.teams = teamState.teams.filter((t) => t.id !== tid);
+      delete teamResults[tid];
+      saveTeamState();
+      renderTeam();
+    }
+    return;
+  }
+  const weaponBtn = e.target.closest(".team-weapon-btn");
+  if (weaponBtn) {
+    const tid = weaponBtn.dataset.team;
+    const slot = Number(weaponBtn.dataset.slot);
+    const team = teamState.teams.find((t) => t.id === tid);
+    if (!team || !team.slots[slot].unit) return;
+    openTeamWeaponPicker(team, slot);
+    return;
+  }
+  if (e.target.closest(".team-star") || e.target.closest(".team-break")) return;
+  const card = e.target.closest(".team-card");
+  if (!card) return;
+  const tid = card.dataset.team;
+  const team = teamState.teams.find((t) => t.id === tid);
+  if (!team) return;
+  if (card.dataset.kind === "supporter") openTeamSupporterPicker(team);
+  else if (card.dataset.kind === "unit") openTeamUnitPicker(team, Number(card.dataset.slot));
+  else if (card.dataset.kind === "pilot") openTeamPilotPicker(team, Number(card.dataset.slot));
+}
+
+function onTeamListChange(e) {
+  const starSel = e.target.closest(".team-star");
+  if (starSel) {
+    const team = teamState.teams.find((t) => t.id === starSel.dataset.team);
+    if (!team) return;
+    team.slots[Number(starSel.dataset.slot)].star = Number(starSel.value);
+    saveTeamState();
+    computeTeam(team.id);
+    return;
+  }
+  const breakSel = e.target.closest(".team-break");
+  if (breakSel) {
+    const team = teamState.teams.find((t) => t.id === breakSel.dataset.team);
+    if (!team) return;
+    team.breakStep = Number(breakSel.value);
+    saveTeamState();
+    computeTeam(team.id);
+  }
+}
+
+async function openTeamUnitPicker(team, slot) {
+  await openPicker("unit", async (u) => {
+    const dup = team.slots.some((s, i) => i !== slot && s.unit && String(s.unit.id) === String(u.id));
+    if (dup) { alert("该机体已在队伍中，不能重复选择"); return; }
+    const ultimate = (u.tags || []).includes("终极");
+    team.slots[slot].unit = { id: u.id, name: u.name, rarity: u.rarity, role: u.role, role_label: u.role_label, ultimate };
+    team.slots[slot].weapon = null;
+    if (ultimate) team.slots[slot].star = 0;
+    // 自动填原作驾驶员（可再手动改）
+    try {
+      const c = await api(`/api/canonical?unit_id=${u.id}`);
+      if (c && c.pilot) {
+        team.slots[slot].pilot = { id: c.pilot.id, name: c.pilot.name, rarity: c.pilot.rarity, role: c.pilot.role, role_label: c.pilot.role_label };
+      }
+    } catch (_) {}
+    saveTeamState();
+    computeTeam(team.id);
+  });
+}
+
+async function openTeamPilotPicker(team, slot) {
+  await openPicker("pilot", (p) => {
+    const dup = team.slots.some((s, i) => i !== slot && s.pilot && String(s.pilot.id) === String(p.id));
+    if (dup) { alert("该驾驶员已在队伍中，不能重复选择"); return; }
+    team.slots[slot].pilot = { id: p.id, name: p.name, rarity: p.rarity, role: p.role, role_label: p.role_label };
+    saveTeamState();
+    computeTeam(team.id);
+  });
+}
+
+async function openTeamSupporterPicker(team) {
+  await openPicker("supporter", (x) => {
+    team.supporter = { id: x.id, name: x.name, rarity: x.rarity };
+    saveTeamState();
+    computeTeam(team.id);
+  });
+}
+
+async function openTeamWeaponPicker(team, slot) {
+  await openPicker("weapon", (w) => {
+    team.slots[slot].weapon = { id: w.id, name: w.name };
+    saveTeamState();
+    computeTeam(team.id);
+  }, "team", { id: team.slots[slot].unit.id });
+}
+
+function syncTeamBenchUI() {
+  $("#team-bench-low").classList.toggle("active", teamState.bench === "low");
+  $("#team-bench-mid").classList.toggle("active", teamState.bench === "mid");
+  $("#team-bench-custom").classList.toggle("active", teamState.bench === "custom");
+  $("#team-custom-wrap").classList.toggle("hidden", teamState.bench !== "custom");
+  $("#team-custom-udef").value = teamState.customEnemy.unit_defense;
+  $("#team-custom-cdef").value = teamState.customEnemy.character_defense;
+}
+
+function setTeamBench(b) {
+  teamState.bench = b;
+  syncTeamBenchUI();
+  saveTeamState();
+  teamState.teams.forEach((t) => computeTeam(t.id));
+}
+
+let teamRecomputeTimer = null;
+function scheduleTeamRecompute() {
+  clearTimeout(teamRecomputeTimer);
+  teamRecomputeTimer = setTimeout(() => {
+    teamState.teams.forEach((t) => computeTeam(t.id));
+  }, 300);
+}
+
+function initTeam() {
+  $("#team-add").addEventListener("click", () => {
+    teamState.teams.push(newTeam());
+    saveTeamState();
+    renderTeam();
+  });
+  $("#team-bench-low").addEventListener("click", () => setTeamBench("low"));
+  $("#team-bench-mid").addEventListener("click", () => setTeamBench("mid"));
+  $("#team-bench-custom").addEventListener("click", () => setTeamBench("custom"));
+  ["#team-custom-udef", "#team-custom-cdef"].forEach((id) =>
+    $(id).addEventListener("input", () => {
+      teamState.customEnemy.unit_defense = Number($("#team-custom-udef").value) || 0;
+      teamState.customEnemy.character_defense = Number($("#team-custom-cdef").value) || 0;
+      saveTeamState();
+      scheduleTeamRecompute();
+    }));
+
+  const list = $("#team-list");
+  list.addEventListener("click", onTeamListClick);
+  list.addEventListener("change", onTeamListChange);
+
+  loadTeamState();
+  syncTeamBenchUI();
+  renderTeam();
+  teamState.teams.forEach((t) => computeTeam(t.id));
+}
+
+/* ---------- 原作映射 ---------- */
+const mapState = { signal: "", q: "", page: 0, size: 50 };
+const MAP_SIGNAL_LABEL = { manual: "人工修正", active: "主动驾驶", mention: "名字出现", role: "系列类型" };
+
+function mapSignalBadge(s) {
+  return `<span class="chip map-signal" data-signal="${esc(s)}">${MAP_SIGNAL_LABEL[s] || s}</span>`;
+}
+
+async function loadMapping(page = mapState.page) {
+  mapState.page = page;
+  mapState.signal = $("#map-signal").value;
+  mapState.q = $("#map-q").value.trim();
+  const s = mapState;
+  const params = new URLSearchParams({
+    signal: s.signal, q: s.q, limit: s.size, offset: s.page * s.size,
+  });
+  const d = await api("/api/unit-pilot?" + params);
+  $("#map-count").textContent = `共 ${d.total} 条映射`;
+  $("#map-list").innerHTML = d.items.length
+    ? `<table class="map-table"><tr><th>信号</th><th>机体</th><th>原作驾驶员</th><th class="map-act-col">操作</th></tr>` +
+      d.items.map((r) => `
+        <tr data-unit="${r.unit_id}">
+          <td>${mapSignalBadge(r.signal)}</td>
+          <td><button class="map-name" data-unit-id="${r.unit_id}">${esc(r.unit_name)}</button></td>
+          <td><button class="map-name" data-pilot-id="${r.pilot_id}">${esc(r.pilot_name)}</button></td>
+          <td class="map-act-col">
+            <button class="cond-btn map-edit" data-unit="${r.unit_id}" title="重新选择该机体的原作驾驶员">改</button>
+            <button class="cond-btn map-clear" data-unit="${r.unit_id}" title="清除该映射">清除</button>
+          </td>
+        </tr>`).join("") + `</table>`
+    : '<div class="empty">暂无映射，请先运行 python scripts/build_unit_pilot.py</div>';
+  $("#map-list").querySelectorAll("[data-unit-id]").forEach((b) =>
+    b.addEventListener("click", () => openUnit(b.dataset.unitId)));
+  $("#map-list").querySelectorAll("[data-pilot-id]").forEach((b) =>
+    b.addEventListener("click", () => openCharacter(b.dataset.pilotId)));
+  $("#map-list").querySelectorAll(".map-edit").forEach((b) =>
+    b.addEventListener("click", () => openMappingEdit(Number(b.dataset.unit))));
+  $("#map-list").querySelectorAll(".map-clear").forEach((b) =>
+    b.addEventListener("click", () => clearMapping(Number(b.dataset.unit))));
+  pager("map", d.total, s.page, s.size, loadMapping);
+}
+
+async function openMappingEdit(unitId) {
+  await openPicker("pilot", async (p) => {
+    await apiPost("/api/unit-pilot/edit", { unit_id: unitId, pilot_id: p.id });
+    loadMapping(mapState.page);
+  });
+}
+
+async function clearMapping(unitId) {
+  if (!confirm("清除该机体的原作驾驶员映射？")) return;
+  await apiPost("/api/unit-pilot/edit", { unit_id: unitId, pilot_id: null });
+  loadMapping(mapState.page);
+}
+
+function initMapping() {
+  $("#map-search").addEventListener("click", () => loadMapping(0));
+  $("#map-q").addEventListener("keydown", (e) => { if (e.key === "Enter") loadMapping(0); });
+  $("#map-signal").addEventListener("change", () => loadMapping(0));
+}
+
 /* ---------- 启动 ---------- */
 initFilterControls();
 initColumnResize();
 initPairing();
 bindPairFilterRow();
+initTeam();
+initMapping();
 loadSummary();

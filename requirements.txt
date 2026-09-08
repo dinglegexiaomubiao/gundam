@@ -1,1 +1,5 @@
-# 本项目仅使用 Python 标准库（urllib / sqlite3 / concurrent.futures），无需额外依赖。
+# 本项目仅使用 Python 标准库（urllib / sqlite3 / concurrent.futures）。
+#
+# 云端同步（Neon PostgreSQL）需要 psycopg 驱动，仅在使用云端时安装：
+#   pip install "psycopg[binary]"
+psycopg[binary]>=3.1

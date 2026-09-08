@@ -2051,3 +2051,92 @@ nav button.active::after {
   .calc-side::before, .pair-panel::before, .pair-result-panel::before,
   .calc-result::before, .damage-final::before { opacity: 0.6; }
 }
+
+/* ==============================================================
+   组队页
+   ============================================================== */
+.team-toolbar { flex-wrap: wrap; align-items: center; }
+.team-custom-field { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.team-custom-field input { width: 80px; }
+
+.team-row { margin-bottom: 16px; }
+.team-row-head {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.team-title { font-family: var(--font-display); font-weight: 700; font-size: 15px; color: var(--text); letter-spacing: 0.03em; }
+.team-row-head .muted { font-size: 12px; }
+.team-remove { margin-left: auto; }
+
+.team-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.1fr) repeat(5, minmax(140px, 1fr));
+  grid-template-rows: auto auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.team-card {
+  position: relative;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  cursor: pointer;
+  min-height: 96px;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+.team-card:hover { border-color: var(--accent2); }
+.team-supporter-card { grid-row: 1 / span 2; }
+.team-unit-card { grid-row: 1; }
+.team-pilot-card { grid-row: 2; }
+
+.team-card-name { font-weight: 600; font-size: 13px; margin-bottom: 6px; line-height: 1.3; }
+.team-card-empty {
+  color: var(--muted); font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; min-height: 80px; text-align: center;
+}
+
+.team-card-ctl { margin-bottom: 6px; }
+.team-card-ctl label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.team-card-ctl select {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--text); padding: 2px 4px; font-size: 12px; cursor: pointer;
+}
+
+.team-card-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 8px; }
+.team-stat { display: flex; justify-content: space-between; align-items: baseline; gap: 4px; font-size: 12px; color: var(--muted); }
+.team-stat b { color: var(--text); font-family: var(--font-mono); font-size: 12px; }
+
+.team-weapon { margin-top: 6px; font-size: 12px; color: var(--accent2); }
+.team-weapon-btn {
+  margin-top: 6px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; color: var(--muted); padding: 3px 8px; font-size: 12px; cursor: pointer;
+}
+.team-weapon-btn:hover { border-color: var(--accent); color: var(--text); }
+
+.team-conds { margin-top: 8px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+.team-skills { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+.team-skill { font-size: 11px; color: var(--accent2); line-height: 1.4; }
+.team-applied {
+  position: absolute; top: 6px; right: 8px; color: var(--accent2);
+  font-size: 12px; font-weight: 700;
+}
+
+/* 原作关联跳转 */
+.ds-canonical { margin-bottom: 8px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ds-canonical .jump-chip { cursor: pointer; border-color: var(--accent2); color: var(--accent2); }
+.ds-canonical .jump-chip:hover { background: var(--accent); color: #fff; }
+
+/* 原作映射页 */
+.map-table { width: 100%; border-collapse: collapse; }
+.map-table th, .map-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: middle; }
+.map-table th { color: var(--muted); font-weight: 600; }
+.map-name { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 13px; padding: 0; }
+.map-name:hover { color: var(--accent2); text-decoration: underline; }
+.map-act-col { white-space: nowrap; width: 110px; }
+.map-signal[data-signal="manual"] { border-color: var(--ok); color: var(--ok); }
+.map-signal[data-signal="active"] { border-color: var(--accent2); color: var(--accent2); }
+.map-signal[data-signal="mention"] { border-color: var(--hud-amber); color: var(--hud-amber); }
+.map-signal[data-signal="role"] { color: var(--muted); }
