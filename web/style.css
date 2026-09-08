@@ -606,6 +606,7 @@ textarea.edit-input { width: 240px; min-height: 40px; resize: vertical; font-fam
   border-radius: 6px;
 }
 .pair-sel-clear:hover { color: var(--accent); background: var(--panel); }
+#pair-reset-all { margin-left: 0; flex-shrink: 0; }
 .pair-weapon-info {
   flex: 1;
   min-width: 300px;

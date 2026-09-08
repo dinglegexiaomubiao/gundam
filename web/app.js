@@ -4411,10 +4411,6 @@ function bindPairResultSort() {
     }));
 }
 
-function refreshAfterFilterChange() {
-  if (pairLastQuery) refreshPairResult();
-}
-
 function renderPairFilterChips() {
   const tagBox = $("#pr-tag-chips");
   const skillBox = $("#pr-skill-chips");
@@ -4429,13 +4425,11 @@ function renderPairFilterChips() {
     b.addEventListener("click", () => {
       pairFilterState.tags = pairFilterState.tags.filter((t) => t !== b.dataset.t);
       renderPairFilterChips();
-      refreshAfterFilterChange();
     }));
   skillBox.querySelectorAll(".chip-x").forEach((b) =>
     b.addEventListener("click", () => {
       pairFilterState.skills = pairFilterState.skills.filter((s) => s !== b.dataset.s);
       renderPairFilterChips();
-      refreshAfterFilterChange();
     }));
 }
 
@@ -4482,16 +4476,14 @@ function bindPairFilterRow() {
   $("#pr-support").value = pairFilterState.support;
   $("#pr-match").value = pairFilterState.match;
   initCombobox("#pr-series-box", pairFilterData.seriesOpts, () => pairFilterState.series,
-    (v) => { pairFilterState.series = String(v); refreshAfterFilterChange(); }, true);
+    (v) => { pairFilterState.series = String(v); }, true);
   initCombobox("#pr-tag-box", pairFilterData.charTags, () => "",
-    (v) => { if (v && !pairFilterState.tags.includes(v)) { pairFilterState.tags.push(v); renderPairFilterChips(); refreshAfterFilterChange(); } }, false);
+    (v) => { if (v && !pairFilterState.tags.includes(v)) { pairFilterState.tags.push(v); renderPairFilterChips(); } }, false);
   initCombobox("#pr-skill-box", pairFilterData.skillNames, () => "",
-    (v) => { if (v && !pairFilterState.skills.includes(v)) { pairFilterState.skills.push(v); renderPairFilterChips(); refreshAfterFilterChange(); } }, false);
+    (v) => { if (v && !pairFilterState.skills.includes(v)) { pairFilterState.skills.push(v); renderPairFilterChips(); } }, false);
   $("#pr-q").addEventListener("keydown", (e) => { if (e.key === "Enter") runPairMatch(); });
   $("#pr-search").addEventListener("click", runPairMatch);
   $("#pr-reset").addEventListener("click", resetPairFilter);
-  ["#pr-rarity", "#pr-acq", "#pr-type", "#pr-tag-mode", "#pr-skill-mode", "#pr-support", "#pr-match"]
-    .forEach((sel) => $(sel).addEventListener("change", refreshAfterFilterChange));
   renderPairFilterChips();
 }
 
@@ -4507,7 +4499,55 @@ function resetPairFilter() {
   $("#pr-skill-mode").value = "any"; $("#pr-support").value = ""; $("#pr-match").value = "and";
   syncCombobox("#pr-series-box");
   renderPairFilterChips();
-  if (pairLastQuery) refreshPairResult();
+}
+
+function resetPairAll() {
+  /* 机体 */
+  pairState.unit = null;
+  pairState.unitDetail = null;
+  pairState.weapon = null;
+  pairState.atkUs = [];
+  pairState.action = "attack";
+  pairState.bench = "low";
+  pairState.enemyTags = [];
+  pairState.enemySeries = [];
+
+  renderPairSelection();
+  renderWeaponInfo();
+  renderUnitSkillChips();
+  renderEnemyChips();
+
+  $("#pair-act-atk").classList.add("active");
+  $("#pair-act-def").classList.remove("active");
+  $("#pair-bench-low").classList.add("active");
+  $("#pair-bench-mid").classList.remove("active");
+  updatePairModeUI();
+  $("#pair-vigor").value = "normal";
+
+  /* 外部加成与敌方输入回默认值 */
+  ["#pair-ext-sup", "#pair-ext-op", "#pair-ext-fixed", "#pair-ext-hp", "#pair-ext-hpf"]
+    .forEach((sel) => { $(sel).value = "0"; });
+  $("#pair-enemy-ua").value = "15000";
+  $("#pair-enemy-pa").value = "800";
+  $("#pair-enemy-wp").value = "5000";
+  $("#pair-enemy-wpboost").value = "0";
+  $("#pair-enemy-wt").value = "2";
+  $("#pair-enemy-waa").value = "Ranged";
+  $("#pair-enemy-guard").value = "2";
+  $("#pair-enemy-vigor").value = "normal";
+  $("#pair-enemy-terrain").value = "1.0";
+  $("#pair-enemy-crit").value = "0";
+  $("#pair-enemy-ir").checked = false;
+  renderEnemyPower();
+
+  /* 筛选条件 */
+  resetPairFilter();
+
+  /* 配对列表 */
+  pairLastQuery = "";
+  $("#pair-result").innerHTML = "";
+  $("#pair-msg").textContent = "";
+  updatePairMatchBtn();
 }
 
 async function refreshPairResult() {
@@ -4597,6 +4637,7 @@ function firstUnitHp(res) {
 
 function initPairing() {
   $("#pair-select-unit").addEventListener("click", openPairUnitPicker);
+  $("#pair-reset-all").addEventListener("click", resetPairAll);
   $("#pair-match").addEventListener("click", runPairMatch);
   $("#pair-act-atk").addEventListener("click", () => setPairAction("attack"));
   $("#pair-act-def").addEventListener("click", () => setPairAction("defense"));
