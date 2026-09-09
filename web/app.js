@@ -3201,7 +3201,8 @@ async function loadPicker(page = pickerState.page) {
     $("#picker-pager").innerHTML = "";
     return;
   }
-  const ep = s.kind === "unit" ? "units" : s.kind === "supporter" ? "supporters" : "pilots";
+  // 机体/驾驶员走 /api/picker/*（返回 tags 数组、支持机体库/关卡敌人），支援角色走 /api/supporters
+  const ep = s.kind === "supporter" ? "supporters" : `picker/${s.kind === "unit" ? "units" : "pilots"}`;
   const params = new URLSearchParams({
     q: s.q, limit: s.size, offset: s.page * s.size,
   });
@@ -3210,7 +3211,10 @@ async function loadPicker(page = pickerState.page) {
     if (s.rarity) params.set("rarity", s.rarity);
     params.set("affected_tags", s.affectedTags);
     params.set("tag_mode", s.tag_mode);
-  } else if (s.source === "library") {
+  } else {
+    params.set("source", s.source);
+  }
+  if (s.kind !== "supporter" && s.source === "library") {
     params.set("rarity", s.rarity);
     params.set("type", s.type);
     params.set("series", s.series);
