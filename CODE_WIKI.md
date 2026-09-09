@@ -445,6 +445,15 @@ GET 站点 JSON API 并解析为 Python 对象（带节流、限流冷却与重�
 #### `unit_sync_diff(unit_id) -> dict` / `unit_sync_push(unit_id) -> dict`
 单机体级别的差异对比与推送（覆盖该机体的 unit / weapons / abilities）。
 
+#### `push_unit_pilot_row(unit_id) -> dict`
+原作映射单行 upsert/删除上云（本地存在则 upsert，本地已删则删云端行）。
+
+#### `push_team_row(team_id) -> dict` / `push_team_config_row(gkey) -> dict`
+组队单行 upsert/删除上云；`team_config` 仅 `gkey='default'` 一行。
+
+#### `upload_unit_pilot_to_cloud() -> dict` / `restore_unit_pilot_from_cloud() -> dict`
+原作映射表整体上传/拉回（`--down` 反向），按 `updated_at` 取较新方合并，保留本地独有行。
+
 #### `direct_cloud_url(url) -> str`
 把 Neon 池化地址（`-pooler.`）转为直连地址，批量读写更快。
 
@@ -540,6 +549,8 @@ HTTP 请求处理器，实现：
 | 表 | 主键 | 说明 |
 |---|---|---|
 | `unit_edit_log` | `id` | 本地机体编辑历史（`unit_id` / `field` / `old_value` / `new_value` / `edited_at` / `source`），`build_db` 不会清空此表 |
+| `team` | `team_id` | 用户保存的队伍，`payload` 为整队 JSON（5 个槽位的 `unit`/`star`/`weapon`/`pilot` + `supporter` + `breakStep`），`updated_at` 标记最后修改 |
+| `team_config` | `gkey` | 组队全局配置（固定 `default`），`payload` 为 `{bench, customEnemy}`，`updated_at` 标记最后修改 |
 
 ### 6.6 关键索引
 
@@ -637,6 +648,7 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 - `GET /api/pairing/match?unit_id=&action=attack|defense&weapon_id=&bench=low|mid&...` — 配对推荐
 - `GET /api/pairing/default-enemy` — 默认敌方
 - `POST /api/team/score` — 组队评分，body：`{pairs:[{unit_id,star,pilot_id,weapon_id}], supporter_id, break_step, bench, custom_enemy}`（详见 [10.9](#109-组队评分)）
+- `GET /api/team/list` — 读取全部队伍与全局配置（返回 `{teams:[...], config:{bench,customEnemy}}`），组队 Tab 打开时优先拉取（详见 [10.13](#1013-组队持久化与云端同步)）
 - `GET /api/damage?aua=&aca=&dud=&dcd=&wp=&terrain=&vigor=&critical=&buff=&debuff=...` — 单次伤害计算
 - `GET /api/damage-sim?...` — 多次伤害模拟
 - `GET /api/damage-bonus?atk_uid=&atk_pid=&def_uid=&def_pid=&weapon_attr=&attack_attr=...` — 含能力加成的完整伤害计算
@@ -659,6 +671,9 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 - `POST /api/unit-edit?preview=0|1` — 机体编辑（`preview=1` 仅预览差异，`preview=0` 写库）
 - `POST /api/unit-sync` — 单机体推送到云端（body: `{"unit_id": ...}`）
 - `POST /api/import` — 导入数据库文件（流式上传，最大 512MB，校验后替换）
+- `POST /api/team/save` — 保存/更新单支队伍（body: `{id, name, slots:[{unit,star,weapon,pilot}×5], supporter, breakStep}`），写本地库并自动单条上云（详见 [10.13](#1013-组队持久化与云端同步)）
+- `POST /api/team/delete` — 删除队伍（body: `{id}`），删本地库并同步删除云端行
+- `POST /api/team/config` — 保存全局配置（body: `{bench:"low"|"mid"|"high", customEnemy:{unit_defense,character_defense}}`），写本地库并自动单条上云
 
 ### 8.3 静态资源
 
@@ -919,6 +934,29 @@ SSP（Super SP）是部分机体在 SP 之上的最终形态，属性与技能�
   按 `unit_id` 覆盖写（upsert），无需重传 190MB 整库。
 - **人工修正**：直接改本地 `unit_pilot` 行（建议 `signal='manual'` 标记），
   再跑一次 `migrate_unit_pilot.py` 即可同步到服务器；代码逻辑是显式表优先于启发式。
+
+### 10.13 组队持久化与云端同步
+
+组队数据原存于浏览器 `localStorage`（`gundam.teams.v1`），现已改为持久化到本地库
+`team` / `team_config` 表，并随云端同步上云，实现多设备/换机可回拉。
+
+- **本地表**：`team`（`team_id` 主键 + `name` + `payload`(整队 JSON) + `updated_at`）、
+  `team_config`（`gkey` 主键 + `payload`(`{bench, customEnemy}`) + `updated_at`），
+  表结构见 [6.5](#65-编辑表)；`run_server()` 启动时会幂等补建这两张表，老库也能直接用。
+- **后端接口**（`src/webapp.py`）：
+  - `GET /api/team/list` — 读取全部队伍与全局配置；
+  - `POST /api/team/save` — 保存/更新单支队伍，写本地库后自动调用 `push_team_row()` 单条上云；
+  - `POST /api/team/delete` — 删除队伍，删本地库并同步删除云端行；
+  - `POST /api/team/config` — 保存全局配置，自动单条上云。
+  断网或云端未配置时不阻塞本地编辑（降级为仅本地成功）。
+- **云端同步**（`src/cloud.py`）：`team` / `team_config` 已加入 `TABLE_ORDER`，
+  整库迁移会带上它们；同时提供 `push_team_row(team_id)` / `push_team_config_row(gkey)`
+  做单行 upsert/删除，编辑/删除队伍时毫秒级实时上云。
+- **前端迁移**（`web/app.js`）：`saveTeamState()` 改为同时写后端（逐队 `save` + `config`）
+  并保留 `localStorage` 作为离线降级；`loadTeamState()` 后端优先，后端为空时自动把
+  浏览器里现有队伍迁移到后端并上云，不丢数据。
+- **整队结构**：每支队伍 `{id, name, supporter(支援角色id|null), breakStep(突破阶), slots:[5×{unit,star,weapon,pilot}]}`；
+  `payload` 以 JSON 文本存储，前端解析。
 
 ---
 
