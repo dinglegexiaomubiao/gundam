@@ -1,751 +1,773 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#0b0f14">
+<html lang="zh-CN" data-page-node-id="KLv240SnanpfcewrP0Bvnu">
+<head data-page-node-id="cKSFh5RzzbAMGfm7vCxr6N">
+  <meta charset="utf-8" data-page-node-id="eL1Bvoh81feaxe2KO0dk05">
+  <meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="HqTf2uhw0cRarqQwEeJIWa">
+  <meta name="color-scheme" content="dark" data-page-node-id="AnYdYU5Qkm5AlbL79mpLRS">
+  <meta name="theme-color" content="#0b0f14" data-page-node-id="rjEqHzTzS2s6vs9JEbzgAN">
   <title>GGE 资料库</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css" data-page-node-id="luLATJDjxZEZExeDkSu1P2">
 </head>
-<body>
-  <a href="#main" class="skip-link">跳转到主内容</a>
-  <div id="aria-live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-  <header>
-    <div class="brand">
-      <div class="logo" aria-hidden="true">
-        <div class="logo-inner">GGE</div>
-        <div class="logo-scan"></div>
+<body data-page-node-id="7nRPwaxzjAV04BQazPLKge">
+  <a href="#main" class="skip-link" data-page-node-id="FZCNLhj7aJQLooGv8Txtzf">跳转到主内容</a>
+  <div id="aria-live" class="sr-only" aria-live="polite" aria-atomic="true" data-page-node-id="5OllxMchHBDohki8Dm7zkc"></div>
+  <header data-page-node-id="lcIPs68CUCORz5U6E1Nw2S">
+    <div class="brand" data-page-node-id="yhx48Ws49H3p281XZ03sZD">
+      <div class="logo" aria-hidden="true" data-page-node-id="Zs4RM6Sou1QtH7vbMXmAeI">
+        <div class="logo-inner" data-page-node-id="ApRFxHWOWAW7deyAY0UcGI">GGE</div>
+        <div class="logo-scan" data-page-node-id="V1ywAJEbBxHJqZvkSCxLdc"></div>
       </div>
-      <div class="brand-text">
-        <h1 class="title">资料库</h1>
-        <div class="sub">SD 高达 G 世纪永恒 · 机体 / 驾驶员 / 支援 / 关卡</div>
+      <div class="brand-text" data-page-node-id="60u2H9JaW0l6bquHwId5QW">
+        <h1 class="title" data-page-node-id="JOSdfZIY1t2bITfruh3NL6">资料库</h1>
+        <div class="sub" data-page-node-id="q41XrUuklW6BCntzwGYjI1">SD 高达 G 世纪永恒 · 机体 / 驾驶员 / 支援 / 关卡</div>
       </div>
-      <div class="hud-status" id="hudStatus" title="系统状态">
-        <span class="hud-dot" aria-hidden="true"></span>
-        <span class="hud-label">SYSTEM ONLINE</span>
-        <span class="hud-sep" aria-hidden="true">·</span>
-        <span class="hud-time" id="hudTime">--:--:--</span>
-        <span class="hud-sep" aria-hidden="true">·</span>
-        <span class="hud-dbstat" id="hudDbStat">加载中…</span>
+      <div class="hud-status" id="hudStatus" title="系统状态" data-page-node-id="VJCELhQ9Oyum1tPFEBKbBg">
+        <span class="hud-dot" aria-hidden="true" data-page-node-id="N8oHk0vUwd57t1ATvrxQvZ"></span>
+        <span class="hud-label" data-page-node-id="AoP7RdYoQVbUCh8XUCUaoT">SYSTEM ONLINE</span>
+        <span class="hud-sep" aria-hidden="true" data-page-node-id="qXu2dm2irLnHzIyzLiiLkB">·</span>
+        <span class="hud-time" id="hudTime" data-page-node-id="41k8SE5G3ibJGoWIn0siyI">--:--:--</span>
+        <span class="hud-sep" aria-hidden="true" data-page-node-id="eeBZy6084anBcln5HxCHbx">·</span>
+        <span class="hud-dbstat" id="hudDbStat" data-page-node-id="X52H13p41GtLsOkUSIu3lx">加载中…</span>
       </div>
     </div>
-    <nav id="tabs" role="tablist">
-      <button data-tab="overview"   class="active" role="tab" aria-selected="true" data-tab-color="hud-blue">概览</button>
-      <button data-tab="units"      role="tab" aria-selected="false" data-tab-color="hud-red">机体</button>
-      <button data-tab="characters" role="tab" aria-selected="false" data-tab-color="hud-blue">驾驶员</button>
-      <button data-tab="supporters" role="tab" aria-selected="false" data-tab-color="hud-amber">支援角色</button>
-      <button data-tab="stages"     role="tab" aria-selected="false" data-tab-color="hud-green">关卡敌人</button>
-      <button data-tab="search"     role="tab" aria-selected="false" data-tab-color="role2">技能/能力/效果</button>
-      <button data-tab="damage"     role="tab" aria-selected="false" data-tab-color="hud-amber">伤害计算</button>
-      <button data-tab="pairing"    role="tab" aria-selected="false" data-tab-color="hud-green">配对</button>
-      <button data-tab="team"       role="tab" aria-selected="false" data-tab-color="hud-red">组队</button>
-      <button data-tab="mapping"    role="tab" aria-selected="false" data-tab-color="hud-amber">原作映射</button>
+    <nav id="tabs" role="tablist" data-page-node-id="fA3mbCdW8iderUOBhtp6aj">
+      <button data-tab="overview"   class="active" role="tab" aria-selected="true" data-tab-color="hud-blue" data-page-node-id="ArvXOy2F0i6dS8MKm2BvBP">概览</button>
+      <button data-tab="units"      role="tab" aria-selected="false" data-tab-color="hud-red" data-page-node-id="05MFHaSj9cbfy215JMWejD">机体</button>
+      <button data-tab="characters" role="tab" aria-selected="false" data-tab-color="hud-blue" data-page-node-id="3RyR9NYHLPNFavvggCU4TZ">驾驶员</button>
+      <button data-tab="supporters" role="tab" aria-selected="false" data-tab-color="hud-amber" data-page-node-id="swBYFlMiyQ5vz3DRyjuf86">支援角色</button>
+      <button data-tab="stages"     role="tab" aria-selected="false" data-tab-color="hud-green" data-page-node-id="hj9XRmrvSzMHKpHjluyGkm">关卡敌人</button>
+      <button data-tab="search"     role="tab" aria-selected="false" data-tab-color="role2" data-page-node-id="Pndf133h6wCdFT4IqudWV4">技能/能力/效果</button>
+      <button data-tab="damage"     role="tab" aria-selected="false" data-tab-color="hud-amber" data-page-node-id="cuAeTQ1mUa3Fs1vMya5Jjf">伤害计算</button>
+      <button data-tab="pairing"    role="tab" aria-selected="false" data-tab-color="hud-green" data-page-node-id="HxxRfwlrUGy0v3Ja1VH6gH">配对</button>
+      <button data-tab="team"       role="tab" aria-selected="false" data-tab-color="hud-red" data-page-node-id="qbI1AnLsbKrwfNubKLhmNF">组队</button>
+      <button data-tab="mapping"    role="tab" aria-selected="false" data-tab-color="hud-amber" data-page-node-id="avr01tPUsYeWmsrLURH6GW">原作映射</button>
     </nav>
-    <div class="hud-light-bar" aria-hidden="true">
-      <span></span><span></span><span></span>
+    <div class="hud-light-bar" aria-hidden="true" data-page-node-id="NwTEitdi2VzRHKAfricl4M">
+      <span data-page-node-id="jD35dfRRVwENgL6Fpiow5A"></span><span data-page-node-id="DujE1DhdY3b3ca7f2k1Ttq"></span><span data-page-node-id="u3WLwkmdS70x9OlEtOAzd4"></span>
     </div>
   </header>
 
-  <main id="main">
-    <section id="tab-overview" class="tab active" role="tabpanel" aria-label="概览"></section>
+  <main id="main" data-page-node-id="HVaSKNDY5w0u4xK8uOAAPo">
+    <section id="tab-overview" class="tab active" role="tabpanel" aria-label="概览" data-page-node-id="B0LmiLAF2I1ZQNGaOCR7yP"></section>
 
-    <section id="tab-units" class="tab" role="tabpanel" aria-label="机体">
-      <div class="toolbar">
-        <input id="unit-q" placeholder="搜索机体名称…" aria-label="搜索机体名称">
-        <select id="unit-rarity" aria-label="稀有度筛选">
-          <option value="">全部稀有度</option>
-          <option value="5">UR</option>
-          <option value="4">SSR</option>
-          <option value="3">SR</option>
-          <option value="2">R</option>
-          <option value="1">N</option>
+    <section id="tab-units" class="tab" role="tabpanel" aria-label="机体" data-page-node-id="7WLztJTuumz4lUnb9dyvBU">
+      <div class="toolbar" data-page-node-id="xI7Y9bomfhFQeOKRSKNc0B">
+        <input id="unit-q" placeholder="搜索机体名称…" aria-label="搜索机体名称" data-page-node-id="7S1aFHYERCR1U3rFykLXwU">
+        <select id="unit-rarity" aria-label="稀有度筛选" data-page-node-id="MAIFgOKUdboEiKIer7eXXY">
+          <option value="" data-page-node-id="vBXKZVzazKHYuOPkLtJRTo">全部稀有度</option>
+          <option value="5" data-page-node-id="QkMAU8EPwBnpO1fdUUeYNh">UR</option>
+          <option value="4" data-page-node-id="3TinafHsJhlQqQAeFmsWhI">SSR</option>
+          <option value="3" data-page-node-id="YpK9CJ6mKZDSmkmOvYfwtX">SR</option>
+          <option value="2" data-page-node-id="eM8D2RIaiLBbCiKpi1HvYG">R</option>
+          <option value="1" data-page-node-id="42aLUZ7IQb6LaGeybIAVMz">N</option>
         </select>
-        <select id="unit-acq" aria-label="获取途径筛选">
-          <option value="">全部获取途径</option>
-          <option value="1">扭蛋</option>
-          <option value="other">其他</option>
+        <select id="unit-acq" aria-label="获取途径筛选" data-page-node-id="OIS42l0qYX79I8M5AAHu8S">
+          <option value="" data-page-node-id="KlRP70MhzbEivls5Cp2JEp">全部获取途径</option>
+          <option value="1" data-page-node-id="v8E8ngpjUprrHX40zNgOVb">扭蛋</option>
+          <option value="other" data-page-node-id="i3cCrFdHyYcEW8bRj4I0T4">其他</option>
         </select>
-        <div class="sbox" id="unit-series-box">
-          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列">
-          <div class="sbox-list hidden"></div>
-          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选">×</button>
+        <div class="sbox" id="unit-series-box" data-page-node-id="HaKRcDhTOPXVgWcIwhnjGB">
+          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列" data-page-node-id="450T9BD6D4MLfhzVxkhUDY">
+          <div class="sbox-list hidden" data-page-node-id="AbgcqWQMemLYdBOEkBgdco"></div>
+          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选" data-page-node-id="BoEYg4nYAGoGDvYrGWw5d1">×</button>
         </div>
-        <select id="unit-type" aria-label="类型筛选">
-          <option value="">全部类型</option>
-          <option value="1">攻击型</option>
-          <option value="2">耐久型</option>
-          <option value="3">支援型</option>
+        <select id="unit-type" aria-label="类型筛选" data-page-node-id="jqF5GYhSWjhmk0W8FDAevL">
+          <option value="" data-page-node-id="ZlLEeSsEGhU1cqsQpRu5DR">全部类型</option>
+          <option value="1" data-page-node-id="zKsk6Suex1TNaI93Pkpj3t">攻击型</option>
+          <option value="2" data-page-node-id="qGAEu2VAdAvK5ELroxDPNX">耐久型</option>
+          <option value="3" data-page-node-id="3txUHHcpzGUjd5GAsLlmFm">支援型</option>
         </select>
-        <div class="sbox" id="unit-tag-box">
-          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签">
-          <div class="sbox-list hidden"></div>
+        <div class="sbox" id="unit-tag-box" data-page-node-id="3MKr71MLlgcF4aFg2H2Lqz">
+          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签" data-page-node-id="eeltqAYUZEmmgg5VwMdn2G">
+          <div class="sbox-list hidden" data-page-node-id="8WTwYkP1eZwu0aYsO2fshj"></div>
         </div>
-        <select id="unit-tag-mode" aria-label="标签匹配模式">
-          <option value="all">含全部标签</option>
-          <option value="any">含任一标签</option>
+        <select id="unit-tag-mode" aria-label="标签匹配模式" data-page-node-id="BpfhVpsGpFGDB0mD8HQptR">
+          <option value="all" data-page-node-id="lbtkU0DKkG5W5xCPZGT4sQ">含全部标签</option>
+          <option value="any" data-page-node-id="0KmxzuySIb9xEHsMvU5vab">含任一标签</option>
         </select>
-        <select id="unit-match" aria-label="筛选条件匹配模式">
-          <option value="and">交集（全部满足）</option>
-          <option value="or">并集（任一满足）</option>
+        <select id="unit-match" aria-label="筛选条件匹配模式" data-page-node-id="V8KQgzmNdg6BpaNG8mArh2">
+          <option value="and" data-page-node-id="tVEQJWQRtG7nliOfhNGrBp">交集（全部满足）</option>
+          <option value="or" data-page-node-id="Q6ShZrVLicNFyYZvwZSDDD">并集（任一满足）</option>
         </select>
-        <div class="sbox" id="unit-wfx-box">
-          <input class="sbox-input" placeholder="搜索/添加武器特效…" autocomplete="off" aria-label="搜索或添加武器特效">
-          <div class="sbox-list hidden"></div>
+        <div class="sbox" id="unit-wfx-box" data-page-node-id="ifEACl07m3uSfjLbVnRKQ0">
+          <input class="sbox-input" placeholder="搜索/添加武器特效…" autocomplete="off" aria-label="搜索或添加武器特效" data-page-node-id="dYbyE9pNgkH23QQZsp878q">
+          <div class="sbox-list hidden" data-page-node-id="Xx16nrIaU8ZqIwQkFRjDP5"></div>
         </div>
-        <select id="unit-wfx-mode" aria-label="武器特效匹配模式">
-          <option value="any" selected>含任一特效</option>
-          <option value="all">含全部特效</option>
+        <select id="unit-wfx-mode" aria-label="武器特效匹配模式" data-page-node-id="cmA4jXnqlzDYLp9AmvkDb2">
+          <option value="any" selected data-page-node-id="AHXDsFY9Ap7DaLfZE933r2">含任一特效</option>
+          <option value="all" data-page-node-id="XEvSfHwLXpG6lEBPSGThiK">含全部特效</option>
         </select>
-        <button id="unit-search">查询</button>
-        <button id="unit-reset" class="reset-btn" title="重置筛选">重置</button>
+        <button id="unit-search" data-page-node-id="KiaOLSPZRCAsige4lHxGQu">查询</button>
+        <button id="unit-reset" class="reset-btn" title="重置筛选" data-page-node-id="wNaDcwoQGd8qmeSbQBKOj1">重置</button>
       </div>
-      <div id="unit-tag-chips" class="tagbar"></div>
-      <div id="unit-wfx-chips" class="tagbar"></div>
-      <div id="unit-cond-bar" class="tagbar"></div>
-      <div id="unit-count" class="result-count"></div>
-      <div class="list-head units">
-        <span><button class="sort-th" data-kind="units" data-sort="name">名称</button></span>
-        <span><button class="sort-th" data-kind="units" data-sort="rarity">稀有度</button></span>
-        <span><button class="sort-th" data-kind="units" data-sort="role">类型</button></span>
-        <span><button class="sort-th" data-kind="units" data-sort="attack">攻击</button></span>
-        <span><button class="sort-th" data-kind="units" data-sort="defense">防御</button></span>
-        <span><button class="sort-th" data-kind="units" data-sort="mobility">机动</button></span>
-        <span><button class="sort-th" data-kind="units" data-sort="hp">HP</button></span>
-        <span><button class="sort-th" data-kind="units" data-sort="en">EN</button></span>
-        <span><button class="sort-th" data-kind="units" data-sort="movement">移动</button></span>
+      <div id="unit-tag-chips" class="tagbar" data-page-node-id="aiHRMXboQHs9JJEsSvrnR7"></div>
+      <div id="unit-wfx-chips" class="tagbar" data-page-node-id="CDEMsACAckWce8KzYqg16M"></div>
+      <div id="unit-cond-bar" class="tagbar" data-page-node-id="qqEVX2s1jGwIHTrFCBvomT"></div>
+      <div id="unit-count" class="result-count" data-page-node-id="CUi3IlEyphZegcPHq5F3FL"></div>
+      <div class="list-head units" data-page-node-id="7OiDxBDurm58mrLVmmDidb">
+        <span data-page-node-id="5DiDHaOgD6B9PcIhWFZYhy"><button class="sort-th" data-kind="units" data-sort="name" data-page-node-id="u5mEkk7N9pPZ77uFKe7ewi">名称</button></span>
+        <span data-page-node-id="XsNbZeTLfR7oVjsdjTYpcT"><button class="sort-th" data-kind="units" data-sort="rarity" data-page-node-id="H4ERsoMb2CcNdxezNjFECo">稀有度</button></span>
+        <span data-page-node-id="2SS2j28rP2GAJnfisIumok"><button class="sort-th" data-kind="units" data-sort="role" data-page-node-id="mGrTYbr3UKCZUKNxlm4dl6">类型</button></span>
+        <span data-page-node-id="f6SL01TxfOvLJFbTFCJMJd"><button class="sort-th" data-kind="units" data-sort="attack" data-page-node-id="i23iPYcROR8q18ijZDeKCf">攻击</button></span>
+        <span data-page-node-id="jbUhoY8t5bvfyx1AbVjGol"><button class="sort-th" data-kind="units" data-sort="defense" data-page-node-id="sejtNr3uXAubYnBHZ478sG">防御</button></span>
+        <span data-page-node-id="jWKBBk5nYhANd6MneUXtFw"><button class="sort-th" data-kind="units" data-sort="mobility" data-page-node-id="DsIOby2tDlBHDXH4fcuMQR">机动</button></span>
+        <span data-page-node-id="9G3lFhPbHfwWJ9hTIyyrRL"><button class="sort-th" data-kind="units" data-sort="hp" data-page-node-id="whRqDJxFpETiBDgV83iLNU">HP</button></span>
+        <span data-page-node-id="PKWeNQ2DltiiuH2ZPs6kx2"><button class="sort-th" data-kind="units" data-sort="en" data-page-node-id="BgxpAqBuatN4Woy7lHgGHu">EN</button></span>
+        <span data-page-node-id="qdfBOUyladi615aIgNMpgL"><button class="sort-th" data-kind="units" data-sort="movement" data-page-node-id="9eyzthbkUNZ6xtCMmCtEaF">移动</button></span>
       </div>
-      <div id="unit-list" class="list units"></div>
-      <div id="unit-pager" class="pager"></div>
+      <div id="unit-list" class="list units" data-page-node-id="TT8SnoVZsFpoQQbz0e56UG"></div>
+      <div id="unit-pager" class="pager" data-page-node-id="iMokwCMYVnAJOnWwdGF1vC"></div>
     </section>
 
-    <section id="tab-characters" class="tab" role="tabpanel" aria-label="驾驶员">
-      <div class="toolbar">
-        <input id="char-q" placeholder="搜索驾驶员名称…" aria-label="搜索驾驶员名称">
-        <select id="char-rarity" aria-label="稀有度筛选">
-          <option value="">全部稀有度</option>
-          <option value="5">UR</option>
-          <option value="4">SSR</option>
-          <option value="3">SR</option>
-          <option value="2">R</option>
-          <option value="1">N</option>
+    <section id="tab-characters" class="tab" role="tabpanel" aria-label="驾驶员" data-page-node-id="CJqeeCElmFjKfvQnDTbItd">
+      <div class="toolbar" data-page-node-id="9N87pNLUt5b3E7SpHuntMu">
+        <input id="char-q" placeholder="搜索驾驶员名称…" aria-label="搜索驾驶员名称" data-page-node-id="WL8rd0zFwkMXXqsHI85lRR">
+        <select id="char-rarity" aria-label="稀有度筛选" data-page-node-id="NhTn3WjcJBZHi9bRC4V8Hx">
+          <option value="" data-page-node-id="X9DeDQZpTNkT21uAayOS7L">全部稀有度</option>
+          <option value="5" data-page-node-id="89Fo5j78qjRIDHgWlFGT8d">UR</option>
+          <option value="4" data-page-node-id="hefSo8aXOBDihxHaUsbVZM">SSR</option>
+          <option value="3" data-page-node-id="LsDWVCmV2FeLyWPy4JdxsM">SR</option>
+          <option value="2" data-page-node-id="ctT5CEGp437g0PdCDaeFWH">R</option>
+          <option value="1" data-page-node-id="O02uprKehkUBpdvuOCwaUP">N</option>
         </select>
-        <div class="sbox" id="char-series-box">
-          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列">
-          <div class="sbox-list hidden"></div>
-          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选">×</button>
+        <div class="sbox" id="char-series-box" data-page-node-id="L0zK3PbkHBs76yAOUq69Dz">
+          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列" data-page-node-id="ExJKJUXJowq96NZhv4sBfE">
+          <div class="sbox-list hidden" data-page-node-id="0veRCb9Rc0Pt577LnCgsOQ"></div>
+          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选" data-page-node-id="6N9WS4fl6hoshAEhLU0K6A">×</button>
         </div>
-        <select id="char-type" aria-label="类型筛选">
-          <option value="">全部类型</option>
-          <option value="1">攻击型</option>
-          <option value="2">耐久型</option>
-          <option value="3">支援型</option>
+        <select id="char-type" aria-label="类型筛选" data-page-node-id="N4mvZyr56MEDV7ae3nxUCe">
+          <option value="" data-page-node-id="mK7eHOut62H4jho087IxeP">全部类型</option>
+          <option value="1" data-page-node-id="GmiFYmRyvKbmnfgXEE4y12">攻击型</option>
+          <option value="2" data-page-node-id="PBoY3VMI6nxXvtGtxI1z13">耐久型</option>
+          <option value="3" data-page-node-id="fMXZ3HapnUmL6MCsOYqpOy">支援型</option>
         </select>
-        <div class="sbox" id="char-tag-box">
-          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签">
-          <div class="sbox-list hidden"></div>
+        <div class="sbox" id="char-tag-box" data-page-node-id="6zirVpfalCGUkkO6qmCCpQ">
+          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签" data-page-node-id="x7XkUjEV7K9TmX5whp0P6W">
+          <div class="sbox-list hidden" data-page-node-id="YBuQlv5XC3vVrOjscSDj3Q"></div>
         </div>
-        <select id="char-tag-mode" aria-label="标签匹配模式">
-          <option value="all">含全部标签</option>
-          <option value="any">含任一标签</option>
+        <select id="char-tag-mode" aria-label="标签匹配模式" data-page-node-id="3z5mN2HmXCUj9jR3HzXDrU">
+          <option value="all" data-page-node-id="NRuxqo4mODxP3Dq5FAuYap">含全部标签</option>
+          <option value="any" data-page-node-id="PZd2b0exKeWyg4gqRs9oE7">含任一标签</option>
         </select>
-        <div class="sbox" id="char-skill-box">
-          <input class="sbox-input" placeholder="搜索/添加人物技能…" autocomplete="off" aria-label="搜索或添加人物技能">
-          <div class="sbox-list hidden"></div>
+        <div class="sbox" id="char-skill-box" data-page-node-id="4lD4jxWTnZg96WkGcKew8C">
+          <input class="sbox-input" placeholder="搜索/添加人物技能…" autocomplete="off" aria-label="搜索或添加人物技能" data-page-node-id="sIAdiEicDDJMH9TC1RMtHh">
+          <div class="sbox-list hidden" data-page-node-id="cA34QXQmFE4H4dE2LqkHH3"></div>
         </div>
-        <select id="char-skill-mode" aria-label="技能匹配模式">
-          <option value="any" selected>含任一技能</option>
-          <option value="all">含全部技能</option>
+        <select id="char-skill-mode" aria-label="技能匹配模式" data-page-node-id="aFcFQWOLHhBq83qpyn7amC">
+          <option value="any" selected data-page-node-id="5x3vPLd2XJq3O8vzz3SAHo">含任一技能</option>
+          <option value="all" data-page-node-id="GalPFdRpKqiQrTEAzmkxb9">含全部技能</option>
         </select>
-        <select id="char-support" aria-label="支援次数筛选"><option value="">全部支援次数</option></select>
-        <select id="char-match" aria-label="筛选条件匹配模式">
-          <option value="and">交集（全部满足）</option>
-          <option value="or">并集（任一满足）</option>
+        <select id="char-support" aria-label="支援次数筛选" data-page-node-id="fOgXpd9pDhAFzECT6QBs0X"><option value="" data-page-node-id="QL2LkzFes1FdUDSeBuaZys">全部支援次数</option></select>
+        <select id="char-match" aria-label="筛选条件匹配模式" data-page-node-id="ax8p7TFci0mpNjAB839TNN">
+          <option value="and" data-page-node-id="TSblCgjyFFHFJ3dNpMnzKy">交集（全部满足）</option>
+          <option value="or" data-page-node-id="sdeo5jFDC7nUYBK33wdJ5B">并集（任一满足）</option>
         </select>
-        <button id="char-search">查询</button>
-        <button id="char-reset" class="reset-btn" title="重置筛选">重置</button>
+        <button id="char-search" data-page-node-id="A33xrHLoROYXJDBjydmw1g">查询</button>
+        <button id="char-reset" class="reset-btn" title="重置筛选" data-page-node-id="yFWqJGo0wHpfphXYOhm3OF">重置</button>
       </div>
-      <div id="char-tag-chips" class="tagbar"></div>
-      <div id="char-skill-chips" class="tagbar"></div>
-      <div id="char-count" class="result-count"></div>
-      <div class="list-head chars">
-        <span><button class="sort-th" data-kind="characters" data-sort="name">名称</button></span>
-        <span><button class="sort-th" data-kind="characters" data-sort="rarity">稀有度</button></span>
-        <span><button class="sort-th" data-kind="characters" data-sort="role">类型</button></span>
-        <span><button class="sort-th" data-kind="characters" data-sort="ranged">射击</button></span>
-        <span><button class="sort-th" data-kind="characters" data-sort="melee">格斗</button></span>
-        <span><button class="sort-th" data-kind="characters" data-sort="defense">防御</button></span>
-        <span><button class="sort-th" data-kind="characters" data-sort="awaken">觉醒</button></span>
-        <span><button class="sort-th" data-kind="characters" data-sort="reaction">反应</button></span>
-        <span><button class="sort-th" data-kind="characters" data-sort="support">支援次数</button></span>
+      <div id="char-tag-chips" class="tagbar" data-page-node-id="m4ZpkRlSQ40y0Qtsz6blRD"></div>
+      <div id="char-skill-chips" class="tagbar" data-page-node-id="O1ykZmkwdrUpDZF3DvxWaq"></div>
+      <div id="char-count" class="result-count" data-page-node-id="jLYFdoCRp4puaoD8XVmHHJ"></div>
+      <div class="list-head chars" data-page-node-id="Vm1kP3LlQ9TlX8Nf4USwCv">
+        <span data-page-node-id="xf9Gn5lIuhusHpnVOgEsDS"><button class="sort-th" data-kind="characters" data-sort="name" data-page-node-id="GCjcQQMli5LQONfScqwEv0">名称</button></span>
+        <span data-page-node-id="GIS1QbO8otDHnGfbASIAzv"><button class="sort-th" data-kind="characters" data-sort="rarity" data-page-node-id="EulAGc89QTBxXc3yRcwR3N">稀有度</button></span>
+        <span data-page-node-id="2iXo6TQkeODvswWczbNlO7"><button class="sort-th" data-kind="characters" data-sort="role" data-page-node-id="DO1qyZs9iMWVFB5FzehCAX">类型</button></span>
+        <span data-page-node-id="NLuuAHwn6Tzg7llzRZaohb"><button class="sort-th" data-kind="characters" data-sort="ranged" data-page-node-id="mJz9daqBiLKpFb2eH84M6j">射击</button></span>
+        <span data-page-node-id="500UCfGpjR3UwnAG9k7FZ5"><button class="sort-th" data-kind="characters" data-sort="melee" data-page-node-id="Ca8FZU02iD7jrnQDlYD5tj">格斗</button></span>
+        <span data-page-node-id="6mNJVswEZMHEUeYCRXEiim"><button class="sort-th" data-kind="characters" data-sort="defense" data-page-node-id="6Gu0JudO2BHpC5FzCL1xCI">防御</button></span>
+        <span data-page-node-id="tFVSisUATDTTpLtdlhlokg"><button class="sort-th" data-kind="characters" data-sort="awaken" data-page-node-id="6SB2asWaKDLVH3JKVfO49W">觉醒</button></span>
+        <span data-page-node-id="SlyobKzCoJMasUYHE8QnR8"><button class="sort-th" data-kind="characters" data-sort="reaction" data-page-node-id="FxnDvMJfBpJ6jX7is4JNjC">反应</button></span>
+        <span data-page-node-id="gYmzPKRPMkbE5bTjfgdZ3y"><button class="sort-th" data-kind="characters" data-sort="support" data-page-node-id="z3Eivtmc26WhtqcKnDHgl2">支援次数</button></span>
       </div>
-      <div id="char-list" class="list chars"></div>
-      <div id="char-pager" class="pager"></div>
+      <div id="char-list" class="list chars" data-page-node-id="VaRpyYTXyJCEU2Vd5JvFt9"></div>
+      <div id="char-pager" class="pager" data-page-node-id="56Mhyhe53EaUxXwOGjtJ0G"></div>
     </section>
 
-    <section id="tab-supporters" class="tab" role="tabpanel" aria-label="支援角色">
-      <div class="toolbar">
-        <input id="sup-q" placeholder="搜索支援角色名称 / 词条标签…" aria-label="搜索支援角色">
-        <div class="sbox" id="sup-tag-box">
-          <input class="sbox-input" placeholder="搜索/添加词条标签…" autocomplete="off" aria-label="搜索或添加词条标签">
-          <div class="sbox-list hidden"></div>
+    <section id="tab-supporters" class="tab" role="tabpanel" aria-label="支援角色" data-page-node-id="ITo0oeDAuV8GedGjr6gLjY">
+      <div class="toolbar" data-page-node-id="j8VJrCckym3k0XiEdNBdFk">
+        <input id="sup-q" placeholder="搜索支援角色名称 / 词条标签…" aria-label="搜索支援角色" data-page-node-id="7UjBFOFnNEnLjpWDQZ5PwP">
+        <div class="sbox" id="sup-tag-box" data-page-node-id="8xMN0YBy8ukgd0XAAvRHKF">
+          <input class="sbox-input" placeholder="搜索/添加词条标签…" autocomplete="off" aria-label="搜索或添加词条标签" data-page-node-id="Xx3VNXDRroP48f0DZ81Rvh">
+          <div class="sbox-list hidden" data-page-node-id="9KUnAOoATBQBJG9yRcv0tC"></div>
         </div>
-        <select id="sup-tag-mode" aria-label="标签匹配模式">
-          <option value="any" selected>含任一标签</option>
-          <option value="all">含全部标签</option>
+        <select id="sup-tag-mode" aria-label="标签匹配模式" data-page-node-id="jQSYzJUv3hkrGOqgCFKNq2">
+          <option value="any" selected data-page-node-id="PZT7XBG7aCRPONopcdpZaw">含任一标签</option>
+          <option value="all" data-page-node-id="W9tlhiypqMeTUkINlZBzu8">含全部标签</option>
         </select>
-        <div class="sbox" id="sup-skill-box">
-          <input class="sbox-input" placeholder="搜索/添加主动技…" autocomplete="off" aria-label="搜索或添加主动技">
-          <div class="sbox-list hidden"></div>
+        <div class="sbox" id="sup-skill-box" data-page-node-id="H3o8ObsiPeWYESul5uAVgJ">
+          <input class="sbox-input" placeholder="搜索/添加主动技…" autocomplete="off" aria-label="搜索或添加主动技" data-page-node-id="L6RPliWRo8nNxSAnV28t2R">
+          <div class="sbox-list hidden" data-page-node-id="GCnOaAuH5q602ABcZKBPhK"></div>
         </div>
-        <select id="sup-skill-mode" aria-label="主动技匹配模式">
-          <option value="any" selected>含任一主动技</option>
-          <option value="all">含全部主动技</option>
+        <select id="sup-skill-mode" aria-label="主动技匹配模式" data-page-node-id="CLwBPKwhXQNRzpqcE2LDLh">
+          <option value="any" selected data-page-node-id="9U5OjCF2FDzNNP90x3LGrW">含任一主动技</option>
+          <option value="all" data-page-node-id="HBLGCG5GtRpDJn5mmAxAFb">含全部主动技</option>
         </select>
-        <button id="sup-search">查询</button>
-        <button id="sup-reset" class="reset-btn" title="重置筛选">重置</button>
+        <button id="sup-search" data-page-node-id="aB6aiLIvxouo2GNJ4yUv92">查询</button>
+        <button id="sup-reset" class="reset-btn" title="重置筛选" data-page-node-id="AMJkqmnlx7V7gpsF1EbouI">重置</button>
       </div>
-      <div id="sup-tag-chips" class="tagbar"></div>
-      <div id="sup-skill-chips" class="tagbar"></div>
-      <div id="sup-count" class="result-count"></div>
-      <div class="list-head sups">
-        <span><button class="sort-th" data-kind="supporters" data-sort="name">名称</button></span>
-        <span><button class="sort-th" data-kind="supporters" data-sort="rarity">稀有度</button></span>
-        <span><button class="sort-th" data-kind="supporters" data-sort="conds">词条对象</button></span>
-        <span><button class="sort-th" data-kind="supporters" data-sort="skill">主动技</button></span>
-        <span><button class="sort-th" data-kind="supporters" data-sort="hp">HP 加成</button></span>
-        <span><button class="sort-th" data-kind="supporters" data-sort="atk">攻击加成</button></span>
-        <span><button class="sort-th" data-kind="supporters" data-sort="route">获取途径</button></span>
+      <div id="sup-tag-chips" class="tagbar" data-page-node-id="Rqsm9MULX3rGulDQrJK5Aw"></div>
+      <div id="sup-skill-chips" class="tagbar" data-page-node-id="KYnVLClHtTbAPy6APyBJD1"></div>
+      <div id="sup-count" class="result-count" data-page-node-id="eIteBDOKsZbQ9OPOQw6LZO"></div>
+      <div class="list-head sups" data-page-node-id="4V14aDUkJBuk1nbX1IyNLX">
+        <span data-page-node-id="tizSOPbzFGTCRlhEX8VHHN"><button class="sort-th" data-kind="supporters" data-sort="name" data-page-node-id="1VwgyQaUV7xgEp5nC9Qkni">名称</button></span>
+        <span data-page-node-id="F6vPcn8WfcPrpnjGborlYv"><button class="sort-th" data-kind="supporters" data-sort="rarity" data-page-node-id="Ix5E7FzMyzE1gLjp4Tmerr">稀有度</button></span>
+        <span data-page-node-id="d1DoxwsdpHEk7aTtawOscE"><button class="sort-th" data-kind="supporters" data-sort="conds" data-page-node-id="EAk4mwztp5R2towjYNm8sN">词条对象</button></span>
+        <span data-page-node-id="V4lpGwoCBs4QadIaiaAhjg"><button class="sort-th" data-kind="supporters" data-sort="skill" data-page-node-id="seEpeFBsgoO0erbgkkuV8r">主动技</button></span>
+        <span data-page-node-id="41OyvH6jY5I3EdtKNetd2x"><button class="sort-th" data-kind="supporters" data-sort="hp" data-page-node-id="FY1Ib8p0d2makPaSDpFzpB">HP 加成</button></span>
+        <span data-page-node-id="fmKHlf8NeHY1tLgsBaPZBI"><button class="sort-th" data-kind="supporters" data-sort="atk" data-page-node-id="BjI3KVIc8SeCk5Wq7BS550">攻击加成</button></span>
+        <span data-page-node-id="bgf2NFhQ5KOwZ2YbgN02JR"><button class="sort-th" data-kind="supporters" data-sort="route" data-page-node-id="8sFtxyzgZSahilmFD9PLrm">获取途径</button></span>
       </div>
-      <div id="sup-list" class="list"></div>
-      <div id="sup-pager" class="pager"></div>
+      <div id="sup-list" class="list" data-page-node-id="IQomvlAODMkOdRVCGvEYzU"></div>
+      <div id="sup-pager" class="pager" data-page-node-id="pPAx1EGI0GGIwdko1bZXd8"></div>
     </section>
 
-    <section id="tab-search" class="tab" role="tabpanel" aria-label="技能/能力/效果搜索">
-      <div class="toolbar">
-        <select id="sr-type" aria-label="搜索类型">
-          <option value="skill">技能</option>
-          <option value="ability">能力</option>
-          <option value="weapon">武装效果</option>
+    <section id="tab-search" class="tab" role="tabpanel" aria-label="技能/能力/效果搜索" data-page-node-id="pHLwg08CBVdlAXxhMqqTX8">
+      <div class="toolbar" data-page-node-id="GtkDI5Qi0oj6nXG1p7q4ep">
+        <select id="sr-type" aria-label="搜索类型" data-page-node-id="aWxkoBg10sMoFGP5b0aBVx">
+          <option value="skill" data-page-node-id="PIYZCHMy3Rkq62uxoxSS1k">技能</option>
+          <option value="ability" data-page-node-id="tQVuByDAoajFGwRIY40aBu">能力</option>
+          <option value="weapon" data-page-node-id="8DVVgUCfI75G7PdDiPJCdM">武装效果</option>
         </select>
-        <select id="sr-kind" aria-label="搜索范围">
-          <option value="all">机体 + 驾驶员</option>
-          <option value="unit">仅机体</option>
-          <option value="character">仅驾驶员</option>
+        <select id="sr-kind" aria-label="搜索范围" data-page-node-id="BRzvHqQzH97Bc8WWXY4VOB">
+          <option value="all" data-page-node-id="n8MwkiRfLlcvMQ9XH5kFwP">机体 + 驾驶员</option>
+          <option value="unit" data-page-node-id="7SG6PMQCG48X34p53x9eQ3">仅机体</option>
+          <option value="character" data-page-node-id="qBq28LOcbnZWy09mNqcSc2">仅驾驶员</option>
         </select>
-        <input id="sr-q" placeholder="搜索名称 / 效果文本…" aria-label="搜索名称或效果文本">
-        <button id="sr-search">查询</button>
-        <button id="sr-reset" class="reset-btn" title="重置">重置</button>
+        <input id="sr-q" placeholder="搜索名称 / 效果文本…" aria-label="搜索名称或效果文本" data-page-node-id="a82CxemOP8ysUVUK1F9W9C">
+        <button id="sr-search" data-page-node-id="FY6jBRYhiRXRLJAlkZ4KpX">查询</button>
+        <button id="sr-reset" class="reset-btn" title="重置" data-page-node-id="Pyq8aTedXnTtQgsdTpYMFW">重置</button>
       </div>
-      <div id="sr-count" class="result-count"></div>
-      <div class="list-head sr">
-        <span><button class="sort-th" data-kind="search" data-sort="name">名称</button></span>
-        <span><button class="sort-th" data-kind="search" data-sort="owner">持有者</button></span>
-        <span><button class="sort-th" data-kind="search" data-sort="series">类型 / 系列</button></span>
-        <span><button class="sort-th" data-kind="search" data-sort="effect">效果</button></span>
+      <div id="sr-count" class="result-count" data-page-node-id="JgR8DPbDcylMxP46mb1WTM"></div>
+      <div class="list-head sr" data-page-node-id="k3yUCiloFpWp1J8asBlIHt">
+        <span data-page-node-id="SiMcrtGHJ318abyILtbUUD"><button class="sort-th" data-kind="search" data-sort="name" data-page-node-id="vxxoMajPSYscOFl77V3XHe">名称</button></span>
+        <span data-page-node-id="wEGB4ttYqtdIgXWAQIJL7M"><button class="sort-th" data-kind="search" data-sort="owner" data-page-node-id="2EemS71tGyhdtNsxd0NpSF">持有者</button></span>
+        <span data-page-node-id="7Nqg7d4hmSTZDv67FLjvUR"><button class="sort-th" data-kind="search" data-sort="series" data-page-node-id="x8eysGoqDAHJPXtdJjNi6Y">类型 / 系列</button></span>
+        <span data-page-node-id="mIX7vvCjAziGfyJTBjYgOp"><button class="sort-th" data-kind="search" data-sort="effect" data-page-node-id="nG4OlcF3COSihWmhh1IHnz">效果</button></span>
       </div>
-      <div id="sr-result" class="list sr"></div>
-      <div id="sr-pager" class="pager"></div>
+      <div id="sr-result" class="list sr" data-page-node-id="kDUzGL23EbswxMPp1QbIKP"></div>
+      <div id="sr-pager" class="pager" data-page-node-id="c6TiP8BRdIYv6lupCIfaVV"></div>
     </section>
 
-    <section id="tab-stages" class="tab" role="tabpanel" aria-label="关卡敌人">
-      <div class="toolbar">
-        <input id="stage-q" placeholder="搜索关卡名称 / ID…" aria-label="搜索关卡名称或ID">
-        <button id="stage-search">查询</button>
-        <button id="stage-reset" class="reset-btn" title="重置筛选">重置</button>
+    <section id="tab-stages" class="tab" role="tabpanel" aria-label="关卡敌人" data-page-node-id="qtYI9Jg8ooG11CzAcb4N1q">
+      <div class="toolbar" data-page-node-id="l03HZ95RMTTyKVsAZcvTio">
+        <input id="stage-q" placeholder="搜索关卡名称 / ID…" aria-label="搜索关卡名称或ID" data-page-node-id="722pSoYXx8irQL7z2vSgpV">
+        <button id="stage-search" data-page-node-id="7DjW2kYjlBRnFeWNW0f6ki">查询</button>
+        <button id="stage-reset" class="reset-btn" title="重置筛选" data-page-node-id="wxlUzYXK9gN14ZKpSkrMwM">重置</button>
       </div>
-      <div id="stage-count" class="result-count"></div>
-      <div class="list-head stages">
-        <span>ID</span><span>名称</span><span>类型</span><span>CP</span><span>AP</span><span>敌方单位</span>
+      <div id="stage-count" class="result-count" data-page-node-id="LdTA7BXytqMWlfSCVRD8wi"></div>
+      <div class="list-head stages" data-page-node-id="JUEPUqd0ULlj4sYBZ3pGb0">
+        <span data-page-node-id="1H8MQlTjsLppmdvIkjvq5I">ID</span><span data-page-node-id="v8hDNUaboTytNUmbxpJHMM">名称</span><span data-page-node-id="vaTy771bBrGEKEsnD6MY3r">类型</span><span data-page-node-id="Tr54fM6MmK6gMEhXh2XvXy">CP</span><span data-page-node-id="ulpzyYTE4gtRSAHvybyyFO">AP</span><span data-page-node-id="MtKIU66tA484Cb2brdLMQM">敌方单位</span>
       </div>
-      <div id="stage-list" class="list"></div>
-      <div id="stage-pager" class="pager"></div>
+      <div id="stage-list" class="list" data-page-node-id="lmBo5UXeBExhwxggWdlUBV"></div>
+      <div id="stage-pager" class="pager" data-page-node-id="LHdRTtcufN5V1DmEbYKQAd"></div>
     </section>
 
-    <section id="tab-damage" class="tab" role="tabpanel" aria-label="伤害计算">
-      <div class="calc-wrap">
-        <div class="calc-side">
-          <h3 class="side-title">攻击方 <button type="button" class="reset-btn small" id="reset-atk">重置</button></h3>
-          <div class="pick-btns">
-            <button type="button" class="pick-btn" id="pick-atk-unit">选择机体</button>
-            <button type="button" class="pick-btn" id="pick-atk-uskill">选择机体单位技能</button>
-            <button type="button" class="pick-btn" id="pick-weapon">选择武器</button>
-            <button type="button" class="pick-btn" id="pick-atk-pilot">选择驾驶员</button>
-            <button type="button" class="pick-btn" id="pick-atk-skill">选择驾驶员技能</button>
-            <button type="button" class="pick-btn" id="pick-atk-support">选择支援角色</button>
+    <section id="tab-damage" class="tab" role="tabpanel" aria-label="伤害计算" data-page-node-id="xljrHqsFoYfF2hQLq3YAjC">
+      <div class="calc-wrap" data-page-node-id="9T24BbGl1fytl4sEfi58Z9">
+        <div class="calc-side" data-page-node-id="0Ou4K00pAmtDftplh5QJ8c">
+          <h3 class="side-title" data-page-node-id="Yg2GmcBFCB0VLr8bOWTPN6">攻击方 <button type="button" class="reset-btn small" id="reset-atk" data-page-node-id="kj7M8F1Hy4PrUhpjrzebyf">重置</button></h3>
+          <div class="pick-btns" data-page-node-id="iqleE69tBFN0GcDo4qOllO">
+            <button type="button" class="pick-btn" id="pick-atk-unit" data-page-node-id="b0xscJtfRUXctTraeAB8ck">选择机体</button>
+            <button type="button" class="pick-btn" id="pick-atk-uskill" data-page-node-id="DiyXkn4M2gJsSCkI2COYUz">选择机体单位技能</button>
+            <button type="button" class="pick-btn" id="pick-weapon" data-page-node-id="ITVlCNgLgyAYHGEj6Uwwtc">选择武器</button>
+            <button type="button" class="pick-btn" id="pick-atk-pilot" data-page-node-id="LFz7gfDEgxJQOR9Dbj7EJT">选择驾驶员</button>
+            <button type="button" class="pick-btn" id="pick-atk-skill" data-page-node-id="591qnvYUQ27EsiIoBVhUox">选择驾驶员技能</button>
+            <button type="button" class="pick-btn" id="pick-atk-support" data-page-node-id="JbJDQU8LdiagJC6oKwHR9F">选择支援角色</button>
           </div>
-          <div class="pick-infos">
-            <div class="pick-info" id="atk-unit-info"></div>
-            <div class="pick-info" id="atk-pilot-info"></div>
+          <div class="pick-infos" data-page-node-id="7kmtzjcq2E9swFHsZQOERp">
+            <div class="pick-info" id="atk-unit-info" data-page-node-id="7AnztXOmbSaLTzhHoAb339"></div>
+            <div class="pick-info" id="atk-pilot-info" data-page-node-id="OfJqwfsZLx5YsSRKEFFWTd"></div>
           </div>
-          <select id="atk-unit-star" class="star-select hidden" aria-label="攻击方机体星级">
-            <option value="0">0★</option>
-            <option value="1">1★</option>
-            <option value="2">2★</option>
-            <option value="3">3★</option>
+          <select id="atk-unit-star" class="star-select hidden" aria-label="攻击方机体星级" data-page-node-id="2oT6dT1ADNlTcsJkb5M2bh">
+            <option value="0" data-page-node-id="2x9FIk4NYUjvecm7UNtfR5">0★</option>
+            <option value="1" data-page-node-id="lQrJSvRtCj096fNX8AsSUA">1★</option>
+            <option value="2" data-page-node-id="2MxJb8Cg46OMhQkyZxpA8c">2★</option>
+            <option value="3" data-page-node-id="YvB9VA9bLdKjB8kewwwd4E">3★</option>
           </select>
-          <div class="stat-row">
-            <label>机体攻击 <input id="d-aua" type="number" value="3000"></label>
-            <label>驾驶员攻击 <input id="d-aca" type="number" value="800"></label>
+          <div class="stat-row" data-page-node-id="hoSAXApYqC9D832yTS76c7">
+            <label data-page-node-id="yZvW1yRXK7Ywh1hFmX5v4U">机体攻击 <input id="d-aua" type="number" value="3000" data-page-node-id="cegwuFCquYQN0STxqv2UDB"></label>
+            <label data-page-node-id="QHdDzj0Uou7w0vUGzmj81l">驾驶员攻击 <input id="d-aca" type="number" value="800" data-page-node-id="4HBJbr3FFlATIc7pEFkVFV"></label>
           </div>
-          <div class="panel-row">
-            <span id="atk-support-info" class="pick-info">未选择支援角色</span>
-            <label>星级 <select id="atk-support-star">
-              <option value="0">0★</option><option value="1">1★</option>
-              <option value="2">2★</option><option value="3" selected>3★</option>
+          <div class="panel-row" data-page-node-id="MKFiGCm8UsTeIf80Ssz1cG">
+            <span id="atk-support-info" class="pick-info" data-page-node-id="uqRH8lnrSeOPC6OBc7tpl4">未选择支援角色</span>
+            <label data-page-node-id="KZNkLDYDQuDsTZAHCauVoP">星级 <select id="atk-support-star" data-page-node-id="MYCBcy68drnmheurgetVHk">
+              <option value="0" data-page-node-id="tHW9HPE9Z04ERMSmLwXw8W">0★</option><option value="1" data-page-node-id="NnNkGLAyVFFBgKDKBBgYt9">1★</option>
+              <option value="2" data-page-node-id="KL2bASmDODlF2MV4ZAOyJY">2★</option><option value="3" selected data-page-node-id="oswH5jWPPYOXcL6zXeQYAi">3★</option>
             </select></label>
-            <label>能力提升% <input id="atk-support" type="number" value="0"></label>
-            <label>攻击力提升 <input id="atk-fixed" type="number" value="0"></label>
-            <label>HP提升 <input id="atk-support-hp" type="number" value="0"></label>
+            <label data-page-node-id="1PQAe2k0QciDi8dXpWPLUu">能力提升% <input id="atk-support" type="number" value="0" data-page-node-id="CxsOp7nLOKQLEZ6c5aPZSC"></label>
+            <label data-page-node-id="scLqXKfuAXEPLUIYhfyhUo">攻击力提升 <input id="atk-fixed" type="number" value="0" data-page-node-id="bzr51AcZOBBlC5IBjDi1bT"></label>
+            <label data-page-node-id="mVU3lDdJNS6RNdIo0kB9HU">HP提升 <input id="atk-support-hp" type="number" value="0" data-page-node-id="3GkROAlQJrk3bWuQ4a4vMn"></label>
           </div>
-          <div class="panel-row">
-            <span>零件</span>
-            <label>HP <input id="atk-op-hp" type="number" value="0"><select id="atk-op-hp-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
-            <label>攻击 <input id="atk-op-atk" type="number" value="0"><select id="atk-op-atk-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
-            <label>防御 <input id="atk-op-def" type="number" value="0"><select id="atk-op-def-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
+          <div class="panel-row" data-page-node-id="zPMsnpwotIcKz46UshotiM">
+            <span data-page-node-id="tcsFJUOvH0nrHEmwgCJLCX">零件</span>
+            <label data-page-node-id="65K5EgSYWYDrcuObwKhqfq">HP <input id="atk-op-hp" type="number" value="0" data-page-node-id="gMVtjAlQM3EczUmo4ScB2V"><select id="atk-op-hp-mode" data-page-node-id="ivUJMhKmEj2CbC8EnDMgmI"><option value="pct" selected data-page-node-id="FTwOyDB6QLjREUNHhGeaN2">%</option><option value="num" data-page-node-id="WRPXuN7jUQ7oOF7Qf5Fbyo">数值</option></select></label>
+            <label data-page-node-id="Rj8OldAgRg5pPHpsKCxOng">攻击 <input id="atk-op-atk" type="number" value="0" data-page-node-id="n9AcfOP4GeCdJFHXa4BmD6"><select id="atk-op-atk-mode" data-page-node-id="bTAiyDiaYbRqCO7RekdQ3C"><option value="pct" selected data-page-node-id="GHczJdiwirzFTWPWqYFbaE">%</option><option value="num" data-page-node-id="PO1W45xhR8jC9J31Po6sWF">数值</option></select></label>
+            <label data-page-node-id="e5r0J8S2hMbBpfJtbXwoIV">防御 <input id="atk-op-def" type="number" value="0" data-page-node-id="bl33AzB3AUys1O9IZK0lsE"><select id="atk-op-def-mode" data-page-node-id="MUCWXGjxUWk9ow5ZHFJceZ"><option value="pct" selected data-page-node-id="AEiejH90iDY5YJXyMWwQYe">%</option><option value="num" data-page-node-id="2ZfbRGADHxS6tgGP1jufR7">数值</option></select></label>
           </div>
-          <label class="ab-head">机体的单位能力</label>
-          <div id="atk-unit-ab" class="ability-list"></div>
-          <label class="ab-head">驾驶员的角色能力</label>
-          <div id="atk-pilot-ab" class="ability-list"></div>
-          <div id="d-atk-uskills" class="tagbar"></div>
-          <div id="d-atk-skills" class="tagbar"></div>
-          <label class="ab-head">武器</label>
-          <div class="weapon-info">
-            <span>已选 <b id="d-weapon-name">—</b></span>
-            <span>威力 <input id="d-wp" type="number" value="5000" aria-label="武器威力"></span>
-            <span>威力特效 <span id="d-wfx-power">—</span></span>
-            <span>类型 <span id="d-wtype">—</span></span>
-            <span>依赖 <span id="d-wstat">—</span></span>
-            <span>暴击率 <span id="d-wcrit">—</span></span>
-            <span>暴击伤害 <span id="d-wcritdmg">—</span></span>
+          <label class="ab-head" data-page-node-id="C7pJFxiUR2Qk2PSiHI4tia">机体的单位能力</label>
+          <div id="atk-unit-ab" class="ability-list" data-page-node-id="aTpqM8jqHuAdHGfsEchOi9"></div>
+          <label class="ab-head" data-page-node-id="Zxos1qFpMApP3VONAQkl9E">驾驶员的角色能力</label>
+          <div id="atk-pilot-ab" class="ability-list" data-page-node-id="qMoVV4fpEkpO0KLNPf2j2U"></div>
+          <div id="d-atk-uskills" class="tagbar" data-page-node-id="paOtPQKNOn4AEPSftTvcxP"></div>
+          <div id="d-atk-skills" class="tagbar" data-page-node-id="ftLHIbs0Hr3TqpiCyxpo7m"></div>
+          <label class="ab-head" data-page-node-id="yXlR7ZNGZOjuGdTyI1ZwqZ">武器</label>
+          <div class="weapon-info" data-page-node-id="0FatlleZwN9ND5mH3HDqAS">
+            <span data-page-node-id="apQ7XF0xA2hYjzdm7HY2DE">已选 <b id="d-weapon-name" data-page-node-id="jeoj63ubWqjzk7RucD7ZtV">—</b></span>
+            <span data-page-node-id="5Zo01Hs3ikYbOBwG26mo1S">威力 <input id="d-wp" type="number" value="5000" aria-label="武器威力" data-page-node-id="aeODHnTqYMfGVcUSxX3Rvr"></span>
+            <span data-page-node-id="jHsb2CItcJ1OzhsLDzgKhB">威力特效 <span id="d-wfx-power" data-page-node-id="YcfbpzZCmNMtWrptHezy8k">—</span></span>
+            <span data-page-node-id="BYID1VDTjyqEayjEHIbf9t">类型 <span id="d-wtype" data-page-node-id="rJQlMdjAtgkW4gE4TGS3NX">—</span></span>
+            <span data-page-node-id="jx7NQpP0tmeqkyZJfGZ2pe">依赖 <span id="d-wstat" data-page-node-id="VlbMgSgMcFt1zhwNhYhvVF">—</span></span>
+            <span data-page-node-id="YKtOE16VklxTHp5FzNJ4sK">暴击率 <span id="d-wcrit" data-page-node-id="ttmNJPLKuJs2jAxqjr3AQB">—</span></span>
+            <span data-page-node-id="EXveZLEkehDPPC6aZB3BPc">暴击伤害 <span id="d-wcritdmg" data-page-node-id="JTG9FuueH4yPVfjPnIRXdY">—</span></span>
           </div>
-          <label>战意
-            <select id="d-vigor-atk">
-              <option value="normal" selected>一般</option>
-              <option value="high">强势 (+10%)</option>
-              <option value="max">超强势 (+20%)</option>
-              <option value="supercharged">超一击 (+30%)</option>
+          <label data-page-node-id="FuzkbyPaq5xByIUBYlYZvE">战意
+            <select id="d-vigor-atk" data-page-node-id="X5Bcyy4coApa0Wt9AjWvkD">
+              <option value="normal" selected data-page-node-id="v96bAbXBFdMjh2IjBZOLTk">一般</option>
+              <option value="high" data-page-node-id="KKZ5GGGbKC77u6ee9xsFrG">强势 (+10%)</option>
+              <option value="max" data-page-node-id="sR1fPsZEZu0l8tTlFPWAoJ">超强势 (+20%)</option>
+              <option value="supercharged" data-page-node-id="zo6gDmZrNIgxxxjjRdWD3x">超一击 (+30%)</option>
             </select>
           </label>
         </div>
-        <div class="calc-side">
-          <h3 class="side-title">防御方 <button type="button" class="reset-btn small" id="reset-def">重置</button></h3>
-          <div class="pick-btns">
-            <button type="button" class="pick-btn" id="pick-def-unit">选择机体</button>
-            <button type="button" class="pick-btn" id="pick-def-uskill">选择机体单位技能</button>
-            <button type="button" class="pick-btn" id="pick-def-pilot">选择驾驶员</button>
-            <button type="button" class="pick-btn" id="pick-def-skill">选择驾驶员技能</button>
-            <button type="button" class="pick-btn" id="pick-def-support">选择支援角色</button>
+        <div class="calc-side" data-page-node-id="MXjpbHNBUFQkwYlzTZWA9f">
+          <h3 class="side-title" data-page-node-id="w5LwpTxbNkYPnvWel0Fzw8">防御方 <button type="button" class="reset-btn small" id="reset-def" data-page-node-id="FcnbCmhvZp9SUDIelezQaA">重置</button></h3>
+          <div class="pick-btns" data-page-node-id="59TBhnLdE9SjaIK3yj4dIE">
+            <button type="button" class="pick-btn" id="pick-def-unit" data-page-node-id="98iMmN7wZuA6qKeZEkxWWC">选择机体</button>
+            <button type="button" class="pick-btn" id="pick-def-uskill" data-page-node-id="5Eulcqpr8NMgGlVQ8HZyHZ">选择机体单位技能</button>
+            <button type="button" class="pick-btn" id="pick-def-pilot" data-page-node-id="ETcBHvm3DXhw7hy48Ytbdv">选择驾驶员</button>
+            <button type="button" class="pick-btn" id="pick-def-skill" data-page-node-id="fAYQeWe3CyRc9xYw8RCDI4">选择驾驶员技能</button>
+            <button type="button" class="pick-btn" id="pick-def-support" data-page-node-id="dYi9cad8psDo0HInnjBWhB">选择支援角色</button>
           </div>
-          <div class="pick-infos">
-            <div class="pick-info" id="def-unit-info"></div>
-            <div class="pick-info" id="def-pilot-info"></div>
+          <div class="pick-infos" data-page-node-id="qt1alFKRKaIdFjXeofJz0W">
+            <div class="pick-info" id="def-unit-info" data-page-node-id="E1eHUPGgLZ1IDjrtOcHD8e"></div>
+            <div class="pick-info" id="def-pilot-info" data-page-node-id="TV6UrpnqI8Eh9nAacOtEqh"></div>
           </div>
-          <select id="def-unit-star" class="star-select hidden" aria-label="防御方机体星级">
-            <option value="0">0★</option>
-            <option value="1">1★</option>
-            <option value="2">2★</option>
-            <option value="3">3★</option>
+          <select id="def-unit-star" class="star-select hidden" aria-label="防御方机体星级" data-page-node-id="A8Kuso99jrIQXNVaK8Ef4n">
+            <option value="0" data-page-node-id="b0uCV1ZQ8m7ml8fcIa3ySC">0★</option>
+            <option value="1" data-page-node-id="i2tzlwLktcVCUKQ7CcNmQx">1★</option>
+            <option value="2" data-page-node-id="81PgzNuhbhIHcwTrk55f4N">2★</option>
+            <option value="3" data-page-node-id="XFvg30SdjpcJ9u6FN7etav">3★</option>
           </select>
-          <div class="stat-row">
-            <label>机体防御 <input id="d-dud" type="number" value="2800"></label>
-            <label>机体HP <input id="d-dhp" type="number" value="0"></label>
-            <label>驾驶员防御 <input id="d-dcd" type="number" value="750"></label>
+          <div class="stat-row" data-page-node-id="iUEdfcoA9nukWDNkH9Qhc0">
+            <label data-page-node-id="nABdCaV527DTPNCEjqlFZW">机体防御 <input id="d-dud" type="number" value="2800" data-page-node-id="d7i2mTv1JLSkbzx5vo1Feb"></label>
+            <label data-page-node-id="1H8LTPdMcU1l7OypzT7aCS">机体HP <input id="d-dhp" type="number" value="0" data-page-node-id="YpJgYBgFT6Jv9G7UxwWM05"></label>
+            <label data-page-node-id="of0dkj6RwRGlK1asDAHjcH">驾驶员防御 <input id="d-dcd" type="number" value="750" data-page-node-id="LsAi6FgVJKYn0nHDA5rjYN"></label>
           </div>
-          <div class="panel-row">
-            <span id="def-support-info" class="pick-info">未选择支援角色</span>
-            <label>星级 <select id="def-support-star">
-              <option value="0">0★</option><option value="1">1★</option>
-              <option value="2">2★</option><option value="3" selected>3★</option>
+          <div class="panel-row" data-page-node-id="bn5AxLloSQs5L16Zt0988D">
+            <span id="def-support-info" class="pick-info" data-page-node-id="pUUg0YhPk5SSU0P5VmPDb6">未选择支援角色</span>
+            <label data-page-node-id="LVVMxMBPkeNXusCjGqF5Iv">星级 <select id="def-support-star" data-page-node-id="InlH9BhMAr8DyfSoXgy1rF">
+              <option value="0" data-page-node-id="x6O8AHOYKKchCSwFmkVny7">0★</option><option value="1" data-page-node-id="vbvxazfFWhwC3eWnNa8MB4">1★</option>
+              <option value="2" data-page-node-id="W1CTm769zkDnwNhUNKkY9E">2★</option><option value="3" selected data-page-node-id="9WNqECv2U53PtzCsUWSg5l">3★</option>
             </select></label>
-            <label>能力提升% <input id="def-support" type="number" value="0"></label>
-            <label>攻击力提升 <input id="def-support-atk" type="number" value="0"></label>
-            <label>HP提升 <input id="def-support-hp" type="number" value="0"></label>
+            <label data-page-node-id="KGlEulC62aOGR7HED7lz9B">能力提升% <input id="def-support" type="number" value="0" data-page-node-id="AsxvemyEvyKJ1xPXQoHaOH"></label>
+            <label data-page-node-id="Mrs68zbIEkPwJjpLadYVaB">攻击力提升 <input id="def-support-atk" type="number" value="0" data-page-node-id="FCz4fedKcKdVW42ZD0WB0Q"></label>
+            <label data-page-node-id="aKo6bpdCsy5PNjCvIDFhOE">HP提升 <input id="def-support-hp" type="number" value="0" data-page-node-id="hb5mKHty2BaiWBFnQWtELZ"></label>
           </div>
-          <div class="panel-row">
-            <span>零件</span>
-            <label>HP <input id="def-op-hp" type="number" value="0"><select id="def-op-hp-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
-            <label>攻击 <input id="def-op-atk" type="number" value="0"><select id="def-op-atk-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
-            <label>防御 <input id="def-op-def" type="number" value="0"><select id="def-op-def-mode"><option value="pct" selected>%</option><option value="num">数值</option></select></label>
+          <div class="panel-row" data-page-node-id="BlDrohNXz631xFGtlB6hZL">
+            <span data-page-node-id="b4EmAFsmGjbySFNOebL7oe">零件</span>
+            <label data-page-node-id="rCKnRTsC0lMG4PKj3lZwLs">HP <input id="def-op-hp" type="number" value="0" data-page-node-id="STAXyIeaircQ4GH4iyUTHB"><select id="def-op-hp-mode" data-page-node-id="46J01skZ9NOQCIuDBKLnr4"><option value="pct" selected data-page-node-id="ldOZoqtdnpToY1VsABDuyU">%</option><option value="num" data-page-node-id="ggwYCh7BlEXczgbbulGGmQ">数值</option></select></label>
+            <label data-page-node-id="8fbVeuvQENJmsIrBAZkWbS">攻击 <input id="def-op-atk" type="number" value="0" data-page-node-id="cZTO48Bjfo81lkxrCzIJdB"><select id="def-op-atk-mode" data-page-node-id="UmGZJh9VtJpMEibqvpbnpD"><option value="pct" selected data-page-node-id="3FB4TI6DCusggRoKJ401iK">%</option><option value="num" data-page-node-id="GsLYzcwpI9jDFm2wCTP5jW">数值</option></select></label>
+            <label data-page-node-id="Figive5p8x54LZR0Ir1wdk">防御 <input id="def-op-def" type="number" value="0" data-page-node-id="6TnNfbCZ3cm9VSXMhh1shh"><select id="def-op-def-mode" data-page-node-id="SQmcCoBBTUTSPZ5cH6I1V9"><option value="pct" selected data-page-node-id="ACEgROZPvlYxW43bhnbj04">%</option><option value="num" data-page-node-id="ZYa4jUS767w18p6pYDP5lM">数值</option></select></label>
           </div>
-          <label class="ab-head">机体的单位能力</label>
-          <div id="def-unit-ab" class="ability-list"></div>
-          <label class="ab-head">驾驶员的角色能力</label>
-          <div id="def-pilot-ab" class="ability-list"></div>
-          <div id="d-def-uskills" class="tagbar"></div>
-          <div id="d-def-skills" class="tagbar"></div>
-          <label>战意
-            <select id="d-vigor-def">
-              <option value="normal" selected>一般</option>
-              <option value="high">强势 (+10%)</option>
-              <option value="max">超强势 (+20%)</option>
-              <option value="supercharged">超一击 (+30%)</option>
+          <label class="ab-head" data-page-node-id="ziVfyf2trivNsmKKFCjh4K">机体的单位能力</label>
+          <div id="def-unit-ab" class="ability-list" data-page-node-id="s26TIF1HCZH3y6PwTjVaFb"></div>
+          <label class="ab-head" data-page-node-id="WNVcEQQL6WVqTKSJsPbSpV">驾驶员的角色能力</label>
+          <div id="def-pilot-ab" class="ability-list" data-page-node-id="YJxDtTPaKBh3NcfoMu6v3q"></div>
+          <div id="d-def-uskills" class="tagbar" data-page-node-id="ko1P72Dl9d8NDad2t4tIWw"></div>
+          <div id="d-def-skills" class="tagbar" data-page-node-id="5qOfKMuElI8cJBM6Y81Z37"></div>
+          <label data-page-node-id="7l0zZNjEAEZxyGDbWeNO6E">战意
+            <select id="d-vigor-def" data-page-node-id="Y3nna3ToxBIofDFpcHBXwJ">
+              <option value="normal" selected data-page-node-id="BJOXgq9lFdMsN9nX5C5ILL">一般</option>
+              <option value="high" data-page-node-id="xP8bl4cWmeyGMo6KmeWy75">强势 (+10%)</option>
+              <option value="max" data-page-node-id="S0KZ7Y24stCpoyRuG48FhX">超强势 (+20%)</option>
+              <option value="supercharged" data-page-node-id="hL9CFbqvfwCnZsJiCG8BxQ">超一击 (+30%)</option>
             </select>
           </label>
-          <h3>修正</h3>
-          <div class="mods-grid">
-            <label>地形倍率 <input id="d-terrain" type="number" step="0.1" value="1.0"></label>
-            <label>增伤 % <input id="d-buff" type="number" value="0"></label>
-            <label>敌方减伤 % <input id="d-debuff" type="number" value="0"></label>
-            <label>暴击 <input id="d-crit" type="checkbox"></label>
-            <label>防御状态
-              <select id="d-defend-state">
-                <option value="none" selected>无防御 (×1.0)</option>
-                <option value="defend">防御·无盾 (×0.8)</option>
-                <option value="defend_shield">防御·有盾 (×0.6)</option>
+          <h3 data-page-node-id="ybQXqDodCJuTjDDbky64vP">修正</h3>
+          <div class="mods-grid" data-page-node-id="uKk8J5bT9YdGJsdSa7Wuhx">
+            <label data-page-node-id="Y7JN3THw9TZTvpVkDcnx4H">地形倍率 <input id="d-terrain" type="number" step="0.1" value="1.0" data-page-node-id="alNRLsEOz6NMiRPGlOS1iR"></label>
+            <label data-page-node-id="uHChXpF7hlnhNnQyiGMBlG">增伤 % <input id="d-buff" type="number" value="0" data-page-node-id="V9T6dkdo1vkYE3eiFdit1g"></label>
+            <label data-page-node-id="09RXqtRKsvBMvfmhFjwMod">敌方减伤 % <input id="d-debuff" type="number" value="0" data-page-node-id="I4g1k4KXKOWCjTVxLjvskt"></label>
+            <label data-page-node-id="m7CmNQ8mrNyY6u0renU57v">暴击 <input id="d-crit" type="checkbox" data-page-node-id="VDvFVOHeAYzrcJGf55cBNm"></label>
+            <label data-page-node-id="uAp2kcHUEPrMxjXlqDCupm">防御状态
+              <select id="d-defend-state" data-page-node-id="dvjAJuo2WwOt5Q2rf94xFk">
+                <option value="none" selected data-page-node-id="djrcVIfSGrI3ZhfXPx5OPR">无防御 (×1.0)</option>
+                <option value="defend" data-page-node-id="vFegvSlSiW8UadKGlFPzp5">防御·无盾 (×0.8)</option>
+                <option value="defend_shield" data-page-node-id="4sYnHogVCSmSwBvKmCOhWq">防御·有盾 (×0.6)</option>
               </select>
             </label>
           </div>
         </div>
-        <div id="d-result" class="calc-result">
-          <div class="calc-result-head">
-            <button id="d-calc" class="primary">计算伤害</button>
+        <div id="d-result" class="calc-result" data-page-node-id="QP5ng7CcugD3WG5SzyBlYz">
+          <div class="calc-result-head" data-page-node-id="EjdoRnNcb3I49l7aS4bykE">
+            <button id="d-calc" class="primary" data-page-node-id="z3E9i7GuCD7EHi2BWidPzq">计算伤害</button>
           </div>
-          <div id="d-result-body"></div>
+          <div id="d-result-body" data-page-node-id="YWn579x9r3Fa982nSozgiE"></div>
         </div>
       </div>
     </section>
 
-    <section id="tab-pairing" class="tab" role="tabpanel" aria-label="配对">
-      <div class="pair-panel">
-        <div class="pair-head">
-          <span class="pair-title">机体 → 驾驶员 配对</span>
-          <span id="pair-msg" class="muted"></span>
+    <section id="tab-pairing" class="tab" role="tabpanel" aria-label="配对" data-page-node-id="r51hbhpbmwrGGQ21w7C7Sx">
+      <div class="pair-panel" data-page-node-id="NyJJLEccR1aEDyuGuR1dVP">
+        <div class="pair-head" data-page-node-id="P62yPzj9RRNpI3qjufkJuD">
+          <span class="pair-title" data-page-node-id="xyPSqBJLBV6CuRG6Sxdsn6">机体 → 驾驶员 配对</span>
+          <span id="pair-msg" class="muted" data-page-node-id="BWDKDCvhmJCWsmon01Eim5"></span>
         </div>
-        <div class="pair-row">
-          <span class="pair-label">机体</span>
-          <button id="pair-select-unit" class="cond-btn">选择机体</button>
-          <div id="pair-selected" class="pair-selected"><span class="muted">未选择机体</span></div>
-          <button id="pair-reset-all" class="cond-btn" title="全部重置：清空机体、筛选条件、武器与配对列表">全部重置</button>
+        <div class="pair-row" data-page-node-id="eyoCfrqCED37KnWhPx5Rqk">
+          <span class="pair-label" data-page-node-id="OyvlBOems6k8TEb2mbg35u">机体</span>
+          <button id="pair-select-unit" class="cond-btn" data-page-node-id="H9jQVUG7aRb97liNSvalEq">选择机体</button>
+          <div id="pair-selected" class="pair-selected" data-page-node-id="N3CRsTMDsFoBWFoAJwy0lm"><span class="muted" data-page-node-id="Ej5dqe3hKc4nFP5nPUSfe1">未选择机体</span></div>
+          <button id="pair-reset-all" class="cond-btn" title="全部重置：清空机体、筛选条件、武器与配对列表" data-page-node-id="LW0sewVuX9p8rIYSksoP4Z">全部重置</button>
         </div>
-        <div class="pair-row">
-          <span class="pair-label">行动</span>
-          <div class="seg">
-            <button id="pair-act-atk" class="seg-btn active">攻击</button>
-            <button id="pair-act-def" class="seg-btn">防御</button>
+        <div class="pair-row" data-page-node-id="wc84mpkx36bVmi68WOfAtd">
+          <span class="pair-label" data-page-node-id="2IuAz2kiwf2GBNvV38F4Ly">行动</span>
+          <div class="seg" data-page-node-id="IOAPiLRYZ1xBP0XBqlv4jx">
+            <button id="pair-act-atk" class="seg-btn active" data-page-node-id="TwdvpXTAVkxnY6fPkwU5G5">攻击</button>
+            <button id="pair-act-def" class="seg-btn" data-page-node-id="JOD74g2IJHb2XQcu0BpkJH">防御</button>
           </div>
-          <span id="pair-bench-wrap">
-            <span class="pair-label pair-label-gap">防御基准</span>
-            <span class="seg">
-              <button id="pair-bench-low" class="seg-btn active">低防本</button>
-              <button id="pair-bench-mid" class="seg-btn">中防本</button>
+          <span id="pair-bench-wrap" data-page-node-id="YSOgQmIPiETBU8Ewxzxl6U">
+            <span class="pair-label pair-label-gap" data-page-node-id="A2GYQX4AAsy0HRuOnkrLad">防御基准</span>
+            <span class="seg" data-page-node-id="zQV5xPjW4RgoX4Xy4iDyj2">
+              <button id="pair-bench-low" class="seg-btn active" data-page-node-id="rOn0kS9pucN8HOd8eeGe09">低防本</button>
+              <button id="pair-bench-mid" class="seg-btn" data-page-node-id="HYi9om7ZnCDpFOp0PgW0B8">中防本</button>
             </span>
           </span>
-          <span id="pair-vigor-wrap">
-            <span class="pair-label pair-label-gap">战意</span>
-            <select id="pair-vigor">
-              <option value="normal" selected>一般</option>
-              <option value="high">强势 (+10%)</option>
-              <option value="max">超强势 (+20%)</option>
-              <option value="supercharged">超一击 (+30%)</option>
+          <span id="pair-vigor-wrap" data-page-node-id="tzkEM4EWrNLYMsURUE3AkW">
+            <span class="pair-label pair-label-gap" data-page-node-id="YvTAJrBsWCTUTM5FL57Jj9">战意</span>
+            <select id="pair-vigor" data-page-node-id="DqQ53G3NLAudr4FQUdt5Cu">
+              <option value="normal" selected data-page-node-id="YtfvgRebYiWIbBIbQjKyaW">一般</option>
+              <option value="high" data-page-node-id="WQdo5BGaEQONlA42nXWx2p">强势 (+10%)</option>
+              <option value="max" data-page-node-id="3H45aUrWAEiZ9xpKSnawXC">超强势 (+20%)</option>
+              <option value="supercharged" data-page-node-id="aatXHjBXbmeuhaX4csJ5ab">超一击 (+30%)</option>
             </select>
           </span>
-          <button id="pair-match" class="cond-btn pair-match-btn" disabled>匹配驾驶员</button>
+          <button id="pair-match" class="cond-btn pair-match-btn" disabled data-page-node-id="GWZeQGcrPlKCCjlszA4qik">匹配驾驶员</button>
         </div>
-        <div class="pair-row pair-filter-row" id="pair-cond-row">
-          <span class="pair-label">条件</span>
-          <div class="pair-filter-wrap">
-            <div class="toolbar pair-filter-bar">
-              <input id="pr-q" placeholder="筛选驾驶员名称…" autocomplete="off" aria-label="筛选驾驶员名称">
-              <select id="pr-rarity" aria-label="稀有度筛选">
-                <option value="">全部稀有度</option>
-                <option value="5">UR</option><option value="4">SSR</option>
-                <option value="3">SR</option><option value="2">R</option><option value="1">N</option>
+        <div class="pair-row pair-filter-row" id="pair-cond-row" data-page-node-id="1FMLIUySPXUjijducauqte">
+          <span class="pair-label" data-page-node-id="kbXhIH5eG9IkASCZ7kLn4s">条件</span>
+          <div class="pair-filter-wrap" data-page-node-id="EUB4pFcdZNtGDdg3zI7lJb">
+            <div class="toolbar pair-filter-bar" data-page-node-id="hRBhAd4E56U6HPOYJpA1OP">
+              <input id="pr-q" placeholder="筛选驾驶员名称…" autocomplete="off" aria-label="筛选驾驶员名称" data-page-node-id="Twm2BDktncjR93yyEJADpO">
+              <select id="pr-rarity" aria-label="稀有度筛选" data-page-node-id="RAr8xZAlLdAmmTer8DzaQ3">
+                <option value="" data-page-node-id="5WEMDRHCYSbzkSW0B3k6NI">全部稀有度</option>
+                <option value="5" data-page-node-id="AcKDeHtecKouzDriVQ9oTy">UR</option><option value="4" data-page-node-id="v8Hh4dr24cDbMyWsiXdU8n">SSR</option>
+                <option value="3" data-page-node-id="DbovZHlhnO7C7ThjNLrj8f">SR</option><option value="2" data-page-node-id="yC0OvkADEu1U7RYna42wpX">R</option><option value="1" data-page-node-id="SaOBnOb2kPm4FqvYywnbcT">N</option>
               </select>
-              <select id="pr-acq" aria-label="获取途径筛选">
-                <option value="">全部获取途径</option>
-                <option value="1">扭蛋</option>
-                <option value="other">其他</option>
+              <select id="pr-acq" aria-label="获取途径筛选" data-page-node-id="Nwt4GX6CBQzajq3xQUBCES">
+                <option value="" data-page-node-id="OPYdOZxGi3ABK8YZYBX4HB">全部获取途径</option>
+                <option value="1" data-page-node-id="ZdkvgiQU1d6O9oncPpQmfn">扭蛋</option>
+                <option value="other" data-page-node-id="JoRGaHw2fr3HGcdesfQOeM">其他</option>
               </select>
-              <div class="sbox" id="pr-series-box">
-                <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列">
-                <div class="sbox-list hidden"></div>
-                <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选">×</button>
+              <div class="sbox" id="pr-series-box" data-page-node-id="YdqwYZ2cdZstM6T5aHPyUu">
+                <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列" data-page-node-id="umjloJh5pu2UvoCkePjegL">
+                <div class="sbox-list hidden" data-page-node-id="ldxVBmAuDX9Jfp6tg5EpgH"></div>
+                <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选" data-page-node-id="H1ydkWjonLjfxyQ8Yf1Phu">×</button>
               </div>
-              <select id="pr-type" aria-label="类型筛选">
-                <option value="">全部类型</option>
-                <option value="1">攻击型</option><option value="2">耐久型</option><option value="3">支援型</option>
+              <select id="pr-type" aria-label="类型筛选" data-page-node-id="NbezHOVCGnWc2NR2PoKx6M">
+                <option value="" data-page-node-id="CP5K2ywRagQO9MeXgQTn8k">全部类型</option>
+                <option value="1" data-page-node-id="NczAw1y6xPar7SHDiMUm3I">攻击型</option><option value="2" data-page-node-id="dObjctT4z9RwxrXFA2PBAn">耐久型</option><option value="3" data-page-node-id="ITApukz29W9Ji8IQEaJP4p">支援型</option>
               </select>
-              <div class="sbox" id="pr-tag-box">
-                <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签">
-                <div class="sbox-list hidden"></div>
+              <div class="sbox" id="pr-tag-box" data-page-node-id="piQxcozufGGPMtHgsrU4v8">
+                <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签" data-page-node-id="JUCSo8OpcUYUf4Du6LDhyV">
+                <div class="sbox-list hidden" data-page-node-id="f2IHLsoNrCS2SzPTujI2vO"></div>
               </div>
-              <select id="pr-tag-mode" aria-label="标签匹配模式">
-                <option value="all" selected>含全部标签</option><option value="any">含任一标签</option>
+              <select id="pr-tag-mode" aria-label="标签匹配模式" data-page-node-id="vfK4ikkt1CUO40jsj9kPcM">
+                <option value="all" selected data-page-node-id="1gf1Pl8wYrJm7cGFxceHob">含全部标签</option><option value="any" data-page-node-id="43yB5A89IUeE9wgSHze7h9">含任一标签</option>
               </select>
-              <div class="sbox" id="pr-skill-box">
-                <input class="sbox-input" placeholder="搜索/添加人物技能…" autocomplete="off" aria-label="搜索或添加人物技能">
-                <div class="sbox-list hidden"></div>
+              <div class="sbox" id="pr-skill-box" data-page-node-id="LkSXCUHOWwhUJ7Zh0mAEtq">
+                <input class="sbox-input" placeholder="搜索/添加人物技能…" autocomplete="off" aria-label="搜索或添加人物技能" data-page-node-id="vu3YGVfJp4KxFd2H2oh5vZ">
+                <div class="sbox-list hidden" data-page-node-id="Hb3GXXviaCPqz6fXVSuroB"></div>
               </div>
-              <select id="pr-skill-mode" aria-label="技能匹配模式">
-                <option value="any" selected>含任一技能</option><option value="all">含全部技能</option>
+              <select id="pr-skill-mode" aria-label="技能匹配模式" data-page-node-id="hHuGavXghoOjaMoYQUCq6z">
+                <option value="any" selected data-page-node-id="foS7O82x2rJmK2RcE6FE0l">含任一技能</option><option value="all" data-page-node-id="SGpSD14FP2t2HHI6C5LBpG">含全部技能</option>
               </select>
-              <select id="pr-support" aria-label="支援次数筛选"><option value="">全部支援次数</option></select>
-              <select id="pr-match" aria-label="筛选条件匹配模式">
-                <option value="and" selected>交集（全部满足）</option><option value="or">并集（任一满足）</option>
+              <select id="pr-support" aria-label="支援次数筛选" data-page-node-id="wDaWXAzbbsMIu18IOTFvGP"><option value="" data-page-node-id="R4A04F0M9pIADARVEnxjeO">全部支援次数</option></select>
+              <select id="pr-match" aria-label="筛选条件匹配模式" data-page-node-id="5UrDQICvygCrOwDEZdxJgj">
+                <option value="and" selected data-page-node-id="7Gfb8G7MTi1jzeXfPTJ0BU">交集（全部满足）</option><option value="or" data-page-node-id="9Tsd3QMBtkBMsjJqr3BOx4">并集（任一满足）</option>
               </select>
-              <button id="pr-search">查询</button>
-              <button id="pr-reset" class="reset-btn" title="重置筛选条件">重置</button>
+              <button id="pr-search" data-page-node-id="mHgPUYT7TGMQaRHkmBEFVL">查询</button>
+              <button id="pr-reset" class="reset-btn" title="重置筛选条件" data-page-node-id="FlOEBOdq369dfpm0jPSwOL">重置</button>
             </div>
-            <div id="pr-tag-chips" class="tagbar"></div>
-            <div id="pr-skill-chips" class="tagbar"></div>
+            <div id="pr-tag-chips" class="tagbar" data-page-node-id="0Fn44FbfNEovh7QNbuJeK9"></div>
+            <div id="pr-skill-chips" class="tagbar" data-page-node-id="27Kt9mqulMfYwSdTsdBoFE"></div>
           </div>
         </div>
-        <div id="pair-ext-row" class="pair-row">
-          <span class="pair-label">外部加成</span>
-          <label class="pair-field" id="pair-ext-sup-lbl">支援/船舰%
-            <input id="pair-ext-sup" type="number" value="0" min="0">
+        <div id="pair-ext-row" class="pair-row" data-page-node-id="BesW3JHMYGpBsGotQOHBnn">
+          <span class="pair-label" data-page-node-id="aItzzkfuT9aAXPXdyMboLP">外部加成</span>
+          <label class="pair-field" id="pair-ext-sup-lbl" data-page-node-id="MsqnOInGwji3DBxP44bQSz">支援/船舰%
+            <input id="pair-ext-sup" type="number" value="0" min="0" data-page-node-id="LAAwQxVQVqzdIbjOtYmK4u">
           </label>
-          <label class="pair-field" id="pair-ext-op-lbl">零件攻击%
-            <input id="pair-ext-op" type="number" value="0" min="0">
+          <label class="pair-field" id="pair-ext-op-lbl" data-page-node-id="tcH3vt0916gPoLrkoPNMSg">零件攻击%
+            <input id="pair-ext-op" type="number" value="0" min="0" data-page-node-id="7MWAQJx6qD9sfGhnaqxPyh">
           </label>
-          <label class="pair-field">固定值
-            <input id="pair-ext-fixed" type="number" value="0" min="0">
+          <label class="pair-field" data-page-node-id="kzeN18PWhiSOEkyBcDKwcq">固定值
+            <input id="pair-ext-fixed" type="number" value="0" min="0" data-page-node-id="7p2kBG1a1hJ6lCPNhreDRh">
           </label>
-          <label class="pair-field hidden" id="pair-ext-hp-lbl">零件HP%
-            <input id="pair-ext-hp" type="number" value="0" min="0">
+          <label class="pair-field hidden" id="pair-ext-hp-lbl" data-page-node-id="Gin3bYHvf3ofWyG4sdWLd3">零件HP%
+            <input id="pair-ext-hp" type="number" value="0" min="0" data-page-node-id="qkSrZPCrfU9RWC6hXeW8Jy">
           </label>
-          <label class="pair-field hidden" id="pair-ext-hpf-lbl">HP固定
-            <input id="pair-ext-hpf" type="number" value="0" min="0">
+          <label class="pair-field hidden" id="pair-ext-hpf-lbl" data-page-node-id="Bv18ydYja1vFmL4ZlJKzc3">HP固定
+            <input id="pair-ext-hpf" type="number" value="0" min="0" data-page-node-id="MiE2TniRbBZrOQYz4jtrd1">
           </label>
         </div>
-        <div id="pair-weapon-row" class="pair-row hidden">
-          <span class="pair-label">武器</span>
-          <button id="pair-select-weapon" class="cond-btn">选择武器</button>
-          <button id="pair-select-uskill" class="cond-btn" title="选择机体单位技能（主动技，可选发动）">选择单位技能</button>
-          <span id="pair-uskill-chips" class="chips"></span>
-          <div id="pair-weapon-info" class="pair-weapon-info"><span class="muted">未选择武器</span></div>
+        <div id="pair-weapon-row" class="pair-row hidden" data-page-node-id="Q1kRw6Szev4m0dsqxPJeNw">
+          <span class="pair-label" data-page-node-id="zMGVIPdAUmL915xFVQigcA">武器</span>
+          <button id="pair-select-weapon" class="cond-btn" data-page-node-id="mWsn81isbFohWpYtBQMucm">选择武器</button>
+          <button id="pair-select-uskill" class="cond-btn" title="选择机体单位技能（主动技，可选发动）" data-page-node-id="AgecgPgKYX030JhbVC3s9S">选择单位技能</button>
+          <span id="pair-uskill-chips" class="chips" data-page-node-id="aWOaqfLLLvei8hDIAPZou0"></span>
+          <div id="pair-weapon-info" class="pair-weapon-info" data-page-node-id="n6vxiCckGRHdWik3kCnymE"><span class="muted" data-page-node-id="2wj4fG4TCpygQpNw6f1Q7H">未选择武器</span></div>
         </div>
-        <div id="pair-enemy-row" class="pair-row hidden">
-          <span class="pair-label">敌方</span>
-          <label class="pair-field">机体攻击
-            <input id="pair-enemy-ua" type="number" value="15000" min="0">
+        <div id="pair-enemy-row" class="pair-row hidden" data-page-node-id="VGeYfu6urDrNEEuUQAXyv9">
+          <span class="pair-label" data-page-node-id="lC5CanDntjBohOL3VMESwX">敌方</span>
+          <label class="pair-field" data-page-node-id="nIyJYExKwybcoDIEZgkfaf">机体攻击
+            <input id="pair-enemy-ua" type="number" value="15000" min="0" data-page-node-id="1NMqMyjdPXi8BtmRPqtl0s">
           </label>
-          <label class="pair-field">驾驶员攻击
-            <input id="pair-enemy-pa" type="number" value="800" min="0">
+          <label class="pair-field" data-page-node-id="gIkJqmyZcXshO7USKAfWLK">驾驶员攻击
+            <input id="pair-enemy-pa" type="number" value="800" min="0" data-page-node-id="enes3n4r9R2ANx8W6IXg7i">
           </label>
-          <label class="pair-field">武器威力
-            <input id="pair-enemy-wp" type="number" value="5000" min="0">
-            <span class="muted">×</span>
-            <input id="pair-enemy-wpboost" type="number" value="0" min="0" title="武装POWER提升 %">
-            <span class="muted">= <b id="pair-enemy-wpeff">5000</b></span>
+          <label class="pair-field" data-page-node-id="ijuJXxehFR6W1HyDQ33Ahw">武器威力
+            <input id="pair-enemy-wp" type="number" value="5000" min="0" data-page-node-id="ElKXEVNGhtHhYfuoitjAxT">
+            <span class="muted" data-page-node-id="CAbbNx00S6a1gpOJbHs2Ox">×</span>
+            <input id="pair-enemy-wpboost" type="number" value="0" min="0" title="武装POWER提升 %" data-page-node-id="JhZU1kfrI0nJTpPpAG1cZT">
+            <span class="muted" data-page-node-id="O1Gz7uLAnkjUyVfwvjJjE3">= <b id="pair-enemy-wpeff" data-page-node-id="CGq44tAzOSnqBFdZRzCg9e">5000</b></span>
           </label>
-          <span id="pair-enemy-wp-fx" class="muted"></span>
-          <label class="pair-field">武器类型
-            <select id="pair-enemy-wt">
-              <option value="1">实弹</option>
-              <option value="2" selected>光束</option>
-              <option value="3">特殊</option>
-              <option value="6">EX（多伤害集合）</option>
+          <span id="pair-enemy-wp-fx" class="muted" data-page-node-id="bD4an1pdVOTiXXxJvGhGml"></span>
+          <label class="pair-field" data-page-node-id="mkx6jGqpM5drPBVDy75Nj9">武器类型
+            <select id="pair-enemy-wt" data-page-node-id="ZsDemJjF3uwDoiqfT8PNYv">
+              <option value="1" data-page-node-id="rTWchGlCLDcI1FV4Qb9ESy">实弹</option>
+              <option value="2" selected data-page-node-id="djoFMa4SXVAF70wavAHnu7">光束</option>
+              <option value="3" data-page-node-id="vsCbt33FpDYzMPXvd6JztD">特殊</option>
+              <option value="6" data-page-node-id="DvCEl5GfqjxQbdFx6TVpuw">EX（多伤害集合）</option>
             </select>
           </label>
-          <label class="pair-field">依赖属性
-            <select id="pair-enemy-waa">
-              <option value="any">任意</option>
-              <option value="Ranged" selected>射击</option>
-              <option value="Melee">格斗</option>
-              <option value="Awaken">觉醒</option>
+          <label class="pair-field" data-page-node-id="NkIo51dHmjTZeu8NnlxFeb">依赖属性
+            <select id="pair-enemy-waa" data-page-node-id="cmr6JayhgMU3Con8g4g65U">
+              <option value="any" data-page-node-id="qJ1IDyp0nQDMPGl3HJpWVo">任意</option>
+              <option value="Ranged" selected data-page-node-id="dQxtF3ZyYpzGWkCPXMyt5K">射击</option>
+              <option value="Melee" data-page-node-id="tTC8rFG5GLSFbcUuDzMtie">格斗</option>
+              <option value="Awaken" data-page-node-id="Q8g2cD6UUOxesT5N6OrDzX">觉醒</option>
             </select>
           </label>
-          <label class="pair-field">防御状态
-            <select id="pair-enemy-guard">
-              <option value="2" selected>按防御且带盾</option>
-              <option value="1">防御不带盾</option>
-              <option value="0">不防御</option>
+          <label class="pair-field" data-page-node-id="d1AGYMTIk0iZIEwaERRjTh">防御状态
+            <select id="pair-enemy-guard" data-page-node-id="a6WraXIGMM1QgBCE2QsTtv">
+              <option value="2" selected data-page-node-id="cCOgwOWkzw9dEyenW2uLm3">按防御且带盾</option>
+              <option value="1" data-page-node-id="uLaesnrRFBkx1jivhCsnis">防御不带盾</option>
+              <option value="0" data-page-node-id="cT6co1Ckzm5QTu5SZI4fIm">不防御</option>
             </select>
           </label>
-          <label class="pair-field">敌方战意
-            <select id="pair-enemy-vigor">
-              <option value="normal" selected>一般</option>
-              <option value="high">强势 (+10%)</option>
-              <option value="max">超强势 (+20%)</option>
-              <option value="supercharged">超一击 (+30%)</option>
+          <label class="pair-field" data-page-node-id="mX1QfGvUCMq6rWE4baSMzu">敌方战意
+            <select id="pair-enemy-vigor" data-page-node-id="PABCRdpdYS4xDXSZjmiMlK">
+              <option value="normal" selected data-page-node-id="twuCWsqOsierYVCbIbdWLX">一般</option>
+              <option value="high" data-page-node-id="pwOIiQIomWxLbT6GUVLcxf">强势 (+10%)</option>
+              <option value="max" data-page-node-id="S5GgnwUJUzSuOP1P7jLvTQ">超强势 (+20%)</option>
+              <option value="supercharged" data-page-node-id="7zWklqLZDGZnYtt4wbCDER">超一击 (+30%)</option>
             </select>
           </label>
-          <label class="pair-field">地形倍率
-            <input id="pair-enemy-terrain" type="number" step="0.1" value="1.0" min="0">
+          <label class="pair-field" data-page-node-id="BEbpLY82VwW7fiHFfkNEHL">地形倍率
+            <input id="pair-enemy-terrain" type="number" step="0.1" value="1.0" min="0" data-page-node-id="CW1nHGUzhGRmbRJDsZZQO1">
           </label>
-          <label class="pair-field">敌方暴击率%
-            <input id="pair-enemy-crit" type="number" value="0" min="0" max="100">
+          <label class="pair-field" data-page-node-id="2Ebp42uZXLHIRGVy2HkmVG">敌方暴击率%
+            <input id="pair-enemy-crit" type="number" value="0" min="0" max="100" data-page-node-id="Qs21faczQ6Ey4M3tPhbmzE">
           </label>
-          <button id="pair-enemy-default" class="cond-btn" title="使用默认敌方：能天使高达(EX) 满星满级 + 刹那·F·清英 + GN剑 EX">默认敌人</button>
-          <button id="pair-enemy-tags-btn" class="cond-btn" title="选择敌方机体标签/系列，用于判定针对敌方的能力">选择敌人标签</button>
-          <span id="pair-enemy-tags" class="chips"></span>
-          <label class="pair-field pair-field-check">
-            <input id="pair-enemy-ir" type="checkbox"> 敌方武器含「武装属性损伤减轻无效」
+          <button id="pair-enemy-default" class="cond-btn" title="使用默认敌方：能天使高达(EX) 满星满级 + 刹那·F·清英 + GN剑 EX" data-page-node-id="FTuxiS0LQR1DwuGwKX0W2g">默认敌人</button>
+          <button id="pair-enemy-tags-btn" class="cond-btn" title="选择敌方机体标签/系列，用于判定针对敌方的能力" data-page-node-id="cluWvturQMKLZjkJlEC4fE">选择敌人标签</button>
+          <span id="pair-enemy-tags" class="chips" data-page-node-id="NJBGQXsl2a6II6i4T9lqpq"></span>
+          <label class="pair-field pair-field-check" data-page-node-id="G27HFI5moazIfehgSJF4kW">
+            <input id="pair-enemy-ir" type="checkbox" data-page-node-id="S9sX0Tq3mmBEjzACm3j0GW"> 敌方武器含「武装属性损伤减轻无效」
           </label>
         </div>
       </div>
-      <div id="pair-result"></div>
+      <div id="pair-result" data-page-node-id="RXGqk9c9jzgpbldn9EoZuF"></div>
     </section>
 
-    <section id="tab-team" class="tab" role="tabpanel" aria-label="组队">
-      <div class="toolbar team-toolbar">
-        <button id="team-add" class="cond-btn" title="新增一支队伍">＋ 新增队伍</button>
-        <span class="muted">敌方基准</span>
-        <button id="team-bench-low" class="cond-btn active">低防本</button>
-        <button id="team-bench-mid" class="cond-btn">中防本</button>
-        <button id="team-bench-custom" class="cond-btn">自定义</button>
-        <span id="team-custom-wrap" class="hidden">
-          <label class="team-custom-field">机体防御 <input id="team-custom-udef" type="number" value="1060" min="0"></label>
-          <label class="team-custom-field">驾驶员防御 <input id="team-custom-cdef" type="number" value="109" min="0"></label>
+    <section id="tab-team" class="tab" role="tabpanel" aria-label="组队" data-page-node-id="8tCEe69YdTys4ZfBFLmCxk">
+      <div class="toolbar team-toolbar" data-page-node-id="Et9lDDnYEtMGwfs3EQZQiW">
+        <button id="team-add" class="cond-btn" title="新增一支队伍" data-page-node-id="3ZV7uCSXh194DWSbojnokz">＋ 新增队伍</button>
+        <span class="muted" data-page-node-id="PkDqHnwGHCVkDPBmxiyK8d">敌方基准</span>
+        <button id="team-bench-low" class="cond-btn active" data-page-node-id="bzOPRHGsRuwI6Z4sTn7G7Q">低防本</button>
+        <button id="team-bench-mid" class="cond-btn" data-page-node-id="ev7001GKqubm1nCu22fri7">中防本</button>
+        <button id="team-bench-custom" class="cond-btn" data-page-node-id="Zdgf4ZDGbC3fN3GJo5s4q2">自定义</button>
+        <span id="team-custom-wrap" class="hidden" data-page-node-id="q1oan0HzqlF3oYvE7AFt6m">
+          <label class="team-custom-field" data-page-node-id="qfKcLFFqEqe2IUZpihX9QP">机体防御 <input id="team-custom-udef" type="number" value="1060" min="0" data-page-node-id="luWEZrcititaN9WnIoTmWt"></label>
+          <label class="team-custom-field" data-page-node-id="tcBTQg5nfB4DhsSBv8tEwZ">驾驶员防御 <input id="team-custom-cdef" type="number" value="109" min="0" data-page-node-id="g8qRoKClqDNgj4f6ig0LhF"></label>
         </span>
       </div>
-      <div id="team-list"></div>
+      <div id="team-list" data-page-node-id="JGN1uitOqLI7EEJm12PgxH"></div>
     </section>
 
-    <section id="tab-mapping" class="tab" role="tabpanel" aria-label="原作映射">
-      <div class="toolbar">
-        <input id="map-q" placeholder="搜索机体/驾驶员名…" aria-label="搜索映射">
-        <select id="map-signal" aria-label="信号筛选">
-          <option value="">全部</option>
-          <option value="manual">人工修正</option>
-          <option value="active">主动驾驶</option>
-          <option value="mention">名字出现</option>
-          <option value="role">系列类型</option>
+    <section id="tab-mapping" class="tab" role="tabpanel" aria-label="原作映射" data-page-node-id="6uyLU8pyKuOnpMCqGMtji0">
+      <div class="toolbar" data-page-node-id="SP2kQ0y73LIqj8h3eo7uDE">
+        <input id="map-q" placeholder="搜索机体/驾驶员名…" aria-label="搜索映射" data-page-node-id="tcOQZtR629O442fNkEeWwa">
+        <select id="map-signal" aria-label="信号筛选" data-page-node-id="t4HyQvMtj6EkP5B0BXwrZT">
+          <option value="" data-page-node-id="Xw1F4KAc1C9tsvCoqqm62u">全部</option>
+          <option value="manual" data-page-node-id="ub7kY9GCBgG7XcX3If2CHt">人工修正</option>
+          <option value="active" data-page-node-id="EjrJHj043CUxIFE3I3cTRY">主动驾驶</option>
+          <option value="mention" data-page-node-id="0qsxtixJRrESU3YFOJthIi">名字出现</option>
+          <option value="role" data-page-node-id="rYTAnUkcpoUZKviTbzFtyg">系列类型</option>
         </select>
-        <button id="map-search">查询</button>
+        <button id="map-search" data-page-node-id="HF6SSblFo4VS4lLA7sGcGQ">查询</button>
       </div>
-      <div id="map-count" class="result-count"></div>
-      <div id="map-list"></div>
-      <div id="map-pager" class="pager"></div>
+      <div id="map-count" class="result-count" data-page-node-id="ZKypnZ60MXsPNekP3Uyrnm"></div>
+      <div id="map-list" data-page-node-id="ijnemiU7CloGCROt6cB8vf"></div>
+      <div id="map-pager" class="pager" data-page-node-id="CDOKklKJbWhCEYpJ96WsoY"></div>
     </section>
   </main>
 
-  <footer>数据来源 <a href="https://soshage.com/gget/" target="_blank" rel="noopener" aria-label="数据来源网站 soshage.com（在新标签页打开）">soshage.com/gget</a>（zh-CN）· 仅供个人研究</footer>
+  <footer data-page-node-id="vEWtv5nfCbDSaQZJJcqQWI">数据来源 <a href="https://soshage.com/gget/" target="_blank" rel="noopener" aria-label="数据来源网站 soshage.com（在新标签页打开）" data-page-node-id="CtdJlPeNMKpYLUCbJNI18H">soshage.com/gget</a>（zh-CN）· 仅供个人研究</footer>
 
-  <div id="modal" class="modal hidden">
-    <div class="modal-box">
-      <div class="modal-head"><span id="modal-title"></span><button id="modal-close" aria-label="关闭对话框">×</button></div>
-      <div id="modal-body"></div>
+  <div id="modal" class="modal hidden" data-page-node-id="Cwsk0SRTrK62Ijl6QeG9qY">
+    <div class="modal-box" data-page-node-id="34DcGkaCyjN8nby9SI5DEz">
+      <div class="modal-head" data-page-node-id="SvdhNbZCRJatthEmzaXKFd"><span id="modal-title" data-page-node-id="pxbfeE7RNoJgmeAYod44TZ"></span><button id="modal-close" aria-label="关闭对话框" data-page-node-id="ZxlaCvJcn1j4JSK2Z62feD">×</button></div>
+      <div id="modal-body" data-page-node-id="J9Enlwc3gPfXrQaIfl6pWh"></div>
     </div>
   </div>
 
-  <div id="pair-picker-modal" class="modal hidden">
-    <div class="modal-box">
-      <div class="modal-head"><span>选择机体</span><button id="pair-picker-close" aria-label="关闭对话框">×</button></div>
-      <div class="toolbar">
-        <input id="pp-q" placeholder="搜索机体名称…" aria-label="搜索机体名称">
-        <select id="pp-rarity" aria-label="稀有度筛选">
-          <option value="">全部稀有度</option>
-          <option value="5">UR</option>
-          <option value="4">SSR</option>
-          <option value="3">SR</option>
-          <option value="2">R</option>
-          <option value="1">N</option>
+  <div id="pair-picker-modal" class="modal hidden" data-page-node-id="bYs9byarcThgcBmukLutSM">
+    <div class="modal-box" data-page-node-id="FMs79sA9JySR8LGTwjjOXV">
+      <div class="modal-head" data-page-node-id="S0WOzDbphMJfiWCTiTIGid"><span data-page-node-id="HDQui0DRSEMS51VOrbGdFO">选择机体</span><button id="pair-picker-close" aria-label="关闭对话框" data-page-node-id="ACgSFPh3qVkU6PcXBtcRuB">×</button></div>
+      <div class="toolbar" data-page-node-id="ogAsNkgtzo8BeMG60mVW2B">
+        <input id="pp-q" placeholder="搜索机体名称…" aria-label="搜索机体名称" data-page-node-id="zBeDJZeFWGHwGtvwWWoS64">
+        <select id="pp-rarity" aria-label="稀有度筛选" data-page-node-id="fWLFlvNOzbCdZkUoBfc3OQ">
+          <option value="" data-page-node-id="t9WEb0uBFFQL5VABAHMNXI">全部稀有度</option>
+          <option value="5" data-page-node-id="rhUVgpDdyxlK9RlHtn9xAw">UR</option>
+          <option value="4" data-page-node-id="5jzn9VnIoeaLo7cFEJ4WXK">SSR</option>
+          <option value="3" data-page-node-id="MNUlKxlLmpoLjtWSBSqxSl">SR</option>
+          <option value="2" data-page-node-id="ds3rr4FMT18TmDp6LjjeHq">R</option>
+          <option value="1" data-page-node-id="cMVvPLuBHavA6EizYqr76d">N</option>
         </select>
-        <select id="pp-acq" aria-label="获取途径筛选">
-          <option value="">全部获取途径</option>
-          <option value="1">扭蛋</option>
-          <option value="other">其他</option>
+        <select id="pp-acq" aria-label="获取途径筛选" data-page-node-id="zGAMrMVo1dmoLBUE1CFOrz">
+          <option value="" data-page-node-id="aVj5oCyU8TmYaEb7WfAlYl">全部获取途径</option>
+          <option value="1" data-page-node-id="dKQIkHTzawbELrhtY0pRa3">扭蛋</option>
+          <option value="other" data-page-node-id="aKm4D9KPxZ6g8606CUKfbi">其他</option>
         </select>
-        <div class="sbox" id="pp-series-box">
-          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列">
-          <div class="sbox-list hidden"></div>
-          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选">×</button>
+        <div class="sbox" id="pp-series-box" data-page-node-id="r4sMvVGFAo6vpnk1R3NhND">
+          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列" data-page-node-id="dTYwLZ7pz2mQABa3BcmS4B">
+          <div class="sbox-list hidden" data-page-node-id="whzGvMTRydWu38zgfxdTSc"></div>
+          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选" data-page-node-id="n0hQfC6veVMOtPXEGOfD2v">×</button>
         </div>
-        <select id="pp-type" aria-label="类型筛选">
-          <option value="">全部类型</option>
-          <option value="1">攻击型</option>
-          <option value="2">耐久型</option>
-          <option value="3">支援型</option>
+        <select id="pp-type" aria-label="类型筛选" data-page-node-id="8MXI1zhwi7nO38ILACcTAV">
+          <option value="" data-page-node-id="OY84JYbaAbyuhtwdbBI25m">全部类型</option>
+          <option value="1" data-page-node-id="W5s6g4PqHCyWQdutCfbQaZ">攻击型</option>
+          <option value="2" data-page-node-id="DF9QAGoFvvDpntyTL9n8ng">耐久型</option>
+          <option value="3" data-page-node-id="NAbNPK3fFevnqvpuTqbgJ3">支援型</option>
         </select>
-        <div class="sbox" id="pp-tag-box">
-          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签">
-          <div class="sbox-list hidden"></div>
+        <div class="sbox" id="pp-tag-box" data-page-node-id="5cmopixkW13YFZY0vqSWSY">
+          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签" data-page-node-id="ttPFhcMEhHtUmmhI6doSbq">
+          <div class="sbox-list hidden" data-page-node-id="dxh1RwnJFJOmuSgiS3qrRs"></div>
         </div>
-        <select id="pp-tag-mode" aria-label="标签匹配模式">
-          <option value="all">含全部标签</option>
-          <option value="any">含任一标签</option>
+        <select id="pp-tag-mode" aria-label="标签匹配模式" data-page-node-id="mxi9xuujNDi1ixwP3cm1id">
+          <option value="all" data-page-node-id="2kJ0amBr9qPpJVV7uXfmlb">含全部标签</option>
+          <option value="any" data-page-node-id="zAY1rZ5AQVGKw4Q4fMMcyg">含任一标签</option>
         </select>
-        <select id="pp-match" aria-label="筛选条件匹配模式">
-          <option value="and">交集（全部满足）</option>
-          <option value="or">并集（任一满足）</option>
+        <select id="pp-match" aria-label="筛选条件匹配模式" data-page-node-id="6xQ4AtJrBeIPFt4Q00CCnj">
+          <option value="and" data-page-node-id="RArYURomT8iRS9x1NCE3PI">交集（全部满足）</option>
+          <option value="or" data-page-node-id="a9Gc0HL4otTPCY8AGF0aRJ">并集（任一满足）</option>
         </select>
-        <div class="sbox" id="pp-wfx-box">
-          <input class="sbox-input" placeholder="搜索/添加武器特效…" autocomplete="off" aria-label="搜索或添加武器特效">
-          <div class="sbox-list hidden"></div>
+        <div class="sbox" id="pp-wfx-box" data-page-node-id="3jLP58akAA5mKdoG9nBcaQ">
+          <input class="sbox-input" placeholder="搜索/添加武器特效…" autocomplete="off" aria-label="搜索或添加武器特效" data-page-node-id="yaPKFAHoJFiclAr3pDGBpk">
+          <div class="sbox-list hidden" data-page-node-id="H63C2Z2jJPrId8kLyntcTP"></div>
         </div>
-        <select id="pp-wfx-mode" aria-label="武器特效匹配模式">
-          <option value="any" selected>含任一特效</option>
-          <option value="all">含全部特效</option>
+        <select id="pp-wfx-mode" aria-label="武器特效匹配模式" data-page-node-id="82KzjJ2Xzik6KQjbMdLcoc">
+          <option value="any" selected data-page-node-id="KMv4L04H2FrPdvvbvlmiac">含任一特效</option>
+          <option value="all" data-page-node-id="vBQJmgOfINwDnFjGKtbJN2">含全部特效</option>
         </select>
-        <button id="pp-search">查询</button>
-        <button id="pp-reset" class="reset-btn" title="重置筛选">重置</button>
+        <button id="pp-search" data-page-node-id="K3uctVp725bdYGy9AaRkUD">查询</button>
+        <button id="pp-reset" class="reset-btn" title="重置筛选" data-page-node-id="lz0iEifvHgNi43sBX4evKH">重置</button>
       </div>
-      <div id="pp-tag-chips" class="tagbar"></div>
-      <div id="pp-wfx-chips" class="tagbar"></div>
-      <div id="pp-count" class="result-count"></div>
-      <div class="list-head units">
-        <span>名称</span><span>稀有度</span><span>类型</span><span>攻击</span><span>防御</span><span>机动</span><span>HP</span><span>EN</span><span>移动</span>
+      <div id="pp-tag-chips" class="tagbar" data-page-node-id="TQVkSrFwp0iABUStVV6Ahz"></div>
+      <div id="pp-wfx-chips" class="tagbar" data-page-node-id="Ezs09zDMUjqNw69zeDkPZr"></div>
+      <div id="pp-count" class="result-count" data-page-node-id="7o9nFPMqyBTZgqXSJlHz2b"></div>
+      <div class="list-head units" data-page-node-id="BhGtKBwUhn3ZuqvqOwBKGw">
+        <span data-page-node-id="0tfwM6u4OdcQx5wE0T5xII">名称</span><span data-page-node-id="nnUqgMhTN2NJOdGHd4kyR7">稀有度</span><span data-page-node-id="dJBUJlMBDGDVJ71drgldtB">类型</span><span data-page-node-id="op5mVP9XYXb7WzwAZscHCi">攻击</span><span data-page-node-id="Jiwxh4hA9nTPqQgyMxvwnE">防御</span><span data-page-node-id="sR5vJ1iZatTkCDVDDxJxNz">机动</span><span data-page-node-id="C0X8nZAAXwhMyLBAE6GAMF">HP</span><span data-page-node-id="Ky6KJfwYbW4bwzpaxKuoH2">EN</span><span data-page-node-id="iPDmzC4zBaLHlMeq83UeEU">移动</span>
       </div>
-      <div id="pp-list" class="list units"></div>
-      <div id="pp-pager" class="pager"></div>
+      <div id="pp-list" class="list units" data-page-node-id="PIbGfIEi1Kmv6bd8gH7llP"></div>
+      <div id="pp-pager" class="pager" data-page-node-id="8UCh4gJRFYsea0IcZtHZdE"></div>
     </div>
   </div>
 
-  <div id="enemy-picker-modal" class="modal hidden">
-    <div class="modal-box">
-      <div class="modal-head"><span>选择敌人标签 / 系列</span><button id="enemy-picker-close" aria-label="关闭对话框">×</button></div>
-      <div class="toolbar">
-        <div class="sbox" id="ep-series-box">
-          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列">
-          <div class="sbox-list hidden"></div>
-          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选">×</button>
+  <div id="enemy-picker-modal" class="modal hidden" data-page-node-id="HFLpJSAC7kWG0Xs058Knv3">
+    <div class="modal-box" data-page-node-id="1sdtsbjwFphZDRA8vTgtN1">
+      <div class="modal-head" data-page-node-id="ucG2cuJrNzChmEPR7ZN6ht"><span data-page-node-id="FUgyA9JhQxIsFXsFm5JpHX">选择敌人标签 / 系列</span><button id="enemy-picker-close" aria-label="关闭对话框" data-page-node-id="JrPdbg1RybR3ibuCbZZo0z">×</button></div>
+      <div class="toolbar" data-page-node-id="y5psXEWuLKoDr72EYB2ec9">
+        <div class="sbox" id="ep-series-box" data-page-node-id="4bOQpxWwHNCLL5BT27YzDh">
+          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列" data-page-node-id="SH6Kb3IJmH8KwtPFJWzBRO">
+          <div class="sbox-list hidden" data-page-node-id="s9hWd5biuge1mlFeIt2y51"></div>
+          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选" data-page-node-id="NN53KNPwOWrNe4cyYflKil">×</button>
         </div>
-        <div class="sbox" id="ep-tag-box">
-          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签">
-          <div class="sbox-list hidden"></div>
+        <div class="sbox" id="ep-tag-box" data-page-node-id="dpfKShXnU2PtG6A0k3FEkD">
+          <input class="sbox-input" placeholder="搜索/添加标签…" autocomplete="off" aria-label="搜索或添加标签" data-page-node-id="vulICCttNIxDBkddbCSVz6">
+          <div class="sbox-list hidden" data-page-node-id="GkHqPkWYVILtGPfdPRUS02"></div>
         </div>
       </div>
-      <div id="ep-chips" class="tagbar"></div>
-      <div class="calc-actions">
-        <button id="ep-ok" class="cond-btn">确定</button>
-        <button id="ep-clear" class="cond-btn">清除</button>
-        <button id="ep-cancel" class="cond-btn">取消</button>
+      <div id="ep-chips" class="tagbar" data-page-node-id="OuuTs7FoXsFvmoPsw8qjPT"></div>
+      <div class="calc-actions" data-page-node-id="VydZxnsQMvjrpkBf9yaRrW">
+        <button id="ep-ok" class="cond-btn" data-page-node-id="wrVYjW3p3BK0QFBKyISY2y">确定</button>
+        <button id="ep-clear" class="cond-btn" data-page-node-id="VFha3rAfi0v66P4YnFrMdH">清除</button>
+        <button id="ep-cancel" class="cond-btn" data-page-node-id="dYzm3fo0X6ToxN62cSgxVW">取消</button>
       </div>
     </div>
   </div>
 
-  <div id="picker-modal" class="modal hidden">
-    <div class="modal-box">
-      <div class="modal-head"><span id="picker-title"></span><button id="picker-close" aria-label="关闭对话框">×</button></div>
-      <div class="toolbar">
-        <select id="picker-source" aria-label="选择来源">
-          <option value="library">机体库</option>
-          <option value="enemy">关卡敌人</option>
+  <div id="picker-modal" class="modal hidden" data-page-node-id="0E4PuFZE03dYPA9rpEjug0">
+    <div class="modal-box" data-page-node-id="z3Z8hpqfyxm08mCp4hwNMK">
+      <div class="modal-head" data-page-node-id="iYzkpcGNVqRJOrSWBCuWvJ"><span id="picker-title" data-page-node-id="c3y8zVOWSDZBHpD9NIJlrD"></span><button id="picker-close" aria-label="关闭对话框" data-page-node-id="sBKVGiH44TLO1vHcRCReNE">×</button></div>
+      <div class="toolbar" data-page-node-id="BDEBP74lVbpeFqxkYjaPDr">
+        <select id="picker-source" aria-label="选择来源" data-page-node-id="ixmU25wuCtDBlvDPeK2vqK">
+          <option value="library" data-page-node-id="MvCFUYwKB0QeFyf3TFmU7q">机体库</option>
+          <option value="enemy" data-page-node-id="O7EGMvlmXAuUsdWpG4ez6Z">关卡敌人</option>
         </select>
-        <input id="picker-q" placeholder="搜索名称…" aria-label="搜索名称">
-        <select id="picker-rarity" class="picker-filter hidden" aria-label="稀有度筛选">
-          <option value="">全部稀有度</option>
-          <option value="5">UR</option>
-          <option value="4">SSR</option>
-          <option value="3">SR</option>
-          <option value="2">R</option>
-          <option value="1">N</option>
+        <input id="picker-q" placeholder="搜索名称…" aria-label="搜索名称" data-page-node-id="a9cw4rwm15B6hD1b2iOyZf">
+        <select id="picker-rarity" class="picker-filter hidden" aria-label="稀有度筛选" data-page-node-id="OeXFznw6OLsfZlZAPbCzcc">
+          <option value="" data-page-node-id="nLR3KqnKM6jffdkzZg5GeH">全部稀有度</option>
+          <option value="5" data-page-node-id="baKhpihgrTmAmKYZ0eAWRN">UR</option>
+          <option value="4" data-page-node-id="lCrf9EV0DMlE1euDBrsYdO">SSR</option>
+          <option value="3" data-page-node-id="VJomZmTvJO8HypDnXEB7qa">SR</option>
+          <option value="2" data-page-node-id="3Czs9D5VfynryQEERCLFeI">R</option>
+          <option value="1" data-page-node-id="WEOxknNMGt7Mq2kQqjRjha">N</option>
         </select>
-        <select id="picker-type" class="picker-filter hidden" aria-label="类型筛选">
-          <option value="">全部类型</option>
-          <option value="1">攻击型</option>
-          <option value="2">耐久型</option>
-          <option value="3">支援型</option>
+        <select id="picker-type" class="picker-filter hidden" aria-label="类型筛选" data-page-node-id="jsAAHuQldHEtDWQesSSTIJ">
+          <option value="" data-page-node-id="4DO9dNbykZHyJOm1ZjPzQo">全部类型</option>
+          <option value="1" data-page-node-id="zIx3fDHSzgPNmCHIS0lJZ5">攻击型</option>
+          <option value="2" data-page-node-id="o5YXXepoOUZjaoB5R7V9XA">耐久型</option>
+          <option value="3" data-page-node-id="CySqtdKp2KEin6nSXgZpnp">支援型</option>
         </select>
-        <div class="sbox picker-filter hidden" id="picker-series-box">
-          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列">
-          <div class="sbox-list hidden"></div>
-          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选">×</button>
+        <div class="sbox picker-filter hidden" id="picker-series-box" data-page-node-id="VHa2xRm4urmqU8YzdYN44K">
+          <input class="sbox-input" placeholder="搜索系列…" autocomplete="off" aria-label="搜索系列" data-page-node-id="7tfeT3Gj9E1IJTFjGTZpCB">
+          <div class="sbox-list hidden" data-page-node-id="GmiFXUvqXGPtwhAgUK5Xl8"></div>
+          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除系列筛选" data-page-node-id="bBskqpoMiJk7QT5M5abFxZ">×</button>
         </div>
-        <div class="sbox picker-filter hidden" id="picker-tag-box">
-          <input class="sbox-input" placeholder="搜索标签…" autocomplete="off" aria-label="搜索标签">
-          <div class="sbox-list hidden"></div>
-          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除标签筛选">×</button>
+        <div class="sbox picker-filter hidden" id="picker-tag-box" data-page-node-id="pzGDADXOwERT5jBqEb6I3C">
+          <input class="sbox-input" placeholder="搜索标签…" autocomplete="off" aria-label="搜索标签" data-page-node-id="3y8L7vtm0JOTj2HS474hhN">
+          <div class="sbox-list hidden" data-page-node-id="Xd0ANBgwPwHMilBLhn7wb8"></div>
+          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除标签筛选" data-page-node-id="50X6hZhVSqJ2XG9NswOLuQ">×</button>
         </div>
-        <button id="picker-search">查询</button>
-        <button id="picker-reset" class="reset-btn" title="重置筛选">重置</button>
+        <select id="picker-tag-mode" class="picker-filter hidden" aria-label="多标签匹配模式" data-page-node-id="uX0lOvzaxQBEDxP8iieicS">
+          <option value="any" data-page-node-id="tHNdZt77GDKo0yXBrxBbvK">满足任一标签</option>
+          <option value="all" data-page-node-id="cmJAAKZXZIHkYrFpOTdfHG">满足全部标签</option>
+        </select>
+        <select id="picker-acq" class="picker-filter picker-unit-only hidden" aria-label="获取途径筛选" data-page-node-id="kKNpjVf8WZDUKtFKFKtrdG">
+          <option value="" data-page-node-id="s38jpQ7FnZQ8ozJ2PpBCX9">全部获取途径</option>
+          <option value="1" data-page-node-id="3Emmu8oTphnxqPjzbDhqiU">扭蛋</option>
+          <option value="other" data-page-node-id="BVvtFE767YDynPzppo63yp">其他</option>
+        </select>
+        <div class="sbox picker-filter picker-unit-only hidden" id="picker-wfx-box" data-page-node-id="ooUf7Ku4xuGCIjVmEbkCKs">
+          <input class="sbox-input" placeholder="搜索武器特效…" autocomplete="off" aria-label="搜索武器特效" data-page-node-id="1ZjYV39KjqGnBLUAuDZGmg">
+          <div class="sbox-list hidden" data-page-node-id="ieIsOIdhfGETXgsitFQ6uW"></div>
+          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除武器特效筛选" data-page-node-id="GDxZWIWUjTePw3kNEQ0FI4">×</button>
+        </div>
+        <div class="sbox picker-filter picker-pilot-only hidden" id="picker-skill-box" data-page-node-id="5eXYrXboRBEfesET630Hfh">
+          <input class="sbox-input" placeholder="搜索技能…" autocomplete="off" aria-label="搜索驾驶员技能" data-page-node-id="weqPAAHCOswz3G4qyRvhtF">
+          <div class="sbox-list hidden" data-page-node-id="GGQ2LXvG71rlCKG86Km9HB"></div>
+          <button class="sbox-clear hidden" type="button" title="清除" aria-label="清除技能筛选" data-page-node-id="fXgzBz3mWWCJF7RhE6TpoH">×</button>
+        </div>
+        <select id="picker-support" class="picker-filter picker-pilot-only hidden" aria-label="支援次数筛选" data-page-node-id="gXJmgug4uy4c3YnUUWi1mY">
+          <option value="" data-page-node-id="SfL9Ha63NM8BxYD4PZLbem">全部支援次数</option>
+        </select>
+        <button id="picker-search" data-page-node-id="Q87gC2OLeghdbNSdi53fjf">查询</button>
+        <button id="picker-reset" class="reset-btn" title="重置筛选" data-page-node-id="tkJ7eWsEQBLVPuhkb1yvNL">重置</button>
       </div>
-      <div id="picker-list" class="list picker-list"></div>
-      <div id="picker-pager" class="pager"></div>
+      <div id="picker-list" class="list picker-list" data-page-node-id="eQwnGKteY7GMqJfvFjuB8S"></div>
+      <div id="picker-pager" class="pager" data-page-node-id="lVmSMAVnUmyOEUo4GY9AD6"></div>
     </div>
   </div>
 

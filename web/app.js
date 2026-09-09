@@ -1149,6 +1149,12 @@ async function initFilterControls() {
     supportLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join("");
   initCombobox("#picker-series-box", seriesOpts, () => pickerState.series,
     (v) => { pickerState.series = String(v); }, true);
+  initCombobox("#picker-wfx-box", WFX_OPTIONS, () => pickerState.wfx,
+    (v) => { pickerState.wfx = String(v); }, true);
+  initCombobox("#picker-skill-box", tagOpts(skillNames), () => pickerState.skills,
+    (v) => { pickerState.skills = String(v); }, true);
+  $("#picker-support").innerHTML = '<option value="">全部支援次数</option>' +
+    supportLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join("");
   initCombobox("#pp-series-box", seriesOpts, () => pairUnitState.series,
     (v) => { pairUnitState.series = String(v); ppLoad(0); }, true);
   initCombobox("#pp-tag-box", tagOpts(unitTags), () => "",
@@ -2985,7 +2991,7 @@ const calcSel = {
   abInit: { atkU: false, atkP: false, defU: false, defP: false },
 };
 const calcSeq = { n: 0 };
-const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", sort: "rarity", order: "desc", page: 0, size: 20, onPick: null };
+const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", tag_mode: "any", acq: "", wfx: "", wfx_mode: "any", skills: "", skill_mode: "any", support: "", sort: "rarity", order: "desc", page: 0, size: 20, onPick: null };
 
 async function initPickerTagBox(kind) {
   if (kind !== "unit" && kind !== "pilot") return;
@@ -2996,18 +3002,30 @@ async function initPickerTagBox(kind) {
 
 function togglePickerFilters() {
   const show = pickerState.source === "library" && (pickerState.kind === "unit" || pickerState.kind === "pilot");
-  ["#picker-rarity", "#picker-type", "#picker-series-box", "#picker-tag-box"].forEach((sel) => {
+  const isUnit = show && pickerState.kind === "unit";
+  const isPilot = show && pickerState.kind === "pilot";
+  ["#picker-rarity", "#picker-type", "#picker-series-box", "#picker-tag-box", "#picker-tag-mode"].forEach((sel) => {
     $(sel).classList.toggle("hidden", !show);
   });
+  ["#picker-acq", "#picker-wfx-box"].forEach((sel) => $(sel).classList.toggle("hidden", !isUnit));
+  ["#picker-skill-box", "#picker-support"].forEach((sel) => $(sel).classList.toggle("hidden", !isPilot));
 }
 
-async function openPicker(kind, onPick, side, weaponUnit) {
+async function openPicker(kind, onPick, side, weaponUnit, opts) {
+  opts = opts || {};
   Object.assign(pickerState, {
     kind, side: side || "", q: "", source: "library",
     rarity: "", type: "", series: "", tags: "",
+    tag_mode: "any", acq: "", wfx: "", wfx_mode: "any",
+    skills: "", skill_mode: "any", support: "",
     sort: "rarity", order: "desc", page: 0, onPick,
     weaponUnit: weaponUnit || null,
   });
+  // 组队页：已选支援角色时，默认按该支援角色的词条（标签）过滤机体
+  if (kind === "unit" && opts.defaultTags && opts.defaultTags.length) {
+    pickerState.tags = opts.defaultTags.join(",");
+    pickerState.tag_mode = opts.tag_mode || "any";
+  }
   $("#picker-title").textContent =
     kind === "unit" ? "选择机体" : kind === "pilot" ? "选择驾驶员"
     : kind === "weapon" ? "选择武器"
@@ -3021,10 +3039,15 @@ async function openPicker(kind, onPick, side, weaponUnit) {
   $("#picker-q").value = "";
   $("#picker-rarity").value = "";
   $("#picker-type").value = "";
+  $("#picker-tag-mode").value = pickerState.tag_mode;
+  $("#picker-acq").value = "";
+  $("#picker-support").value = "";
   syncCombobox("#picker-series-box");
-  syncCombobox("#picker-tag-box");
   $("#picker-modal").classList.remove("hidden");
   await initPickerTagBox(kind);
+  syncCombobox("#picker-tag-box");
+  syncCombobox("#picker-wfx-box");
+  syncCombobox("#picker-skill-box");
   togglePickerFilters();
   loadPicker();
 }
@@ -3176,6 +3199,16 @@ async function loadPicker(page = pickerState.page) {
     params.set("type", s.type);
     params.set("series", s.series);
     params.set("tags", s.tags);
+    params.set("tag_mode", s.tag_mode);
+    if (s.kind === "unit") {
+      params.set("acq", s.acq);
+      params.set("wfx", s.wfx);
+      params.set("wfx_mode", s.wfx_mode);
+    } else {
+      params.set("skills", s.skills);
+      params.set("skill_mode", s.skill_mode);
+      params.set("support", s.support);
+    }
   }
   params.set("sort", s.sort);
   params.set("order", s.order);
@@ -3198,11 +3231,12 @@ async function loadPicker(page = pickerState.page) {
       atk = `${it.attack} (+${it.attack_bonus})`;
     }
     const tags = (it.tags || []).slice(0, 3).join("、") || "—";
+    const extra = (s.kind === "pilot" && it.support_label) ? ` · ${esc(it.support_label)}` : "";
     return `<div class="picker-row picker-grid" data-i="${it.id}">
       <span class="name">${esc(it.name)}</span>
       ${it.rarity ? rarityBadge(it.rarity) : "<span>—</span>"}
       <span>${it.role_label ? roleBadge(it.role, it.role_label) : "—"}</span>
-      <span class="muted">${esc(tags)}</span>
+      <span class="muted">${esc(tags)}${extra}</span>
       <span class="muted">${esc(it.series_name || "—")}</span>
       <span class="num">${atk}</span>
       <span class="num">${it.defense ?? "—"}${it.defense_bonus ? ` <span class="add">(+${it.defense_bonus})</span>` : ""}</span>
@@ -3642,18 +3676,27 @@ $("#picker-search").addEventListener("click", () => {
   pickerState.source = $("#picker-source").value;
   pickerState.rarity = $("#picker-rarity").value;
   pickerState.type = $("#picker-type").value;
+  pickerState.tag_mode = $("#picker-tag-mode").value;
+  pickerState.acq = $("#picker-acq").value;
+  pickerState.support = $("#picker-support").value;
   loadPicker(0);
 });
 $("#picker-reset").addEventListener("click", () => {
   Object.assign(pickerState, {
-    q: "", rarity: "", type: "", series: "", tags: "",
+    q: "", rarity: "", type: "", series: "", tags: "", tag_mode: "any",
+    acq: "", wfx: "", wfx_mode: "any", skills: "", skill_mode: "any", support: "",
     sort: "rarity", order: "desc", page: 0,
   });
   $("#picker-q").value = "";
   $("#picker-rarity").value = "";
   $("#picker-type").value = "";
+  $("#picker-tag-mode").value = "any";
+  $("#picker-acq").value = "";
+  $("#picker-support").value = "";
   syncCombobox("#picker-series-box");
   syncCombobox("#picker-tag-box");
+  syncCombobox("#picker-wfx-box");
+  syncCombobox("#picker-skill-box");
   loadPicker(0);
 });
 $("#picker-source").addEventListener("change", () => {
@@ -5094,6 +5137,21 @@ function onTeamListChange(e) {
 }
 
 async function openTeamUnitPicker(team, slot) {
+  // 队伍已选支援角色时，取其「词条」(标签) 作为机体选择器的默认过滤
+  let defaultTags = [];
+  if (team.supporter && team.supporter.id) {
+    try {
+      const sp = await api(`/api/supporters/${team.supporter.id}`);
+      const set = new Set();
+      const collect = (branches) => (branches || []).forEach((b) => {
+        const subs = (b.subs && b.subs.length) ? b.subs : [{ tags: b.tags }];
+        (subs || []).forEach((sd) => (sd.tags || []).forEach((t) => set.add(t)));
+      });
+      (sp.cond_groups || []).forEach((g) => (g.tags || []).forEach((t) => set.add(t)));
+      (sp.leader_skills || []).forEach((ls) => collect(ls.branches));
+      defaultTags = [...set].filter(Boolean);
+    } catch (_) {}
+  }
   await openPicker("unit", async (u) => {
     const dup = team.slots.some((s, i) => i !== slot && s.unit && String(s.unit.id) === String(u.id));
     if (dup) { alert("该机体已在队伍中，不能重复选择"); return; }
@@ -5110,7 +5168,7 @@ async function openTeamUnitPicker(team, slot) {
     } catch (_) {}
     saveTeamState();
     computeTeam(team.id);
-  });
+  }, null, null, { defaultTags });
 }
 
 async function openTeamPilotPicker(team, slot) {

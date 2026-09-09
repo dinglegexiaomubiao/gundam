@@ -1442,9 +1442,17 @@ PICKER_SORT_KEYS = {
 
 
 def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
-               series: str, tags: str, sort: str, order: str,
-               limit: int, offset: int) -> dict:
-    """伤害计算器的机体/驾驶员选择器：机体库 或 关卡敌人。"""
+               series: str, tags: str, tag_mode: str, sort: str, order: str,
+               limit: int, offset: int,
+               acq: str = "", wfx: str = "", wfx_mode: str = "any",
+               skills: str = "", skill_mode: str = "any",
+               support: str = "") -> dict:
+    """伤害计算器的机体/驾驶员选择器：机体库 或 关卡敌人。
+
+    支持筛选：稀有度、类型、系列、标签（多标签 tag_mode=any|all）、
+    机体获取途径 acq、武器特效 wfx（仅机体）、
+    驾驶员技能 skills（skill_mode）、支援次数 support（仅驾驶员）。
+    """
     like = f"%{_like_escape(q)}%" if q else "%"
     conn = _conn()
     items: list[dict] = []
@@ -1487,7 +1495,17 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
             if rarity:
                 where.append("u.rarity = ?")
                 args.append(int(rarity))
-            preds, f_args = _filter_predicates("u", series, type_, tags, "any")
+            if acq:
+                if acq == "other":
+                    where.append("u.acquisition != 1")
+                else:
+                    where.append("u.acquisition = ?")
+                    args.append(int(acq))
+            wfx_sql, wfx_args = _wfx_where(wfx, wfx_mode)
+            if wfx_sql:
+                where.append(wfx_sql)
+                args += wfx_args
+            preds, f_args = _filter_predicates("u", series, type_, tags, tag_mode or "any")
             if preds:
                 where.append(" AND ".join(preds))
                 args += f_args
@@ -1554,10 +1572,14 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
             if rarity:
                 where.append("c.rarity = ?")
                 args.append(int(rarity))
-            preds, f_args = _filter_predicates("c", series, type_, tags, "any")
+            preds, f_args = _filter_predicates("c", series, type_, tags, tag_mode or "any")
             if preds:
                 where.append(" AND ".join(preds))
                 args += f_args
+            skill_sql, skill_args = _skill_where(skills, skill_mode)
+            if skill_sql:
+                where.append(skill_sql)
+                args += skill_args
             w = "WHERE " + " AND ".join(where)
             total = conn.execute(f"SELECT COUNT(*) FROM character c {w}", args).fetchone()[0]
             items = _all(
@@ -1566,7 +1588,8 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                            c.role,
                            c.max_ranged AS ranged, c.max_melee AS melee,
                            c.max_awaken AS awaken, c.max_defense AS defense,
-                           c.tags, s.name AS series_name, c.stat_bonuses
+                           c.tags, s.name AS series_name, c.stat_bonuses,
+                           c.support_info
                     FROM character c LEFT JOIN series s ON s.id = c.series_id {w}
                     ORDER BY c.rarity DESC, c.id""",
                 args,
@@ -1575,6 +1598,7 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 r["source"] = "library"
                 r["tags"] = _json_list(r.get("tags"))
                 r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
+                r["support_label"] = support_label(_json_dict(r.get("support_info")))
                 bonuses = _json_dict(r.pop("stat_bonuses", None))
                 for k in ("ranged", "melee", "awaken", "defense"):
                     v, b = star_value(r.get(k) or 0, bonuses.get(k, 0), 0)
@@ -1582,6 +1606,12 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                     if k == "defense":
                         r["defense_bonus"] = b
     conn.close()
+    if kind == "pilots" and support:
+        if support == "反击援防":
+            items = [r for r in items if r["id"] in _counter_guard_ids(_conn())]
+        else:
+            items = [r for r in items if r.get("support_label") == support]
+        total = len(items)
     for r in items:
         r["tag_text"] = "、".join(r.get("tags") or [])
         if kind == "pilots":
@@ -4211,8 +4241,13 @@ class Handler(BaseHTTPRequestHandler):
                 kind, q.get("q", [""])[0], q.get("source", ["library"])[0],
                 q.get("rarity", [""])[0], q.get("type", [""])[0],
                 q.get("series", [""])[0], q.get("tags", [""])[0],
-                q.get("sort", [""])[0], q.get("order", ["desc"])[0],
-                limit, offset))
+                q.get("tag_mode", ["any"])[0], q.get("sort", [""])[0],
+                q.get("order", ["desc"])[0], limit, offset,
+                acq=q.get("acq", [""])[0], wfx=q.get("wfx", [""])[0],
+                wfx_mode=q.get("wfx_mode", ["any"])[0],
+                skills=q.get("skills", [""])[0],
+                skill_mode=q.get("skill_mode", ["any"])[0],
+                support=q.get("support", [""])[0]))
         if path == "/api/stages":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)
