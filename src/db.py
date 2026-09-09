@@ -389,6 +389,20 @@ CREATE TABLE IF NOT EXISTS unit_pilot (
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_unit_pilot_pilot ON unit_pilot(pilot_id);
+
+CREATE TABLE IF NOT EXISTS team (
+  team_id TEXT PRIMARY KEY,
+  name TEXT,
+  payload TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_team_updated ON team(updated_at);
+
+CREATE TABLE IF NOT EXISTS team_config (
+  gkey TEXT PRIMARY KEY,
+  payload TEXT NOT NULL,
+  updated_at TEXT
+);
 """
 
 

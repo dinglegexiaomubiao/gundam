@@ -2547,6 +2547,142 @@ def api_unit_edit(payload: dict, preview: bool = True) -> dict:
     return {"ok": True, "diff": diff, "message": "已保存到本地"}
 
 
+def _ensure_team_tables(conn) -> None:
+    """幂等补建组队相关表（老库不会自动跑 SCHEMA）。"""
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS team ("
+        "  team_id TEXT PRIMARY KEY,"
+        "  name TEXT,"
+        "  payload TEXT NOT NULL,"
+        "  updated_at TEXT);"
+        "CREATE INDEX IF NOT EXISTS idx_team_updated ON team(updated_at);"
+        "CREATE TABLE IF NOT EXISTS team_config ("
+        "  gkey TEXT PRIMARY KEY,"
+        "  payload TEXT NOT NULL,"
+        "  updated_at TEXT);"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 组队（team / team_config）读写：前端 localStorage 改为后端持久化 + 自动上云
+# ---------------------------------------------------------------------------
+def api_team_list() -> dict:
+    """返回所有队伍 + 全局配置（bench/customEnemy）。"""
+    conn = _write_conn()
+    try:
+        rows = conn.execute(
+            "SELECT team_id, name, payload, updated_at FROM team ORDER BY updated_at"
+        ).fetchall()
+        cfg = conn.execute(
+            "SELECT gkey, payload, updated_at FROM team_config WHERE gkey='default'"
+        ).fetchone()
+    finally:
+        conn.close()
+    teams = []
+    for r in rows:
+        try:
+            payload = json.loads(r["payload"]) if r["payload"] else {}
+        except (ValueError, TypeError):
+            payload = {}
+        teams.append({
+            "team_id": r["team_id"], "name": r["name"] or "",
+            "payload": payload, "updated_at": r["updated_at"],
+        })
+    config = None
+    if cfg:
+        try:
+            cp = json.loads(cfg["payload"]) if cfg["payload"] else {}
+        except (ValueError, TypeError):
+            cp = {}
+        config = {"gkey": cfg["gkey"], "payload": cp, "updated_at": cfg["updated_at"]}
+    return {"ok": True, "teams": teams, "config": config}
+
+
+def api_team_save(payload: dict) -> dict:
+    """保存/更新一个队伍（upsert），并自动单条上云。"""
+    team_id = (payload.get("team_id") or "").strip()
+    if not team_id:
+        return {"ok": False, "error": "缺少 team_id"}
+    data = payload.get("data") or {}
+    name = payload.get("name") or ""
+    payload_json = json.dumps(data, ensure_ascii=False)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    conn = _write_conn()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO team (team_id, name, payload, updated_at) "
+            "VALUES (?,?,?,?)",
+            (team_id, name, payload_json, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    synced, sync_msg = False, ""
+    try:
+        from .cloud import push_team_row  # 延迟导入，避免循环依赖
+
+        res = push_team_row(team_id)
+        synced = bool(res.get("ok"))
+        sync_msg = res.get("message", "")
+    except Exception as exc:
+        sync_msg = f"云端同步失败：{exc}"
+    return {"ok": True, "synced": synced, "sync_message": sync_msg}
+
+
+def api_team_delete(payload: dict) -> dict:
+    """删除一个队伍，并同步从云端删除。"""
+    team_id = (payload.get("team_id") or "").strip()
+    if not team_id:
+        return {"ok": False, "error": "缺少 team_id"}
+    conn = _write_conn()
+    try:
+        conn.execute("DELETE FROM team WHERE team_id = ?", (team_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    synced, sync_msg = False, ""
+    try:
+        from .cloud import push_team_row
+
+        res = push_team_row(team_id)
+        synced = bool(res.get("ok"))
+        sync_msg = res.get("message", "")
+    except Exception as exc:
+        sync_msg = f"云端同步失败：{exc}"
+    return {"ok": True, "synced": synced, "sync_message": sync_msg}
+
+
+def api_team_config(payload: dict) -> dict:
+    """保存全局配置（bench/customEnemy），并自动上云。"""
+    cp = {
+        "bench": payload.get("bench", "low"),
+        "customEnemy": payload.get("customEnemy")
+        or {"unit_defense": 1060, "character_defense": 109},
+    }
+    payload_json = json.dumps(cp, ensure_ascii=False)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    conn = _write_conn()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO team_config (gkey, payload, updated_at) "
+            "VALUES ('default',?,?)",
+            (payload_json, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    synced, sync_msg = False, ""
+    try:
+        from .cloud import push_team_config_row
+
+        res = push_team_config_row("default")
+        synced = bool(res.get("ok"))
+        sync_msg = res.get("message", "")
+    except Exception as exc:
+        sync_msg = f"云端同步失败：{exc}"
+    return {"ok": True, "synced": synced, "sync_message": sync_msg}
+
+
 def _ensure_char_edit_log(conn) -> None:
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS character_edit_log ("
@@ -4322,6 +4458,10 @@ def run_server(port: int = 8765) -> None:
             _ensure_char_edit_log(_write_conn())
         except Exception as exc:  # noqa: BLE001
             print(f"补建 character_edit_log 失败：{exc}")
+        try:
+            _ensure_team_tables(_write_conn())
+        except Exception as exc:  # noqa: BLE001
+            print(f"补建 team 表失败：{exc}")
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.daemon_threads = True
     print(f"GGE 资料库已启动：http://127.0.0.1:{port}")

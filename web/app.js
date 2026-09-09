@@ -4813,29 +4813,86 @@ function newTeam() {
 }
 
 function saveTeamState() {
+  // 本地降级缓存（断网/未配置后端时仍可用）
   try {
     localStorage.setItem(TEAM_LS_KEY, JSON.stringify({
       bench: teamState.bench, customEnemy: teamState.customEnemy, teams: teamState.teams,
     }));
   } catch (_) {}
+  // 同步到后端（fire-and-forget，失败忽略，不阻塞 UI）
+  try {
+    (teamState.teams || []).forEach((t) => {
+      apiPost("/api/team/save", {
+        team_id: t.id,
+        name: t.name || "",
+        data: {
+          supporter: t.supporter || null,
+          breakStep: t.breakStep ?? 3,
+          slots: (t.slots || []).map((s) => ({
+            unit: s.unit || null, star: s.star ?? 3,
+            weapon: s.weapon || null, pilot: s.pilot || null,
+          })),
+        },
+      }).catch(() => {});
+    });
+    apiPost("/api/team/config", {
+      bench: teamState.bench,
+      customEnemy: teamState.customEnemy,
+    }).catch(() => {});
+  } catch (_) {}
 }
 
 function loadTeamState() {
+  // 同步先填 localStorage（离线可用、即时渲染），随后异步用后端数据覆盖
   try {
     const raw = localStorage.getItem(TEAM_LS_KEY);
-    if (!raw) return;
-    const d = JSON.parse(raw);
-    if (!d || !Array.isArray(d.teams)) return;
-    teamState.bench = d.bench || "low";
-    teamState.customEnemy = d.customEnemy || { unit_defense: 1060, character_defense: 109 };
-    teamState.teams = d.teams.map((t) => ({
-      id: t.id || newTeam().id,
-      supporter: t.supporter || null,
-      breakStep: t.breakStep ?? 3,
-      slots: (Array.isArray(t.slots) && t.slots.length === 5)
-        ? t.slots.map((s) => ({ unit: s.unit || null, star: s.star ?? 3, weapon: s.weapon || null, pilot: s.pilot || null }))
-        : [newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot()],
-    }));
+    if (raw) {
+      const d = JSON.parse(raw);
+      if (d && Array.isArray(d.teams)) {
+        teamState.bench = d.bench || "low";
+        teamState.customEnemy = d.customEnemy || { unit_defense: 1060, character_defense: 109 };
+        teamState.teams = d.teams.map((t) => ({
+          id: t.id || newTeam().id,
+          supporter: t.supporter || null,
+          breakStep: t.breakStep ?? 3,
+          slots: (Array.isArray(t.slots) && t.slots.length === 5)
+            ? t.slots.map((s) => ({ unit: s.unit || null, star: s.star ?? 3, weapon: s.weapon || null, pilot: s.pilot || null }))
+            : [newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot()],
+        }));
+      }
+    }
+  } catch (_) {}
+  // 异步从后端拉取（后端优先）；后端为空则把本地现有队伍迁移上去
+  fetchTeamFromServer();
+}
+
+async function fetchTeamFromServer() {
+  try {
+    const r = await fetch("/api/team/list");
+    const d = await r.json();
+    if (!d || !d.ok) return;
+    if (d.teams && d.teams.length) {
+      teamState.teams = d.teams.map((t) => ({
+        id: t.team_id,
+        name: t.name || "",
+        supporter: (t.payload && t.payload.supporter) || null,
+        breakStep: (t.payload && t.payload.breakStep) ?? 3,
+        slots: ((t.payload && t.payload.slots) || []).map((s) => ({
+          unit: s.unit || null, star: s.star ?? 3,
+          weapon: s.weapon || null, pilot: s.pilot || null,
+        })),
+      }));
+      renderTeam();
+    }
+    if (d.config && d.config.payload) {
+      teamState.bench = d.config.payload.bench || teamState.bench;
+      teamState.customEnemy = d.config.payload.customEnemy || teamState.customEnemy;
+      syncTeamBenchUI();
+    }
+    // 后端为空但本地有数据 → 迁移一次（之后以云端为准）
+    if ((!d.teams || !d.teams.length) && teamState.teams.length) {
+      saveTeamState();
+    }
   } catch (_) {}
 }
 

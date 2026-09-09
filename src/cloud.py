@@ -42,6 +42,9 @@ TABLE_ORDER = [
     "stage_map_npc_character",
     # 机体 → 原作驾驶员映射（含人工修正 signal='manual'），随同步一起上云
     "unit_pilot",
+    # 组队：用户保存的队伍（team）+ 全局评分参数（team_config），随同步一起上云
+    "team",
+    "team_config",
 ]
 
 
@@ -1121,6 +1124,117 @@ def push_unit_pilot_row(unit_id: int, url: str | None = None) -> dict:
             conn.commit()
         return {"ok": True, "message": "已同步 1 条到服务器" if row is not None
                 else "已从云端删除该映射"}
+    except Exception as exc:  # 云端异常不应带崩本地编辑流程
+        return {"ok": False, "message": f"同步失败：{exc}"}
+
+
+# ---------------------------------------------------------------------------
+# 组队（team / team_config）云端单行同步
+# 组队是用户个人数据，编辑/删除后实时单条上云；本地删除则云端同步删除。
+# ---------------------------------------------------------------------------
+TEAM_DDL = (
+    "CREATE TABLE IF NOT EXISTS team ("
+    "team_id TEXT PRIMARY KEY, name TEXT, "
+    "payload TEXT NOT NULL, updated_at TEXT)"
+)
+TEAM_COLS = ["team_id", "name", "payload", "updated_at"]
+
+TEAM_CONFIG_DDL = (
+    "CREATE TABLE IF NOT EXISTS team_config ("
+    "gkey TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT)"
+)
+TEAM_CONFIG_COLS = ["gkey", "payload", "updated_at"]
+
+
+def push_team_row(team_id: str, url: str | None = None) -> dict:
+    """单条同步 team 到云端（编辑/删除后实时调用）。本地存在→upsert，已删→云端删除。"""
+    url = direct_cloud_url(url)
+    if not url:
+        return {"ok": False, "message": "未设置 NEON_DB_URL"}
+    if not config.DB_PATH.exists():
+        return {"ok": False, "message": f"本地数据库不存在: {config.DB_PATH}"}
+    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    try:
+        has = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='team'"
+        ).fetchone()
+        if not has:
+            return {"ok": False, "message": "本地无 team 表"}
+        row = con.execute(
+            f"SELECT {', '.join(TEAM_COLS)} FROM team WHERE team_id = ?", (team_id,)
+        ).fetchone()
+    finally:
+        con.close()
+
+    import psycopg  # 延迟导入
+
+    try:
+        with psycopg.connect(url, connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(TEAM_DDL)
+                if row is None:
+                    cur.execute('DELETE FROM "team" WHERE team_id = %s', (team_id,))
+                else:
+                    csql = ", ".join(f'"{c}"' for c in TEAM_COLS)
+                    cph = ", ".join(["%s"] * len(TEAM_COLS))
+                    cupd = ", ".join(
+                        f'"{c}"=EXCLUDED."{c}"' for c in TEAM_COLS if c != "team_id"
+                    )
+                    cur.execute(
+                        f'INSERT INTO "team" ({csql}) VALUES ({cph}) '
+                        f'ON CONFLICT (team_id) DO UPDATE SET {cupd}',
+                        tuple(row),
+                    )
+            conn.commit()
+        return {"ok": True, "message": "已同步 1 条到服务器" if row is not None
+                else "已从云端删除该队伍"}
+    except Exception as exc:  # 云端异常不应带崩本地编辑流程
+        return {"ok": False, "message": f"同步失败：{exc}"}
+
+
+def push_team_config_row(gkey: str = "default", url: str | None = None) -> dict:
+    """单条同步 team_config（全局 bench/customEnemy）到云端。本地存在→upsert，已删→云端删除。"""
+    url = direct_cloud_url(url)
+    if not url:
+        return {"ok": False, "message": "未设置 NEON_DB_URL"}
+    if not config.DB_PATH.exists():
+        return {"ok": False, "message": f"本地数据库不存在: {config.DB_PATH}"}
+    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    try:
+        has = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_config'"
+        ).fetchone()
+        if not has:
+            return {"ok": False, "message": "本地无 team_config 表"}
+        row = con.execute(
+            f"SELECT {', '.join(TEAM_CONFIG_COLS)} FROM team_config WHERE gkey = ?",
+            (gkey,),
+        ).fetchone()
+    finally:
+        con.close()
+
+    import psycopg  # 延迟导入
+
+    try:
+        with psycopg.connect(url, connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(TEAM_CONFIG_DDL)
+                if row is None:
+                    cur.execute('DELETE FROM "team_config" WHERE gkey = %s', (gkey,))
+                else:
+                    csql = ", ".join(f'"{c}"' for c in TEAM_CONFIG_COLS)
+                    cph = ", ".join(["%s"] * len(TEAM_CONFIG_COLS))
+                    cupd = ", ".join(
+                        f'"{c}"=EXCLUDED."{c}"' for c in TEAM_CONFIG_COLS if c != "gkey"
+                    )
+                    cur.execute(
+                        f'INSERT INTO "team_config" ({csql}) VALUES ({cph}) '
+                        f'ON CONFLICT (gkey) DO UPDATE SET {cupd}',
+                        tuple(row),
+                    )
+            conn.commit()
+        return {"ok": True, "message": "已同步全局配置到服务器" if row is not None
+                else "已从云端删除该配置"}
     except Exception as exc:  # 云端异常不应带崩本地编辑流程
         return {"ok": False, "message": f"同步失败：{exc}"}
 
