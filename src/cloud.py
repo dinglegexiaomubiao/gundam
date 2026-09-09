@@ -970,9 +970,10 @@ def _fetch_table_cli(tname: str, outfile: Path) -> int:
 UNIT_PILOT_DDL = (
     "CREATE TABLE IF NOT EXISTS unit_pilot ("
     "unit_id INTEGER PRIMARY KEY, pilot_id INTEGER NOT NULL, "
-    "unit_name TEXT, pilot_name TEXT, score INTEGER, signal TEXT)"
+    "unit_name TEXT, pilot_name TEXT, score INTEGER, signal TEXT, "
+    "updated_at TEXT)"
 )
-UNIT_PILOT_COLS = ["unit_id", "pilot_id", "unit_name", "pilot_name", "score", "signal"]
+UNIT_PILOT_COLS = ["unit_id", "pilot_id", "unit_name", "pilot_name", "score", "signal", "updated_at"]
 
 
 def _ensure_local_unit_pilot(con: sqlite3.Connection) -> None:
@@ -980,7 +981,21 @@ def _ensure_local_unit_pilot(con: sqlite3.Connection) -> None:
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_unit_pilot_pilot ON unit_pilot(pilot_id)"
     )
+    # 老库补 updated_at 列（CREATE TABLE IF NOT EXISTS 在表已存在时不会加列）
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(unit_pilot)")}
+        if "updated_at" not in cols:
+            con.execute("ALTER TABLE unit_pilot ADD COLUMN updated_at TEXT")
+    except sqlite3.OperationalError:
+        pass
     con.commit()
+
+
+def _ensure_cloud_unit_pilot_columns(cur) -> None:
+    """云端 unit_pilot 若缺 updated_at 列则补齐（幂等，Neon PG 支持 ADD COLUMN IF NOT EXISTS）。"""
+    cur.execute(
+        'ALTER TABLE "unit_pilot" ADD COLUMN IF NOT EXISTS updated_at TEXT'
+    )
 
 
 def upload_unit_pilot_to_cloud(url: str | None = None) -> dict:
@@ -1003,8 +1018,7 @@ def upload_unit_pilot_to_cloud(url: str | None = None) -> dict:
         if not has:
             return {"ok": False, "message": "本地无 unit_pilot 表，先跑 scripts/build_unit_pilot.py"}
         rows = con.execute(
-            "SELECT unit_id, pilot_id, unit_name, pilot_name, score, signal "
-            "FROM unit_pilot"
+            f"SELECT {', '.join(UNIT_PILOT_COLS)} FROM unit_pilot"
         ).fetchall()
     finally:
         con.close()
@@ -1024,6 +1038,7 @@ def upload_unit_pilot_to_cloud(url: str | None = None) -> dict:
             conn.autocommit = False
             with conn.cursor() as cur:
                 cur.execute(UNIT_PILOT_DDL)
+                _ensure_cloud_unit_pilot_columns(cur)
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_unit_pilot_pilot "
                     "ON unit_pilot(pilot_id)"
@@ -1046,8 +1061,79 @@ def upload_unit_pilot_to_cloud(url: str | None = None) -> dict:
         return {"ok": False, "message": f"上传失败：{exc}"}
 
 
+def push_unit_pilot_row(unit_id: int, url: str | None = None) -> dict:
+    """单条同步 unit_pilot 到云端（编辑后实时调用，毫秒级）。
+
+    - 本地存在该行 → upsert（含 updated_at，用于冲突判定）。
+    - 本地已删除该行（用户清除了映射）→ 从云端删除，避免云端残留旧映射。
+    - 云端表缺列时自动补齐 updated_at，老的云端表兼容。
+    - 云端不可达时返回 ok=False，由调用方降级处理（不阻塞本地编辑）。
+    """
+    url = direct_cloud_url(url)
+    if not url:
+        return {"ok": False, "message": "未设置 NEON_DB_URL"}
+    if not config.DB_PATH.exists():
+        return {"ok": False, "message": f"本地数据库不存在: {config.DB_PATH}"}
+
+    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    try:
+        has = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='unit_pilot'"
+        ).fetchone()
+        if not has:
+            return {"ok": False, "message": "本地无 unit_pilot 表"}
+        # 老库可能没有 updated_at 列；用列清单动态取，缺列则取不到（None）
+        cols = [r[1] for r in con.execute("PRAGMA table_info(unit_pilot)")]
+        sel = ", ".join(cols)
+        row = con.execute(
+            f"SELECT {sel} FROM unit_pilot WHERE unit_id = ?", (unit_id,)
+        ).fetchone()
+        if row is not None:
+            row = dict(zip(cols, row))
+    finally:
+        con.close()
+
+    import psycopg  # 延迟导入
+
+    try:
+        with psycopg.connect(url, connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(UNIT_PILOT_DDL)
+                _ensure_cloud_unit_pilot_columns(cur)
+                if row is None:
+                    cur.execute(
+                        'DELETE FROM "unit_pilot" WHERE unit_id = %s', (unit_id,)
+                    )
+                else:
+                    # 缺 updated_at 列时补空字符串，保证 7 列对齐
+                    vals = [row.get(c) for c in UNIT_PILOT_COLS]
+                    csql = ", ".join(f'"{c}"' for c in UNIT_PILOT_COLS)
+                    cph = ", ".join(["%s"] * len(UNIT_PILOT_COLS))
+                    cupd = ", ".join(
+                        f'"{c}"=EXCLUDED."{c}"'
+                        for c in UNIT_PILOT_COLS if c != "unit_id"
+                    )
+                    cur.execute(
+                        f'INSERT INTO "unit_pilot" ({csql}) VALUES ({cph}) '
+                        f'ON CONFLICT (unit_id) DO UPDATE SET {cupd}',
+                        vals,
+                    )
+            conn.commit()
+        return {"ok": True, "message": "已同步 1 条到服务器" if row is not None
+                else "已从云端删除该映射"}
+    except Exception as exc:  # 云端异常不应带崩本地编辑流程
+        return {"ok": False, "message": f"同步失败：{exc}"}
+
+
 def restore_unit_pilot_from_cloud(url: str | None = None) -> dict:
-    """把云端 unit_pilot 映射表拉回本地（按 unit_id 覆盖写）。"""
+    """把云端 unit_pilot 合并回本地（按 updated_at 取较新一方，本地独有保留）。
+
+    合并规则：
+    - 云端有新行、本地没有 → 采用云端。
+    - 两边都有 → 比较 updated_at（缺失视为最旧），取较新者。
+    - 本地有、云端没有 → 保留本地（不删除）。
+    这样本地刚做的人工修正不会被一次「服务器同步到本地」覆盖掉。
+    """
     url = direct_cloud_url(url)
     if not url:
         return {"ok": False, "message": "未设置 NEON_DB_URL"}
@@ -1059,28 +1145,52 @@ def restore_unit_pilot_from_cloud(url: str | None = None) -> dict:
         with psycopg.connect(url, connect_timeout=30) as conn:
             with conn.cursor() as cur:
                 cur.execute(UNIT_PILOT_DDL)
+                _ensure_cloud_unit_pilot_columns(cur)
                 cur.execute(f"SELECT {cols} FROM unit_pilot")
-                rows = cur.fetchall()
+                cloud_rows = cur.fetchall()
     except Exception as exc:
         return {"ok": False, "message": f"读取云端失败：{exc}"}
 
-    if not rows:
+    if not cloud_rows:
         return {"ok": False, "message": "云端 unit_pilot 为空"}
 
     con = sqlite3.connect(config.DB_PATH)
+    con.row_factory = sqlite3.Row
     try:
         _ensure_local_unit_pilot(con)
+        local_by_id = {
+            r["unit_id"]: dict(r) for r in con.execute(
+                f"SELECT {', '.join(UNIT_PILOT_COLS)} FROM unit_pilot"
+            )
+        }
+        merged: dict[int, dict] = {}
+        for cr in cloud_rows:
+            d = dict(zip(UNIT_PILOT_COLS, cr))
+            uid = d["unit_id"]
+            local = local_by_id.get(uid)
+            if local is None:
+                merged[uid] = d  # 云端新行
+            else:
+                # 比较更新时间：缺失视为最旧，取较新者
+                cc = d.get("updated_at") or ""
+                lc = local.get("updated_at") or ""
+                merged[uid] = d if cc >= lc else local
+        # 本地独有（云端没有）一律保留
+        for uid, lr in local_by_id.items():
+            merged.setdefault(uid, lr)
         ph = ", ".join(["?"] * len(UNIT_PILOT_COLS))
-        con.executemany(
-            f"INSERT OR REPLACE INTO unit_pilot ({cols}) VALUES ({ph})",
-            [tuple(r) for r in rows],
-        )
+        con.execute("DELETE FROM unit_pilot")
+        for d in merged.values():
+            con.execute(
+                f"INSERT OR REPLACE INTO unit_pilot ({cols}) VALUES ({ph})",
+                [d.get(c) for c in UNIT_PILOT_COLS],
+            )
         con.commit()
         n = con.execute("SELECT COUNT(*) FROM unit_pilot").fetchone()[0]
     finally:
         con.close()
-    return {"ok": True, "downloaded": len(rows), "local_rows": n,
-            "message": f"已从云端恢复 {len(rows)} 行，本地现有 {n} 行"}
+    return {"ok": True, "downloaded": len(cloud_rows), "local_rows": n,
+            "message": f"已从云端合并 {len(cloud_rows)} 行（按 updated_at 取较新），本地现有 {n} 行"}
 
 
 if __name__ == "__main__":

@@ -1800,10 +1800,23 @@ def canonical_assoc(unit_id=None, pilot_id=None) -> dict | None:
     return None
 
 
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _ensure_unit_pilot_columns(conn: sqlite3.Connection) -> None:
+    """老库补列：unit_pilot.updated_at（幂等）。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(unit_pilot)")}
+    if "updated_at" not in cols:
+        conn.execute("ALTER TABLE unit_pilot ADD COLUMN updated_at TEXT")
+        conn.commit()
+
+
 def build_unit_pilot() -> dict:
     """生成 unit → 原作驾驶员 显式映射表，写入 unit_pilot 表。
 
-    返回统计：total / active / mention / role / none。
+    返回统计：total / active / mention / role / none / kept（保留的人工修正）。
+    人工修正（signal='manual'）不会被重建覆盖。
     """
     # 只读的 _conn() 无法写表，这里单独开读写连接
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1813,17 +1826,29 @@ def build_unit_pilot() -> dict:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS unit_pilot ("
         "unit_id INTEGER PRIMARY KEY, pilot_id INTEGER NOT NULL, "
-        "unit_name TEXT, pilot_name TEXT, score INTEGER, signal TEXT)"
+        "unit_name TEXT, pilot_name TEXT, score INTEGER, signal TEXT, "
+        "updated_at TEXT)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_unit_pilot_pilot ON unit_pilot(pilot_id)"
     )
+    _ensure_unit_pilot_columns(conn)
     _build_pilots()
     units = [dict(r) for r in conn.execute(
         "SELECT id, name, desc, role, rarity, series_id, series_ids FROM unit"
     )]
+    # 重建前先取出人工修正行，重建后原样写回（避免 update/build 抹掉手工成果）
+    try:
+        manual_rows = [
+            tuple(r) for r in conn.execute(
+                "SELECT unit_id, pilot_id, unit_name, pilot_name, score, signal, "
+                "updated_at FROM unit_pilot WHERE signal = 'manual'"
+            )
+        ]
+    except sqlite3.OperationalError:
+        manual_rows = []
     rows = []
-    stats = {"total": 0, "active": 0, "mention": 0, "role": 0, "none": 0}
+    stats = {"total": 0, "active": 0, "mention": 0, "role": 0, "none": 0, "kept": 0}
     for u in units:
         r = _find_canonical_pilot(u)
         if not r:
@@ -1843,11 +1868,20 @@ def build_unit_pilot() -> dict:
         stats["total"] += 1
         stats[signal] = stats.get(signal, 0) + 1
     conn.execute("DELETE FROM unit_pilot")
-    conn.executemany(
-        "INSERT INTO unit_pilot (unit_id, pilot_id, unit_name, pilot_name, score, signal) "
-        "VALUES (?,?,?,?,?,?)",
-        rows,
-    )
+    if rows:
+        conn.executemany(
+            "INSERT INTO unit_pilot (unit_id, pilot_id, unit_name, pilot_name, "
+            "score, signal, updated_at) VALUES (?,?,?,?,?,?,NULL)",
+            rows,
+        )
+    if manual_rows:
+        # 人工修正覆盖自动推断结果（含已不存在的机体也保留）
+        conn.executemany(
+            "INSERT OR REPLACE INTO unit_pilot (unit_id, pilot_id, unit_name, "
+            "pilot_name, score, signal, updated_at) VALUES (?,?,?,?,?,?,?)",
+            manual_rows,
+        )
+        stats["kept"] = len(manual_rows)
     conn.commit()
     conn.close()
     return stats

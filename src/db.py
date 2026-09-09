@@ -385,7 +385,8 @@ CREATE TABLE IF NOT EXISTS unit_pilot (
   unit_name TEXT,
   pilot_name TEXT,
   score INTEGER,
-  signal TEXT
+  signal TEXT,
+  updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_unit_pilot_pilot ON unit_pilot(pilot_id);
 """

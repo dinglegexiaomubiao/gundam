@@ -2174,30 +2174,44 @@ def api_unit_pilot_edit(payload: dict) -> dict:
         return {"ok": False, "error": "缺少 unit_id"}
     pilot_id = payload.get("pilot_id")
     conn = _write_conn()
+    deleted = False
     if pilot_id in (None, 0, "", "0"):
         conn.execute("DELETE FROM unit_pilot WHERE unit_id = ?", (unit_id,))
-        conn.commit()
-        conn.close()
-        return {"ok": True, "deleted": True}
-    try:
-        pid = int(pilot_id)
-    except (TypeError, ValueError):
-        conn.close()
-        return {"ok": False, "error": "pilot_id 无效"}
-    pilot = _one(conn, "SELECT name FROM character WHERE id = ?", (pid,))
-    unit = _one(conn, "SELECT name FROM unit WHERE id = ?", (unit_id,))
-    if not pilot or not unit:
-        conn.close()
-        return {"ok": False, "error": "机体或驾驶员不存在"}
-    conn.execute(
-        "INSERT OR REPLACE INTO unit_pilot "
-        "(unit_id, pilot_id, unit_name, pilot_name, score, signal) "
-        "VALUES (?,?,?,?,?,'manual')",
-        (unit_id, pid, unit["name"], pilot["name"], 9999),
-    )
+        deleted = True
+    else:
+        try:
+            pid = int(pilot_id)
+        except (TypeError, ValueError):
+            conn.close()
+            return {"ok": False, "error": "pilot_id 无效"}
+        pilot = _one(conn, "SELECT name FROM character WHERE id = ?", (pid,))
+        unit = _one(conn, "SELECT name FROM unit WHERE id = ?", (unit_id,))
+        if not pilot or not unit:
+            conn.close()
+            return {"ok": False, "error": "机体或驾驶员不存在"}
+        conn.execute(
+            "INSERT OR REPLACE INTO unit_pilot "
+            "(unit_id, pilot_id, unit_name, pilot_name, score, signal, updated_at) "
+            "VALUES (?,?,?,?,?,'manual',?)",
+            (unit_id, pid, unit["name"], pilot["name"], 9999,
+             time.strftime("%Y-%m-%dT%H:%M:%S%z")),
+        )
     conn.commit()
     conn.close()
-    return {"ok": True}
+
+    # 自动同步这一条到云端（单行 upsert / 删除，毫秒级）；云端不可达不阻塞本地编辑
+    synced, sync_msg = False, ""
+    try:
+        from .cloud import push_unit_pilot_row  # 延迟导入，避免循环依赖
+
+        res = push_unit_pilot_row(unit_id)
+        synced = bool(res.get("ok"))
+        sync_msg = res.get("message", "")
+        if not synced and str(res.get("message", "")).startswith("未设置"):
+            sync_msg = ""  # 未配置云端属正常情况，不打扰用户
+    except Exception as exc:
+        sync_msg = f"云端同步失败：{exc}"
+    return {"ok": True, "deleted": deleted, "synced": synced, "sync_message": sync_msg}
 
 
 _UNIT_STAT_KEYS = ("hp", "en", "attack", "defense", "mobility", "movement")
