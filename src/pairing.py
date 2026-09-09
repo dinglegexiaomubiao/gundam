@@ -1736,15 +1736,20 @@ def canonical_assoc(unit_id=None, pilot_id=None) -> dict | None:
     """
     conn = _conn()
     _build_pilots()
+    # 老库可能还没建 unit_pilot 表（未跑过 build_unit_pilot），此时回退到纯启发式
+    has_map = bool(conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='unit_pilot'"
+    ).fetchone())
     if unit_id:
-        row = conn.execute(
-            "SELECT pilot_id FROM unit_pilot WHERE unit_id = ?", (unit_id,)
-        ).fetchone()
-        if row:
-            p = next((x for x in _pilots if x["id"] == row["pilot_id"]), None)
-            conn.close()
-            if p:
-                return {"pilot": _pilot_brief(p)}
+        if has_map:
+            row = conn.execute(
+                "SELECT pilot_id FROM unit_pilot WHERE unit_id = ?", (unit_id,)
+            ).fetchone()
+            if row:
+                p = next((x for x in _pilots if x["id"] == row["pilot_id"]), None)
+                conn.close()
+                if p:
+                    return {"pilot": _pilot_brief(p)}
         unit_row = conn.execute(
             "SELECT * FROM unit WHERE id = ?", (unit_id,)
         ).fetchone()
@@ -1756,18 +1761,19 @@ def canonical_assoc(unit_id=None, pilot_id=None) -> dict | None:
             return None
         return {"pilot": _pilot_brief(r[0])}
     if pilot_id:
-        row = conn.execute(
-            "SELECT unit_id FROM unit_pilot WHERE pilot_id = ? "
-            "ORDER BY score DESC LIMIT 1", (pilot_id,)
-        ).fetchone()
-        if row:
-            u = conn.execute(
-                "SELECT id, name, rarity, role FROM unit WHERE id = ?",
-                (row["unit_id"],),
+        if has_map:
+            row = conn.execute(
+                "SELECT unit_id FROM unit_pilot WHERE pilot_id = ? "
+                "ORDER BY score DESC LIMIT 1", (pilot_id,)
             ).fetchone()
-            conn.close()
-            if u:
-                return {"unit": _unit_brief(dict(u))}
+            if row:
+                u = conn.execute(
+                    "SELECT id, name, rarity, role FROM unit WHERE id = ?",
+                    (row["unit_id"],),
+                ).fetchone()
+                conn.close()
+                if u:
+                    return {"unit": _unit_brief(dict(u))}
         pilot = next((p for p in _pilots if p["id"] == int(pilot_id)), None)
         if not pilot:
             conn.close()

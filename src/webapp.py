@@ -2124,10 +2124,21 @@ def api_supporter_panel() -> list:
     return out
 
 
+def _unit_pilot_ready(conn) -> bool:
+    """unit_pilot 映射表是否已建好（老库或未跑构建脚本时为 False）。"""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='unit_pilot'"
+    ).fetchone()
+    return bool(row)
+
+
 def api_unit_pilot_list(signal: str = "", q: str = "", limit: int = 50,
                         offset: int = 0) -> dict:
     """原作映射表列表（可按 signal 筛选、按机体/驾驶员名搜索）。"""
     conn = _conn()
+    if not _unit_pilot_ready(conn):
+        conn.close()
+        return {"total": 0, "items": [], "needs_build": True}
     where = []
     args = []
     if signal:
