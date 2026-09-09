@@ -454,6 +454,17 @@ textarea.edit-input { width: 240px; min-height: 40px; resize: vertical; font-fam
   display: grid; grid-template-columns: 2fr 60px 80px 1.5fr 1.5fr 1fr 1fr;
   gap: 8px; align-items: center; padding: 6px 12px;
 }
+.picker-list .picker-row.picker-row-sup {
+  display: block; padding: 6px 12px;
+}
+.picker-list .picker-row.picker-row-sup .row-line {
+  display: flex; gap: 8px; align-items: baseline; line-height: 1.5;
+  font-size: 12px;
+}
+.picker-list .picker-row.picker-row-sup .row-line:first-child {
+  font-size: 13px;
+}
+.picker-list .picker-row.picker-row-sup .row-line .name { font-weight: 600; }
 .picker-head > * { border-left: 1px solid var(--line); padding: 0 6px; text-align: center; }
 .picker-head > *:first-child { border-left: none; }
 .picker-head .picker-sort {

@@ -1368,6 +1368,23 @@ def api_tags(kind: str) -> list:
         rows = conn.execute("SELECT tags FROM character WHERE tags != '[]'")
     elif kind == "supporter":
         rows = conn.execute("SELECT tags FROM supporter WHERE tags != '[]'")
+    elif kind == "supporter_cond":
+        # 队长技能「影响词条对象」用到的标签（来自 leader 条件的 unit_tags）
+        tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
+        rows = conn.execute(
+            "SELECT traits FROM supporter_skill WHERE skill_type = 'leader'"
+        )
+        seen: set[str] = set()
+        for (traits,) in rows:
+            for t in _json_list(traits):
+                for c in (t.get("trait_condition") or []):
+                    for x in str(c.get("unit_tags") or "").split(","):
+                        if x.strip().isdigit():
+                            nm = tag_by_id.get(int(x))
+                            if nm:
+                                seen.add(nm)
+        conn.close()
+        return sorted(seen)
     else:
         conn.close()
         return []
@@ -3142,7 +3159,8 @@ SUPPORTER_SORT_KEYS = {
 
 
 def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: str,
-                   sort: str, order: str, limit: int, offset: int) -> dict:
+                   sort: str, order: str, limit: int, offset: int,
+                   affected_tags: str = "") -> dict:
     conn = _conn()
     tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
     series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
@@ -3174,8 +3192,8 @@ def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: st
             r["tags"] = []
     leader_traits: dict[int, list[str]] = {}
     for sid, traits in conn.execute(
-        "SELECT supporter_id, traits FROM supporter_skill "
-        "WHERE skill_type = 'leader' ORDER BY limit_break_step"
+        "SELECT DISTINCT supporter_id, traits FROM supporter_skill "
+        "WHERE skill_type = 'leader'"
     ):
         leader_traits.setdefault(sid, []).append(traits or "")
     active_skills: dict[int, list[str]] = {}
@@ -3185,6 +3203,29 @@ def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: st
     ):
         if name not in active_skills.setdefault(sid, []):
             active_skills[sid].append(name)
+    # 各突破阶段队长技加成%（供选择器/伤害计算使用）
+    panel_pcts: dict[int, list[int]] = {}
+    for sid, step, traits in conn.execute(
+        "SELECT supporter_id, limit_break_step, traits FROM supporter_skill "
+        "WHERE skill_type = 'leader'"
+    ):
+        p = panel_pcts.setdefault(sid, [0, 0, 0, 0])
+        si = min(max(int(step or 0), 0), 3)
+        for t in _json_list(traits):
+            tv = (t.get("trait_content") or {}).get("trait_value") or {}
+            try:
+                v = int(tv.get("value") or 0)
+            except (TypeError, ValueError):
+                v = 0
+            if v > p[si]:
+                p[si] = v
+    for p in panel_pcts.values():
+        last = 0
+        for i in range(4):
+            if p[i]:
+                last = p[i]
+            else:
+                p[i] = last
     conn.close()
 
     def cond_groups_for(sid: int) -> list[dict]:
@@ -3205,6 +3246,22 @@ def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: st
             len(r["condition_tags"]),
             " ".join(c["text"] for c in r["condition_tags"]),
         )
+        pcts = panel_pcts.get(r["id"], [0, 0, 0, 0])
+        r["leader_pcts"] = pcts
+        r["leader_pct"] = max(pcts)
+        r["atk_add"] = r["atk"]
+        r["conds"] = [c["text"] for c in r["condition_tags"]]
+    # 影响词条对象（队长技能条件标签）过滤
+    if affected_tags:
+        wanted = {t.strip() for t in affected_tags.split(",") if t.strip()}
+        if wanted:
+            rows = [
+                r for r in rows
+                if wanted.intersection(
+                    set().union(*[set(c.get("tags") or []) for c in r["condition_tags"]])
+                    or set()
+                )
+            ]
     if sort in SUPPORTER_SORT_KEYS:
         key = SUPPORTER_SORT_KEYS[sort]
         rows.sort(
@@ -3225,12 +3282,23 @@ def api_supporter_detail(sup_id: int) -> dict | None:
         return None
     tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
     series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
-    skills = _all(
+    raw_skills = _all(
         conn,
         "SELECT * FROM supporter_skill WHERE supporter_id = ? ORDER BY limit_break_step, skill_type",
         (sup_id,),
     )
     conn.close()
+    # 数据源存在同一 (突破阶段, 技能类型, traits) 的多份重复行，
+    # 直接累积会让队长技能文案在模态框被无意义重复，先按关键列去重。
+    seen_keys: set[tuple] = set()
+    skills: list[dict] = []
+    for sk in raw_skills:
+        key = (sk.get("limit_break_step"), sk.get("skill_type"),
+               sk.get("traits"), sk.get("name"), sk.get("desc"))
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        skills.append(sk)
     s["tags"] = _json_list(s.get("tags"))
     active: dict[str, dict] = {}
     leader: dict[int, dict] = {}
@@ -4224,7 +4292,7 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("tag_mode", ["any"])[0],
                 q.get("skills", [""])[0], q.get("skill_mode", ["any"])[0],
                 q.get("sort", [""])[0], q.get("order", ["desc"])[0],
-                limit, offset))
+                limit, offset, q.get("affected_tags", [""])[0]))
         if path == "/api/search":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)

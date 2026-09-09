@@ -2991,24 +2991,39 @@ const calcSel = {
   abInit: { atkU: false, atkP: false, defU: false, defP: false },
 };
 const calcSeq = { n: 0 };
-const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", tag_mode: "any", acq: "", wfx: "", wfx_mode: "any", skills: "", skill_mode: "any", support: "", sort: "rarity", order: "desc", page: 0, size: 20, onPick: null };
+const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", tag_mode: "any", acq: "", wfx: "", wfx_mode: "any", skills: "", skill_mode: "any", support: "", affectedTags: "", sort: "rarity", order: "desc", page: 0, size: 20, onPick: null };
 
 async function initPickerTagBox(kind) {
-  if (kind !== "unit" && kind !== "pilot") return;
+  if (kind !== "unit" && kind !== "pilot" && kind !== "supporter") return;
+  if (kind === "supporter") {
+    // 支援角色：标签框搜索「影响词条对象」（队长技能条件标签）
+    const t = await api("/api/tags?kind=supporter_cond");
+    initCombobox("#picker-tag-box", t.map((x) => ({ value: x, label: x })),
+      () => pickerState.affectedTags, (v) => { pickerState.affectedTags = String(v); }, true);
+    return;
+  }
   const t = await api(`/api/tags?kind=${kind === "unit" ? "unit" : "character"}`);
   initCombobox("#picker-tag-box", t.map((x) => ({ value: x, label: x })),
     () => pickerState.tags, (v) => { pickerState.tags = String(v); }, true);
 }
 
 function togglePickerFilters() {
-  const show = pickerState.source === "library" && (pickerState.kind === "unit" || pickerState.kind === "pilot");
-  const isUnit = show && pickerState.kind === "unit";
-  const isPilot = show && pickerState.kind === "pilot";
-  ["#picker-rarity", "#picker-type", "#picker-series-box", "#picker-tag-box", "#picker-tag-mode"].forEach((sel) => {
+  const isUnit = pickerState.kind === "unit" && pickerState.source === "library";
+  const isPilot = pickerState.kind === "pilot" && pickerState.source === "library";
+  const isSupporter = pickerState.kind === "supporter" && pickerState.source === "library";
+  const show = isUnit || isPilot || isSupporter;
+  // 通用：稀有度 + 标签 + 多标签模式（机体/驾驶员/支援角色都显示）
+  ["#picker-rarity", "#picker-tag-box", "#picker-tag-mode"].forEach((sel) => {
     $(sel).classList.toggle("hidden", !show);
   });
+  // 机体/驾驶员专属
+  ["#picker-type", "#picker-series-box"].forEach((sel) => $(sel).classList.toggle("hidden", !isUnit && !isPilot));
   ["#picker-acq", "#picker-wfx-box"].forEach((sel) => $(sel).classList.toggle("hidden", !isUnit));
   ["#picker-skill-box", "#picker-support"].forEach((sel) => $(sel).classList.toggle("hidden", !isPilot));
+  // 支援角色不显示类型/系列（无意义）
+  if (isSupporter) {
+    ["#picker-type", "#picker-series-box"].forEach((sel) => $(sel).classList.add("hidden"));
+  }
 }
 
 async function openPicker(kind, onPick, side, weaponUnit, opts) {
@@ -3017,7 +3032,7 @@ async function openPicker(kind, onPick, side, weaponUnit, opts) {
     kind, side: side || "", q: "", source: "library",
     rarity: "", type: "", series: "", tags: "",
     tag_mode: "any", acq: "", wfx: "", wfx_mode: "any",
-    skills: "", skill_mode: "any", support: "",
+    skills: "", skill_mode: "any", support: "", affectedTags: "",
     sort: "rarity", order: "desc", page: 0, onPick,
     weaponUnit: weaponUnit || null,
   });
@@ -3172,29 +3187,16 @@ async function loadPicker(page = pickerState.page) {
     $("#picker-pager").innerHTML = "";
     return;
   }
-  if (s.kind === "supporter") {
-    const d = await api("/api/supporter-panel");
-    const kw = s.q.trim();
-    const list = d.filter((x) => !kw || x.name.includes(kw));
-    $("#picker-list").innerHTML = list.length ? list.map((x) => `
-      <div class="picker-row" data-i="${x.id}">
-        <span class="name">${rarityBadge(x.rarity)} ${esc(x.name)}</span>
-        <span class="muted">队长技 +${x.leader_pct}% · 固定攻击 +${x.atk_add}</span>
-      </div>`).join("") : '<div class="empty">无匹配支援角色</div>';
-    $("#picker-list").querySelectorAll(".picker-row").forEach((r) =>
-      r.addEventListener("click", () => {
-        const x = list.find((y) => String(y.id) === r.dataset.i);
-        $("#picker-modal").classList.add("hidden");
-        s.onPick(x);
-      }));
-    $("#picker-pager").innerHTML = "";
-    return;
-  }
-  const ep = s.kind === "unit" ? "units" : "pilots";
+  const ep = s.kind === "unit" ? "units" : s.kind === "supporter" ? "supporters" : "pilots";
   const params = new URLSearchParams({
-    q: s.q, source: s.source, limit: s.size, offset: s.page * s.size,
+    q: s.q, limit: s.size, offset: s.page * s.size,
   });
-  if (s.source === "library") {
+  if (s.kind === "supporter") {
+    // 支援角色选择器：按名称 + 影响词条对象 + 稀有度 过滤（走 /api/supporters）
+    if (s.rarity) params.set("rarity", s.rarity);
+    params.set("affected_tags", s.affectedTags);
+    params.set("tag_mode", s.tag_mode);
+  } else if (s.source === "library") {
     params.set("rarity", s.rarity);
     params.set("type", s.type);
     params.set("series", s.series);
@@ -3212,10 +3214,24 @@ async function loadPicker(page = pickerState.page) {
   }
   params.set("sort", s.sort);
   params.set("order", s.order);
-  const d = await api(`/api/picker/${ep}?` + params);
+  const d = await api(`/api/${ep}?` + params);
   const isEntity = s.kind === "unit" || s.kind === "pilot";
+  const isSupporter = s.kind === "supporter";
   const statLabel = { ranged: "射击值", melee: "格斗值", awaken: "觉醒值" };
   const body = d.items.map((it) => {
+    if (isSupporter) {
+      const bonus = [];
+      if (it.leader_pct) bonus.push(`队长技 +${it.leader_pct}%`);
+      if (it.atk_add) bonus.push(`攻击 +${it.atk_add}`);
+      if (it.hp) bonus.push(`HP +${it.hp}`);
+      const conds = (it.condition_tags || []).map((c) => c.text || "").filter(Boolean);
+      return `<div class="picker-row picker-row-sup" data-i="${it.id}">
+        <div class="row-line"><span class="name">${rarityBadge(it.rarity)} ${esc(it.name)}</span></div>
+        ${bonus.length ? `<div class="row-line muted">${bonus.map(esc).join(" · ")}</div>` : ""}
+        ${it.active_skill ? `<div class="row-line"><span class="muted">主动：</span><span>${esc(it.active_skill)}</span></div>` : ""}
+        ${conds.length ? `<div class="row-line"><span class="muted">影响词条：</span><span>${esc(conds.join(" / "))}</span></div>` : ""}
+      </div>`;
+    }
     if (!isEntity) {
       return `<div class="picker-row" data-i="${it.id}">
         <span class="name">${esc(it.name)}</span>
