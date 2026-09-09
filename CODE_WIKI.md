@@ -129,14 +129,18 @@ gundam/
 │   ├── damage.py               # 伤害计算器（formulas.docx 公式实现）
 │   ├── pairing.py              # 配对推荐引擎（机体↔驾驶员）
 │   └── webapp.py               # 本地 Web 查看器（HTTP 服务 + API）
-├── scripts/                    # 命令行入口
+├── scripts/                    # 命令行入口（8 个）
 │   ├── pipeline.py             # 主流水线入口（fetch/build/verify/update/serve…）
 │   ├── migrate_cloud.py        # 本地 → 云端迁移
 │   ├── migrate_schema.py       # 本地数据库结构升级（幂等）
+│   ├── migrate_ssp_fields.py   # 回填 unit 表 ssp_* 属性
+│   ├── migrate_conditional_bonuses.py  # 重算 conditional_bonuses 派生列
+│   ├── build_unit_pilot.py     # 机体 × 驾驶员组合数据构建
 │   ├── status.py               # 查看抓取进度
-│   └── damage_demo.py          # 伤害计算命令行演示
+│   ├── damage_demo.py          # 伤害计算命令行演示
+│   └── _scratch/               # 25 个一次性调试脚本归档（非日常入口）
 ├── web/                        # 前端静态资源
-│   ├── index.html              # 单页应用（8 个 Tab）
+│   ├── index.html              # 单页应用（10 个 Tab）
 │   ├── app.js                  # 前端逻辑（~ 大量异步函数）
 │   └── style.css               # 样式
 ├── data/                       # 运行时数据（git 忽略）
@@ -246,7 +250,8 @@ gundam/
 - 同一 `group_id` 的多 trait 按「并集」处理：命中任一即触发，同效果只取最高，避免重复叠加；
 - 驾驶员属性：UR 用默认形态满级；非 UR 用 SP 形态满级（100 级）；
 - 支持「反击援防」「额外行动」「HP恢复」「叠层防御」等特殊机制识别；
-- `_apply_pair_filters` 支持驾驶员搜索筛选（名称/稀有度/类型/系列/标签/技能/支援）与多字段排序。
+- `_apply_pair_filters` 支持驾驶员搜索筛选（名称/稀有度/类型/系列/标签/技能/支援）与多字段排序；
+- **组队评分** `team_score()`：一次评估多支队伍（详见 [10.9](#109-组队评分)）。
 
 ### 4.11 `src/webapp.py` — 本地 Web 查看器
 
@@ -268,10 +273,16 @@ gundam/
 | [migrate_schema.py](file:///e:/lzf/1_study/gundam/scripts/migrate_schema.py) | 本地数据库结构升级（武器 lv9 列、编辑历史表，幂等） |
 | [status.py](file:///e:/lzf/1_study/gundam/scripts/status.py) | 查看抓取进度（进程状态 + 文件计数 + 日志尾部） |
 | [damage_demo.py](file:///e:/lzf/1_study/gundam/scripts/damage_demo.py) | 伤害计算命令行演示 |
+| [migrate_ssp_fields.py](file:///e:/lzf/1_study/gundam/scripts/migrate_ssp_fields.py) | 回填 unit 表 `ssp_*` 属性 + 补 `ssp_terrain` 列（见 10.10） |
+| [migrate_conditional_bonuses.py](file:///e:/lzf/1_study/gundam/scripts/migrate_conditional_bonuses.py) | 重算机体/驾驶员的 `conditional_bonuses` 派生列（见 10.11） |
+| [build_unit_pilot.py](file:///e:/lzf/1_study/gundam/scripts/build_unit_pilot.py) | 机体 × 驾驶员组合数据构建 |
+
+> `scripts/_scratch/` 存放 25 个一次性调试脚本（`_analyze_*` / `_verify_*` / `_test_*` / `_check_ssp*`），
+> 均为排查单个机体或验证公式时的临时产物，已从 `scripts/` 与仓库根目录归档至此，不属于日常使用入口。
 
 ### 4.13 `web/` — 前端单页应用
 
-- `index.html`：8 个 Tab（概览 / 机体 / 驾驶员 / 支援角色 / 关卡敌人 / 技能·能力·效果 / 伤害计算 / 配对）；
+- `index.html`：**10 个 Tab**（概览 / 机体 / 驾驶员 / 支援角色 / 关卡敌人 / 技能·能力·效果 / 伤害计算 / 配对 / **组队** / **原作映射**）；
 - `app.js`：原生 JavaScript，通过 `fetch` 调用后端 API，包含 `api(path)`、`loadSummary()`、`openSyncDiff(direction)` 等大量异步函数；
 - `style.css`：样式表。
 
@@ -624,6 +635,7 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 #### 配对与伤害
 - `GET /api/pairing/match?unit_id=&action=attack|defense&weapon_id=&bench=low|mid&...` — 配对推荐
 - `GET /api/pairing/default-enemy` — 默认敌方
+- `POST /api/team/score` — 组队评分，body：`{pairs:[{unit_id,star,pilot_id,weapon_id}], supporter_id, break_step, bench, custom_enemy}`（详见 [10.9](#109-组队评分)）
 - `GET /api/damage?aua=&aca=&dud=&dcd=&wp=&terrain=&vigor=&critical=&buff=&debuff=...` — 单次伤害计算
 - `GET /api/damage-sim?...` — 多次伤害模拟
 - `GET /api/damage-bonus?atk_uid=&atk_pid=&def_uid=&def_pid=&weapon_attr=&attack_attr=...` — 含能力加成的完整伤害计算
@@ -838,6 +850,60 @@ python scripts/damage_demo.py
 - 云端恢复：已恢复表不重复下载，失败表最多重试 3 轮；
 - 原子写：JSON 先写 `.tmp` 再 `replace`，避免中断产生半个文件。
 
+### 10.9 组队评分
+
+前端「组队」Tab 可新增多支队伍，每支队伍配置：机体 + 星级 + 驾驶员 + 武器，
+并统一指定支援角色（`supporter_id`）与敌方基准（`bench`），一次提交算出全部队伍的最终数值。
+
+- **接口**：`POST /api/team/score`（`src/webapp.py` 路由 → `pairing.team_score()`）
+- **入参**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `pairs` | 数组 | 每项 `{unit_id, star, pilot_id, weapon_id}`，`star` 默认 3 |
+| `supporter_id` | int | 可选，支援角色；省略则不计支援加成 |
+| `break_step` | int | 突破档位，默认 3 |
+| `bench` | str | `low` 低防本 / `mid` 中防本 / `custom` 自定义 |
+| `custom_enemy` | obj | `bench=custom` 时提供 `{unit_defense, character_defense}` |
+
+- **出参**：`pairs` 中每组返回机体攻/防/HP/机动、驾驶员五项有效值、所选武器对基准敌人的单次伤害
+  （未选武器为 `null`）；机体不存在时该项返回 `{"error": "机体不存在"}`。
+- **数值口径**
+  - 攻击/防御/HP/机动 = 星级基础值 × (1 + 无条件% + 已命中条件% + 支援全能力%) + 支援固定值
+  - 驾驶员五项 = 有效值（无条件% + 已命中条件%）
+  - 武器伤害 = 对基准敌人的单次伤害，与配对页同一套伤害公式
+  - 支援「全能力值」只对词条对象（系列/标签）命中的机体生效
+- **特殊处理**：带「终极」标签的机体强制按 0 星计算（`ULTIMATE_TAG`）。
+- **敌方基准档位**（`PAIR_BENCH`，`src/pairing.py`）：低防本 机体防御 1060 / 驾驶员防御 109；
+  中防本 机体防御 25072 / 驾驶员防御 705。
+
+### 10.10 SSP 形态
+
+SSP（Super SP）是部分机体在 SP 之上的最终形态，属性与技能均可能与 SP 不同。
+
+- **数据位置**：原始 JSON 中 SSP 属性位于 `unit.ssp_config.stats`（字段名为 `ssp_hp` / `ssp_max_hp` …），
+  **不在** `unit.stats` 里——早期 `ingest_units` 曾误从 `stats` 读取，导致低稀有度机体的 `ssp_*` 全为空，
+  已由 `scripts/migrate_ssp_fields.py` 回填修正。
+- **入库列**：`unit` 表 `ssp_hp/en/attack/defense/mobility/movement` 与 `ssp_max_*` 共 12 列，
+  外加 `ssp_terrain`（JSON）。
+- **派生逻辑**（`_collect_ssp_overrides()`，`src/db.py`）：除属性外，还从 `ssp_config` 提取
+  地形适配、武器替换/新增、能力替换等覆盖项。
+- **取值规则**：`ssp_st.get("ssp_hp") or st.get("ssp_hp")`，即优先用 SSP 覆盖值，缺失时回落到原字段；
+  当前数据未收录 SSP 时按 SP 数值显示并在界面提示。
+- **武器**：SSP 武器特效可到 LV9（普通武器上限 LV5）。
+
+### 10.11 条件能力加成
+
+- 能力与技能的触发条件来自原始 JSON 的 `active_condition`（标签/系列/HP/战意/防御姿态等）。
+- 入库时由 `src/db.py` 解析并写入派生列 `conditional_bonuses`（JSON 数组，机体与驾驶员表均有），
+  与无条件加成 `stat_bonuses` 分开存储。
+- **前端判定**：`web/app.js` 按当前上下文过滤——机体侧按标签/系列匹配
+  （`u.conditional_bonuses.filter(...)`），驾驶员侧按能力字段名命中
+  （`charView.c.conditional_bonuses.filter(r => r.values?.[fk] != null)`）。
+- 配对/组队/伤害计算中，条件加成只在条件成立时计入；
+  界面「查看条件加成」展示达成后的数值。
+- 需要全量重算该列时运行 `scripts/migrate_conditional_bonuses.py`（幂等）。
+
 ---
 
 ## 11. 故障排查与维护
@@ -852,6 +918,7 @@ python scripts/damage_demo.py
 | Web 打开是空库 | 概览页「导入数据库」或「爬取数据」，或 `pipeline.py restore` 从云端恢复 |
 | 云端连接被拦截（10013） | 在普通终端运行，或放行防火墙/安全软件后重试同步 |
 | 云端连接超时 | 检查网络；`restore_local_db_from_cloud` 单表 180s 硬超时，超时直接杀子进程 |
+| 机体/驾驶员模态框打不开、页面报 `API 500`；原作映射空白 | 缺 `unit_pilot` 映射表（老库未跑过构建）。执行 `python scripts/build_unit_pilot.py` 建表并填充；`build_db()` 结尾也会自动调用 |
 
 ### 11.2 维护节奏
 
