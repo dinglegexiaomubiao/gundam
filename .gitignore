@@ -3,6 +3,7 @@ __pycache__/
 *.tmp
 data/raw/
 data/db/
+data/*.db
 data/meta/
 .env
 .venv/
