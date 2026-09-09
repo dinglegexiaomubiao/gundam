@@ -3332,6 +3332,26 @@ def api_supporter_detail(sup_id: int) -> dict | None:
         [ls["branches"] for ls in leader.values()]
     )
     s["condition_tags"] = s["cond_groups"]
+    # 按突破阶段计算满级 HP/ATK 加成：base × correction_rate[step, level=100] / 10000
+    base_hp = s.get("max_hp_addition_value") or 0
+    base_atk = s.get("max_attack_addition_value") or 0
+    growth_rows = _all(
+        conn2 := _conn(),
+        "SELECT limit_break, correction_rate FROM supporter_growth "
+        "WHERE level = 100",
+    )
+    conn2.close()
+    rate_by_step = {int(r["limit_break"]): int(r["correction_rate"]) for r in growth_rows}
+    add_by_step: dict[int, dict] = {}
+    for step in sorted(rate_by_step):
+        rate = rate_by_step[step]
+        add_by_step[step] = {
+            "step": step,
+            "hp": round(base_hp * rate / 10000),
+            "atk": round(base_atk * rate / 10000),
+            "rate": rate,
+        }
+    s["add_by_step"] = [add_by_step[k] for k in sorted(add_by_step)]
     return s
 
 

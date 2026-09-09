@@ -2814,7 +2814,8 @@ async function openSupporter(id) {
     `<p class="desc">${esc(s.obtained_word || s.desc || "暂无描述")}</p>
      <h3>加成</h3>
      <table><tr><th>最大 HP 加成</th><th>最大攻击加成</th><th>稀有度</th></tr>
-       <tr><td class="mono">+${s.max_hp_addition_value}</td><td class="mono">+${s.max_attack_addition_value}</td>
+       <tr id="sup-add-row"><td class="mono" id="sup-add-hp">+${(s.add_by_step && s.add_by_step.length) ? s.add_by_step[s.add_by_step.length-1].hp : (s.max_hp_addition_value||0)}</td>
+         <td class="mono" id="sup-add-atk">+${(s.add_by_step && s.add_by_step.length) ? s.add_by_step[s.add_by_step.length-1].atk : (s.max_attack_addition_value||0)}</td>
          <td>${rarityBadge(s.rarity)}</td></tr></table>
      <h3>主动技能</h3>
      ${(s.active_skills || []).length ? `<div class="skills">${s.active_skills.map((a) => `
@@ -2876,8 +2877,21 @@ function bindSupporterLeaderBar() {
     b.addEventListener("click", () => {
       document.querySelectorAll("#sup-lb-bar .star-btn").forEach((x) =>
         x.classList.toggle("active", x === b));
-      renderSupporterLeaderStep(b.dataset.step);
+      const step = Number(b.dataset.step);
+      renderSupporterLeaderStep(step);
+      renderSupporterAddRow(step);
     }));
+}
+
+function renderSupporterAddRow(step) {
+  const s = currentSupporter;
+  if (!s || !s.add_by_step || !s.add_by_step.length) return;
+  const rec = s.add_by_step.find((x) => x.step === step)
+    || s.add_by_step[s.add_by_step.length - 1];
+  const hpEl = $("#sup-add-hp");
+  const atkEl = $("#sup-add-atk");
+  if (hpEl) hpEl.textContent = `+${rec.hp}`;
+  if (atkEl) atkEl.textContent = `+${rec.atk}`;
 }
 
 /* ---------- 技能 / 能力 / 武装效果 查询 ---------- */
