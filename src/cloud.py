@@ -40,6 +40,8 @@ TABLE_ORDER = [
     "tower_stage",
     "stage_map_npc",
     "stage_map_npc_character",
+    # 机体 → 原作驾驶员映射（含人工修正 signal='manual'），随同步一起上云
+    "unit_pilot",
 ]
 
 
@@ -963,6 +965,122 @@ def _fetch_table_cli(tname: str, outfile: Path) -> int:
     with open(outfile, "wb") as f:
         pickle.dump((cols, [tuple(r) for r in rows]), f)
     return 0
+
+
+UNIT_PILOT_DDL = (
+    "CREATE TABLE IF NOT EXISTS unit_pilot ("
+    "unit_id INTEGER PRIMARY KEY, pilot_id INTEGER NOT NULL, "
+    "unit_name TEXT, pilot_name TEXT, score INTEGER, signal TEXT)"
+)
+UNIT_PILOT_COLS = ["unit_id", "pilot_id", "unit_name", "pilot_name", "score", "signal"]
+
+
+def _ensure_local_unit_pilot(con: sqlite3.Connection) -> None:
+    con.execute(UNIT_PILOT_DDL)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_unit_pilot_pilot ON unit_pilot(pilot_id)"
+    )
+    con.commit()
+
+
+def upload_unit_pilot_to_cloud(url: str | None = None) -> dict:
+    """只上传 unit_pilot 原作映射表到云端（建表 + 按 unit_id 覆盖写）。
+
+    整库迁移要重传 190MB，映射表只有 1 千多行，单独同步更快。
+    人工修正（signal='manual'）也会一并上传，换机器不丢。
+    """
+    url = direct_cloud_url(url)
+    if not url:
+        return {"ok": False, "message": "未设置 NEON_DB_URL"}
+    if not config.DB_PATH.exists():
+        return {"ok": False, "message": f"本地数据库不存在: {config.DB_PATH}"}
+
+    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    try:
+        has = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='unit_pilot'"
+        ).fetchone()
+        if not has:
+            return {"ok": False, "message": "本地无 unit_pilot 表，先跑 scripts/build_unit_pilot.py"}
+        rows = con.execute(
+            "SELECT unit_id, pilot_id, unit_name, pilot_name, score, signal "
+            "FROM unit_pilot"
+        ).fetchall()
+    finally:
+        con.close()
+
+    if not rows:
+        return {"ok": False, "message": "本地 unit_pilot 为空，无可上传数据"}
+
+    import psycopg  # 延迟导入
+
+    cols = ", ".join(f'"{c}"' for c in UNIT_PILOT_COLS)
+    ph = ", ".join(["%s"] * len(UNIT_PILOT_COLS))
+    upd = ", ".join(
+        f'"{c}"=EXCLUDED."{c}"' for c in UNIT_PILOT_COLS if c != "unit_id"
+    )
+    try:
+        with psycopg.connect(url, connect_timeout=30) as conn:
+            conn.autocommit = False
+            with conn.cursor() as cur:
+                cur.execute(UNIT_PILOT_DDL)
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_unit_pilot_pilot "
+                    "ON unit_pilot(pilot_id)"
+                )
+                cur.executemany(
+                    f"INSERT INTO unit_pilot ({cols}) VALUES ({ph}) "
+                    f"ON CONFLICT (unit_id) DO UPDATE SET {upd}",
+                    [tuple(r) for r in rows],
+                )
+                cur.execute("SELECT COUNT(*) FROM unit_pilot")
+                cloud_n = cur.fetchone()[0]
+            conn.commit()
+        return {
+            "ok": True,
+            "uploaded": len(rows),
+            "cloud_rows": cloud_n,
+            "message": f"unit_pilot 已上传 {len(rows)} 行，云端现有 {cloud_n} 行",
+        }
+    except Exception as exc:  # 云端异常不应带崩本地流程
+        return {"ok": False, "message": f"上传失败：{exc}"}
+
+
+def restore_unit_pilot_from_cloud(url: str | None = None) -> dict:
+    """把云端 unit_pilot 映射表拉回本地（按 unit_id 覆盖写）。"""
+    url = direct_cloud_url(url)
+    if not url:
+        return {"ok": False, "message": "未设置 NEON_DB_URL"}
+
+    import psycopg  # 延迟导入
+
+    cols = ", ".join(f'"{c}"' for c in UNIT_PILOT_COLS)
+    try:
+        with psycopg.connect(url, connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(UNIT_PILOT_DDL)
+                cur.execute(f"SELECT {cols} FROM unit_pilot")
+                rows = cur.fetchall()
+    except Exception as exc:
+        return {"ok": False, "message": f"读取云端失败：{exc}"}
+
+    if not rows:
+        return {"ok": False, "message": "云端 unit_pilot 为空"}
+
+    con = sqlite3.connect(config.DB_PATH)
+    try:
+        _ensure_local_unit_pilot(con)
+        ph = ", ".join(["?"] * len(UNIT_PILOT_COLS))
+        con.executemany(
+            f"INSERT OR REPLACE INTO unit_pilot ({cols}) VALUES ({ph})",
+            [tuple(r) for r in rows],
+        )
+        con.commit()
+        n = con.execute("SELECT COUNT(*) FROM unit_pilot").fetchone()[0]
+    finally:
+        con.close()
+    return {"ok": True, "downloaded": len(rows), "local_rows": n,
+            "message": f"已从云端恢复 {len(rows)} 行，本地现有 {n} 行"}
 
 
 if __name__ == "__main__":

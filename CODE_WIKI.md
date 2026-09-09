@@ -275,6 +275,7 @@ gundam/
 | [damage_demo.py](file:///e:/lzf/1_study/gundam/scripts/damage_demo.py) | 伤害计算命令行演示 |
 | [migrate_ssp_fields.py](file:///e:/lzf/1_study/gundam/scripts/migrate_ssp_fields.py) | 回填 unit 表 `ssp_*` 属性 + 补 `ssp_terrain` 列（见 10.10） |
 | [migrate_conditional_bonuses.py](file:///e:/lzf/1_study/gundam/scripts/migrate_conditional_bonuses.py) | 重算机体/驾驶员的 `conditional_bonuses` 派生列（见 10.11） |
+| [migrate_unit_pilot.py](file:///e:/lzf/1_study/gundam/scripts/migrate_unit_pilot.py) | 单独同步 `unit_pilot` 原作映射表到云端 / 拉回本地（默认上传，`--down` 反向） |
 | [build_unit_pilot.py](file:///e:/lzf/1_study/gundam/scripts/build_unit_pilot.py) | 机体 × 驾驶员组合数据构建 |
 
 > `scripts/_scratch/` 存放 25 个一次性调试脚本（`_analyze_*` / `_verify_*` / `_test_*` / `_check_ssp*`），
@@ -903,6 +904,21 @@ SSP（Super SP）是部分机体在 SP 之上的最终形态，属性与技能�
 - 配对/组队/伤害计算中，条件加成只在条件成立时计入；
   界面「查看条件加成」展示达成后的数值。
 - 需要全量重算该列时运行 `scripts/migrate_conditional_bonuses.py`（幂等）。
+
+### 10.12 原作映射表 `unit_pilot` 与云端存储
+
+`unit_pilot` 保存「机体 → 原作驾驶员」的映射，是原作映射 Tab 与机体/驾驶员模态框
+`/api/canonical` 的数据源（详见 [10.9](#109-组队评分) 同节的 canonical 说明）。
+
+- **字段**：`unit_id`（主键）/ `pilot_id` / `unit_name` / `pilot_name` / `score` / `signal`
+  （`active` 主动驾驶 > `mention` 名字出现 > `role` 系列类型兜底 > `manual` 人工修正）
+- **生成**：`scripts/build_unit_pilot.py`，`build_db()` 结尾也会自动调用一次；
+  老库缺这张表时 `/api/canonical` 会自动回退纯启发式，不会 500。
+- **云端存储**：该表已加入 `cloud.TABLE_ORDER`，整库迁移（`migrate_cloud.py`）会带上它；
+  只想同步这一张表时用 `scripts/migrate_unit_pilot.py`（默认本地→云端，`--down` 反向），
+  按 `unit_id` 覆盖写（upsert），无需重传 190MB 整库。
+- **人工修正**：直接改本地 `unit_pilot` 行（建议 `signal='manual'` 标记），
+  再跑一次 `migrate_unit_pilot.py` 即可同步到服务器；代码逻辑是显式表优先于启发式。
 
 ---
 
