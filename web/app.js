@@ -4431,6 +4431,10 @@ async function runPairMatch() {
   const u = pairState.unit;
   if (!u) { msg.textContent = "请先选择机体"; return; }
   if (pairState.action === "attack" && !pairState.weapon) { msg.textContent = "请先选择武器"; return; }
+  /* 防御模式的敌方威力是必需的：为 0 时后端单次伤害恒为 0，无法算出可承受次数 */
+  if (pairState.action === "defense" && renderEnemyPower() <= 0) {
+    msg.textContent = "请填写敌方武器威力"; return;
+  }
   const q = new URLSearchParams({
     unit_id: u.id, action: pairState.action,
     weapon_id: pairState.weapon ? pairState.weapon.id : "",

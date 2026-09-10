@@ -67,6 +67,9 @@ PAIR_BENCH = {
 DEFENSE_CORRECTION = 0.6  # 防御且带盾
 GUARD_CORRECTION = {0: 1.0, 1: 0.8, 2: 0.6}  # 不防御 / 防御不带盾 / 防御且带盾
 GUARD_LABEL = {0: "不防御", 1: "防御不带盾", 2: "防御且带盾"}
+# 防御模式逐次伤害模拟的硬上限：敌方单次伤害为 0 或极小时，
+# HP 迟迟不减会让 while 循环退化成死循环、永久占住 HTTP 请求线程。
+MAX_SIM_HITS = 999
 DEFAULT_ENEMY = {
     "unit_id": 1370000150,   # 能天使高达 (EX) · 满星满级
     "pilot_id": 1370000100,  # 刹那·F·清英 · UR 攻击型
@@ -993,6 +996,7 @@ def _score_defense(
         hits = 0
         recovered = False
         first = 0
+        unbreakable = False
         while hp > 0:
             defense_now = unit_def
             if stack_step and hits > 0:
@@ -1029,6 +1033,11 @@ def _score_defense(
             dmg = int(calculate_damage(attacker, defender, ctx)["final_damage"])
             if first == 0:
                 first = dmg
+            if dmg <= 0:
+                # 单次伤害为 0（防御力远高于敌方攻击等）：HP 永不下降，
+                # 继续循环就是死循环，判定为「无法击破」并退出。
+                unbreakable = True
+                break
             prev = hp
             hp -= dmg
             if hp <= 0:
@@ -1046,10 +1055,16 @@ def _score_defense(
                         hp + unit_hp * cross_recover[1] / 100,
                     )
                     recovered = True
-        return hits, first
+            if hits >= MAX_SIM_HITS:
+                # 硬上限：敌方单次伤害极小时逐次模拟会退化成几十万次循环
+                unbreakable = True
+                break
+        if unbreakable:
+            hits = MAX_SIM_HITS
+        return hits, first, unbreakable
 
-    survive, first_damage = run_sim(False)
-    survive_crit, _ = run_sim(True)
+    survive, first_damage, unbreakable = run_sim(False)
+    survive_crit, _, unbreakable_crit = run_sim(True)
     crit_rate = float(enemy_cfg.get("crit_rate", 0) or 0)
     expected = round(
         survive * (100 - crit_rate) / 100 + survive_crit * crit_rate / 100,
@@ -1066,6 +1081,8 @@ def _score_defense(
         "survive": survive,
         "survive_crit": survive_crit,
         "crit_rate": crit_rate,
+        # 模拟上限内未能被击破（单次伤害为 0，或伤害极小撞到 MAX_SIM_HITS）
+        "unbreakable": unbreakable or unbreakable_crit,
         "first_damage": first_damage,
         "unit_defense": unit_def,
         "unit_hp": unit_hp,
@@ -1107,6 +1124,11 @@ def match_pilot(
             in ("1", "true", "on", "yes")
         ),
     }
+    if action == "defense" and enemy_cfg["power"] <= 0:
+        # 敌方武器威力为 0 时单次伤害恒为 0，防御模拟没有意义
+        # （修复前这里会死循环挂住请求线程），直接给出可操作的提示。
+        return {"error": "请填写敌方武器威力（威力为 0 时无法计算可承受次数）",
+                "ok": False}
     conn = _conn()
     unit_row = dict(conn.execute("SELECT * FROM unit WHERE id = ?", (unit_id,)).fetchone()) \
         if conn.execute("SELECT 1 FROM unit WHERE id = ?", (unit_id,)).fetchone() else None

@@ -274,6 +274,7 @@ gundam/
 | [status.py](file:///e:/lzf/1_study/gundam/scripts/status.py) | 查看抓取进度（进程状态 + 文件计数 + 日志尾部） |
 | [damage_demo.py](file:///e:/lzf/1_study/gundam/scripts/damage_demo.py) | 伤害计算命令行演示 |
 | [migrate_ssp_fields.py](file:///e:/lzf/1_study/gundam/scripts/migrate_ssp_fields.py) | 回填 unit 表 `ssp_*` 属性 + 补 `ssp_terrain` 列（见 10.10） |
+| [migrate_drop_stage_map.py](file:///e:/lzf/1_study/gundam/scripts/migrate_drop_stage_map.py) | 丢弃 `stage.map` 列并 VACUUM（幂等，198MB→23.5MB，见 6.4） |
 | [migrate_conditional_bonuses.py](file:///e:/lzf/1_study/gundam/scripts/migrate_conditional_bonuses.py) | 重算机体/驾驶员的 `conditional_bonuses` 派生列（见 10.11） |
 | [migrate_unit_pilot.py](file:///e:/lzf/1_study/gundam/scripts/migrate_unit_pilot.py) | 单独同步 `unit_pilot` 原作映射表到云端 / 拉回本地（默认上传，`--down` 反向） |
 | [build_unit_pilot.py](file:///e:/lzf/1_study/gundam/scripts/build_unit_pilot.py) | 机体 × 驾驶员组合数据构建 |
@@ -349,6 +350,12 @@ baseDamage         = roundUp((四者之和) × 武器威力)
 
 #### `_score_defense(pilot, unit_ctx, unit_row, enemy_cfg, unit_abilities, ext) -> dict`
 防御模式评分：通过 `run_sim(critical)` 逐次伤害模拟，计算可承受攻击次数（含叠层防御、HP 恢复），按敌方暴击率加权期望。
+
+- 模拟带硬上限 `MAX_SIM_HITS = 999`：敌方单次伤害极小时逐次模拟会退化成几十万次循环；
+- 单次伤害为 `0`（防御远高于敌方攻击）时立刻停止，结果标记 `unbreakable: true`，`survive` 取上限值；
+- `match_pilot(action="defense")` 在敌方武器威力为 `0` 时直接返回
+  `{"error": "请填写敌方武器威力…", "ok": false}`：此时单次伤害恒为 0，
+  修复前会在此处死循环、永久占住 HTTP 请求线程（前端也在 `runPairMatch` 里做了同样的前置校验）。
 
 #### `_parse_ability(name, traits_raw, tag_name, series_name) -> dict`
 把一条能力的多个 trait 按 `group_id` 分组解析，多阶段能力按「效果结束时」拆分。
@@ -536,8 +543,8 @@ HTTP 请求处理器，实现：
 
 | 表 | 主键 | 外键 | 说明 |
 |---|---|---|---|
-| `stage` | `id` | — | 关卡（含 `map` JSON、地形标志） |
-| `stage_map_npc` | `mid` | `stage_id → stage` | 关卡敌方机体实例 |
+| `stage` | `id` | — | 关卡（地形/消耗等标量字段）。**整份地图 JSON 不再入库**：敌方数据在 `map.npcs` 入库时已抽取到下面两张派生表，`stage.map` 曾是数据库 84% 的体积（均 273KB/关）且无任何读取方，已由 `scripts/migrate_drop_stage_map.py` 移除（198MB→23.5MB） |
+| `stage_map_npc` | `mid` | `stage_id → stage` | 关卡敌方机体实例（含坐标、阵营、等级与实例数值） |
 | `stage_map_npc_character` | `id` | `stage_id → stage` | 关卡敌方驾驶员实例 |
 | `story_event` | `event_id` | `series_id → series` | 剧情事件 |
 | `story_event_boss` | `stage_id` | `event_id → story_event` | 剧情 Boss |
@@ -565,7 +572,7 @@ HTTP 请求处理器，实现：
 - `unit_weapon.weapon_attrs` / `unit_weapon.weapon_effects` / `unit_weapon.map_weapon_range`
 - `*_ability.traits` / `*_skill.traits`
 - `supporter_skill.traits` / `supporter_skill.conditions`
-- `stage.condition` / `stage.map`
+- `stage.condition`（`stage.map` 已于 2026-09 移除，见 6.4；原始 JSON 仍在 `data/raw/zh-CN/stage/*.json`，需要时可跑 `build` 重建）
 - `character.support_info` / `character.stat_bonuses` / `character.conditional_bonuses`
 
 ---
@@ -646,6 +653,8 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 
 #### 配对与伤害
 - `GET /api/pairing/match?unit_id=&action=attack|defense&weapon_id=&bench=low|mid&...` — 配对推荐
+  - `action=attack` **必须带该机体的 `weapon_id`**，否则返回 `{"error": "请选择该机体的武器", "ok": false}`（设计如此，前端也已前置校验）；
+  - `action=defense` 的敌方参数（`eua`/`epa`/`ewp`…）中 `ewp`（武器威力）必须 > 0，否则返回可操作错误而不是排名（见 5.2）。
 - `GET /api/pairing/default-enemy` — 默认敌方
 - `POST /api/team/score` — 组队评分，body：`{pairs:[{unit_id,star,pilot_id,weapon_id}], supporter_id, break_step, bench, custom_enemy}`（详见 [10.9](#109-组队评分)）
 - `GET /api/team/list` — 读取全部队伍与全局配置（返回 `{teams:[...], config:{bench,customEnemy}}`），组队 Tab 打开时优先拉取（详见 [10.13](#1013-组队持久化与云端同步)）
