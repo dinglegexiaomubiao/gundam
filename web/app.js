@@ -4538,7 +4538,10 @@ function renderPairResult(res) {
       ${isAtk
         ? `<td>${trigCell}</td><td>${pairClassChips(p.potential)}</td><td>${pairClassChips(p.impossible)}</td><td>${pairSkillChips(p.skills)}</td>`
         : `<td>${trigCell}</td><td>${pairClassChips(p.potential)}</td><td>${pairClassChips(p.impossible)}</td><td>${pairSkillChips(p.skills)}</td>`}
-      <td><button class="cond-btn pair-to-damage" data-pid="${p.id}" title="把该驾驶员代入伤害计算">代入</button></td>
+      <td>
+        <button class="cond-btn pair-to-damage" data-pid="${p.id}" title="把该驾驶员代入伤害计算">代入</button>
+        <button class="cond-btn pair-to-team" data-pid="${p.id}" title="把「当前机体 + 该驾驶员」加入队伍">＋队伍</button>
+      </td>
     </tr>`;
   }).join("");
   const first = res.pilots[0] || {};
@@ -4574,6 +4577,12 @@ function renderPairResult(res) {
       e.stopPropagation();
       const pilot = res.pilots.find((x) => String(x.id) === b.dataset.pid);
       if (pilot) pairToDamageCalc(res, pilot);
+    }));
+  document.querySelectorAll(".pair-to-team").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pilot = res.pilots.find((x) => String(x.id) === b.dataset.pid);
+      if (pilot) openPairToTeamMenu(b, res, pilot);
     }));
   $("#pair-result").scrollIntoView({ behavior: "auto", block: "start" });
 }
@@ -4755,6 +4764,192 @@ async function refreshPairResult() {
   } catch (e) {
     $("#pair-msg").textContent = "筛选失败：" + (e.message || e);
   }
+}
+
+/* ---------- 轻量提示（右下角浮层，自动消失） ---------- */
+function toast(msg, ms = 2400) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.className = "toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.remove("show"), ms);
+}
+
+/* ---------- 配对结果 → 队伍 ----------
+   把配对页推荐的驾驶员，连同当前机体与所选武器，一键放进某支队伍的槽位。 */
+
+function closePairToTeamMenu() {
+  document.querySelectorAll(".pair-team-menu").forEach((m) => m.remove());
+  document.removeEventListener("click", closePairToTeamMenu, true);
+}
+
+function openPairToTeamMenu(anchor, res, pilot) {
+  closePairToTeamMenu();
+  const unit = res.unit || {};
+  const teams = teamState.teams || [];
+  if (!teams.length) {
+    if (teamAssignSlot(null, 0, unit, pilot)) {
+      toast(`已新建队伍，放入「${unit.name || "机体"} + ${pilot.name}」`);
+    }
+    return;
+  }
+  const menu = document.createElement("div");
+  menu.className = "pair-team-menu";
+  const rows = teams.map((t, ti) => {
+    const cells = (t.slots || []).map((s, si) => {
+      const occupied = Boolean(s.unit || s.pilot);
+      const title = occupied
+        ? `${s.unit ? s.unit.name : ""}${s.pilot ? " / " + s.pilot.name : ""}`
+        : "空槽位";
+      return `<button class="ptm-slot${occupied ? " occupied" : ""}" data-ti="${ti}"
+        data-si="${si}" title="${esc(title)}">${si + 1}</button>`;
+    }).join("");
+    return `<div class="ptm-row"><span class="ptm-name">队伍 ${ti + 1}</span>
+      <span class="ptm-slots">${cells}</span></div>`;
+  }).join("");
+  menu.innerHTML = `
+    <div class="ptm-title">把「${esc(unit.name || "机体")} + ${esc(pilot.name)}」放入</div>
+    ${rows}
+    <div class="ptm-foot"><button class="ptm-new">＋ 新建队伍并放入</button></div>`;
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+  menu.style.top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8)) + "px";
+  menu.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const slotBtn = e.target.closest(".ptm-slot");
+    if (slotBtn) {
+      const ti = Number(slotBtn.dataset.ti);
+      const si = Number(slotBtn.dataset.si);
+      if (teamAssignSlot(teams[ti], si, unit, pilot)) {
+        toast(`已放入队伍 ${ti + 1} · 槽位 ${si + 1}`);
+      }
+      closePairToTeamMenu();
+      return;
+    }
+    if (e.target.closest(".ptm-new")) {
+      if (teamAssignSlot(null, 0, unit, pilot)) toast("已新建队伍并放入槽位 1");
+      closePairToTeamMenu();
+    }
+  });
+  setTimeout(() => document.addEventListener("click", closePairToTeamMenu, true), 0);
+}
+
+/** 把「机体 + 武器 + 驾驶员」写入槽位；team 为空则新建队伍。返回是否成功。 */
+function teamAssignSlot(team, slotIdx, unit, pilot) {
+  let t = team;
+  if (!t) {
+    t = newTeam();
+    teamState.teams.push(t);
+  }
+  if (unit.id && (t.slots || []).some(
+      (s, i) => i !== slotIdx && s.unit && String(s.unit.id) === String(unit.id))) {
+    alert("该机体已在这支队伍里，请换一个槽位或队伍");
+    return false;
+  }
+  if (pilot.id && (t.slots || []).some(
+      (s, i) => i !== slotIdx && s.pilot && String(s.pilot.id) === String(pilot.id))) {
+    alert("该驾驶员已在这支队伍里，请换一个槽位或队伍");
+    return false;
+  }
+  t.slots[slotIdx] = {
+    unit: { id: unit.id, name: unit.name, rarity: unit.rarity,
+            role: unit.role, role_label: unit.role_label },
+    star: 3,
+    weapon: pairState.weapon || null,
+    pilot: { id: pilot.id, name: pilot.name, rarity: pilot.rarity,
+             role: pilot.role, role_label: pilot.role_label },
+  };
+  saveTeamState();
+  computeTeam(t.id);
+  return true;
+}
+
+/* ---------- 队伍槽位 → 伤害计算 ----------
+   把队伍里某槽位的「机体 + 星级 + 驾驶员 + 武器」一键代入伤害页，
+   省去手动重选。机体详情（stat_bonuses / max_hp / tags）不在队伍数据里，
+   需补 fetch；驾驶员五维与武器威力取自已算好的 team/score 结果（teamResults）。 */
+
+async function teamSlotToDamage(team, slotIdx) {
+  const slot = team.slots[slotIdx];
+  if (!slot || !slot.unit) { toast("该槽位没有机体，无法计算伤害"); return; }
+  activateTab("damage");
+  $("#modal").classList.add("hidden");
+
+  let u = null;
+  try { u = await api(`/api/units/${slot.unit.id}`); } catch (e) { u = null; }
+  const star = Number(slot.star || 0);
+  const unitInfo = {
+    id: slot.unit.id, name: slot.unit.name, rarity: slot.unit.rarity,
+    role: slot.unit.role, role_label: slot.unit.role_label,
+    tags: (u && u.tags) || [],
+  };
+  calcSel.atkUnit = {
+    id: slot.unit.id, source: "library", star,
+    name: slot.unit.name, rarity: slot.unit.rarity,
+    role: slot.unit.role, role_label: slot.unit.role_label,
+    tags: (u && u.tags) || [],
+    stat_bonuses: (u && u.stat_bonuses) || {}, max_hp: (u && u.max_hp) || 0,
+  };
+  calcSel.atkUOn = []; resetAbInit();
+  $("#atk-unit-info").innerHTML = pickInfoText(unitInfo);
+  $("#atk-unit-star").classList.remove("hidden");
+  $("#atk-unit-star").value = String(star);
+  updatePanelLabels("atk");
+
+  const pr = (teamResults[team.id] && teamResults[team.id].pairs[slotIdx]) || null;
+
+  if (slot.pilot) {
+    const ps = pr && pr.pilot_stats;
+    calcSel.atkPilot = {
+      id: slot.pilot.id, source: "library",
+      ranged: ps ? ps.ranged : 0, melee: ps ? ps.melee : 0,
+      awaken: ps ? ps.awaken : 0, defense: ps ? ps.defense : 0,
+    };
+    calcSel.atkPOn = [];
+    $("#atk-pilot-info").innerHTML = pickInfoText({ name: slot.pilot.name, rarity: slot.pilot.rarity, role_label: slot.pilot.role_label });
+  } else {
+    calcSel.atkPilot = null;
+    $("#atk-pilot-info").innerHTML = "";
+  }
+
+  const w = (pr && pr.weapon) ? pr.weapon : (slot.weapon || null);
+  if (w) {
+    calcSel.atkWeapon = {
+      id: w.id, name: w.name,
+      attack_attr: (pr && pr.weapon) ? pr.weapon.attack_attr : (w.attack_attr || 1),
+      power_lv5: (pr && pr.weapon) ? pr.weapon.power : (w.power || null),
+      power: (pr && pr.weapon) ? pr.weapon.power : (w.power || null),
+    };
+    $("#d-weapon-name").textContent = w.name || "—";
+    $("#d-wtype").textContent = "—";
+    $("#d-wstat").textContent = "—";
+    $("#d-wp").value = (pr && pr.weapon) ? pr.weapon.power : "";
+    $("#d-wcrit").textContent = "—";
+  } else {
+    calcSel.atkWeapon = null;
+    $("#d-weapon-name").textContent = "—";
+    $("#d-wtype").textContent = "—";
+    $("#d-wstat").textContent = "—";
+    $("#d-wp").value = "";
+    $("#d-wcrit").textContent = "—";
+  }
+
+  const dep = (pr && pr.weapon && pr.weapon.dep_value != null) ? pr.weapon.dep_value
+    : (calcSel.atkPilot ? Math.max(calcSel.atkPilot.ranged, calcSel.atkPilot.melee, calcSel.atkPilot.awaken) : 0);
+  $("#d-aca").value = dep != null ? dep : "";
+
+  $("#d-vigor-atk").value = "normal";
+  $("#d-buff").value = 0;
+  $("#d-crit").checked = false;
+  await autoCalcBonuses();
+  toast("已代入伤害计算 · 调整敌人后点「计算伤害」");
 }
 
 function pairToDamageCalc(res, pilot) {
@@ -5100,6 +5295,7 @@ function renderUnitCard(team, s, i, pr) {
       <div class="team-card-ctl"><label>星级 <select class="team-star" data-team="${esc(team.id)}" data-slot="${i}" ${ultimate ? "disabled" : ""}>${starOpts}</select></label></div>
       <div class="team-card-stats">${statsHtml}</div>
       ${weaponHtml}
+      <button class="cond-btn team-calc-btn" data-team="${esc(team.id)}" data-slot="${i}" title="把该机体代入伤害计算">算伤害</button>
     </div>`;
   }
   return `<div class="team-card team-unit-card" data-team="${esc(team.id)}" data-slot="${i}" data-kind="unit">
@@ -5144,6 +5340,12 @@ function onTeamListClick(e) {
     return;
   }
   if (e.target.closest(".team-star") || e.target.closest(".team-break")) return;
+  const calcBtn = e.target.closest(".team-calc-btn");
+  if (calcBtn) {
+    const team = teamState.teams.find((t) => t.id === calcBtn.dataset.team);
+    if (team) teamSlotToDamage(team, Number(calcBtn.dataset.slot));
+    return;
+  }
   const card = e.target.closest(".team-card");
   if (!card) return;
   const tid = card.dataset.team;

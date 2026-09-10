@@ -438,7 +438,7 @@ GET 站点 JSON API 并解析为 Python 对象（带节流、限流冷却与重�
 ### 5.7 `src/cloud.py`
 
 #### `TABLE_ORDER`
-21 张表的写入顺序列表（父表在前，外键依赖），恢复/迁移时按此顺序写入。
+27 张表的写入顺序列表（父表在前，外键依赖），恢复/迁移时按此顺序写入。
 
 #### `upload_local_db_to_cloud(url) -> dict`
 把本地 SQLite 全量重建到云端（覆盖），逐表校验行数后返回结果。
@@ -1023,13 +1023,13 @@ SSP（Super SP）是部分机体在 SP 之上的最终形态，属性与技能�
 
 | 文件 | 行数 | 说明 |
 |---|---|---|
-| [src/webapp.py](file:///e:/lzf/1_study/gundam/src/webapp.py) | ~2995 | Web 服务（最大文件） |
-| [src/pairing.py](file:///e:/lzf/1_study/gundam/src/pairing.py) | ~1402 | 配对推荐引擎 |
-| [src/db.py](file:///e:/lzf/1_study/gundam/src/db.py) | ~929 | JSON → SQLite 入库 |
-| [src/cloud.py](file:///e:/lzf/1_study/gundam/src/cloud.py) | ~764 | 云端 PostgreSQL |
-| [src/labels.py](file:///e:/lzf/1_study/gundam/src/labels.py) | ~415 | 标签与数值解析 |
+| [src/webapp.py](file:///e:/lzf/1_study/gundam/src/webapp.py) | 4658 | Web 服务（最大文件） |
+| [src/pairing.py](file:///e:/lzf/1_study/gundam/src/pairing.py) | 1976 | 配对推荐引擎 |
+| [src/db.py](file:///e:/lzf/1_study/gundam/src/db.py) | 1271 | JSON → SQLite 入库 |
+| [src/cloud.py](file:///e:/lzf/1_study/gundam/src/cloud.py) | 1334 | 云端 PostgreSQL |
+| [src/labels.py](file:///e:/lzf/1_study/gundam/src/labels.py) | 470 | 标签与数值解析 |
 | [src/fetch.py](file:///e:/lzf/1_study/gundam/src/fetch.py) | ~192 | 抓取编排 |
-| [src/webapp.py](file:///e:/lzf/1_study/gundam/src/damage.py) | ~155 | 伤害计算 |
+| [src/damage.py](file:///e:/lzf/1_study/gundam/src/damage.py) | 155 | 伤害计算 |
 | [src/maintain.py](file:///e:/lzf/1_study/gundam/src/maintain.py) | ~162 | 维护流程 |
 | [src/api.py](file:///e:/lzf/1_study/gundam/src/api.py) | ~135 | HTTP 客户端 |
 | [src/verify.py](file:///e:/lzf/1_study/gundam/src/verify.py) | ~90 | 校验 |
