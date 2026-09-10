@@ -274,7 +274,6 @@ CREATE TABLE IF NOT EXISTS stage (
   cp INTEGER,
   ap INTEGER,
   condition TEXT,
-  map TEXT,
   raw_path TEXT
 );
 
@@ -1123,8 +1122,8 @@ def ingest_stages(conn):
                (id, stage_type, stage_category, icon, name,
                 is_space, is_atmospheric, is_ground, is_surface, is_underwater,
                 sortie_terrain, stage_terrain, has_guest, drop_set, drop_reward,
-                first_reward, first_pickup_reward, cp, ap, condition, map, raw_path)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                first_reward, first_pickup_reward, cp, ap, condition, raw_path)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (_i(st["id"]), _i(st.get("stage_type")), _i(st.get("stage_category")),
              st.get("icon"), st.get("name"),
              _b(st.get("is_space")), _b(st.get("is_atmospheric")), _b(st.get("is_ground")),
@@ -1134,7 +1133,6 @@ def ingest_stages(conn):
              _i(st.get("first_reward")), _i(st.get("first_pickup_reward")),
              _i(st.get("cp")), _i(st.get("ap")),
              json.dumps(st.get("condition") or [], ensure_ascii=False),
-             json.dumps(st.get("map") or {}, ensure_ascii=False),
              str(p.relative_to(config.RAW_DIR))),
         )
         for m in (st.get("map") or {}).get("npcs") or []:

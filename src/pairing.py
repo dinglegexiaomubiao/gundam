@@ -24,15 +24,26 @@ from .damage import (
     calculate_damage,
 )
 from .labels import (
+    ATK_UP_RE,
     ATTACK_ATTR_DEP_LABEL,
+    CRIT_DMG_RE,
+    CRIT_RATE_RE,
+    DEF_STACK_RE,
+    DEF_UP_RE,
+    DMG_DOWN_RE,
+    DMG_UP_RE,
+    HP_RECOVER_RE,
+    ROLE_NAMES,
     STAR_MULT,
+    STAT_ALIAS,
+    STAT_COMBO_RE,
     ULTIMATE_TAG,
+    WA_ID,
     split_trait_stages,
-    support_label,
     star_value,
+    support_label,
 )
 
-ROLE_NAMES = {1: "攻击型", 2: "耐久型", 3: "支援型"}
 STAT_KEYS = ("ranged", "melee", "defense", "awaken", "reaction")
 DEP_STAT_KEYS = ("ranged", "melee", "awaken")
 # attack_attr → 依赖属性关键字（与伤害计算一致）
@@ -42,7 +53,6 @@ ATTACK_ATTR_KEYS = {
     7: ["ranged", "melee", "awaken"],
 }
 ATTACK_ATTR_WORD = {1: "Ranged", 2: "Melee", 3: "Awaken"}
-WA_ID = {"Physical": 1, "Beam": 2, "Special": 3}
 
 PAIR_BENCH = {
     "low": {
@@ -74,30 +84,6 @@ _UNVERIFIABLE_KEYS = (
     "character_tags_id", "character_series_id", "character_ids",
 )
 
-# 效果正则（与伤害计算一致）
-_DMG_UP_RE = re.compile(r"(?<!爆击)损伤(?:再)?提升\s*(\d+)%")
-_DMG_DOWN_RE = re.compile(r"损伤(?:减轻|降低)\s*(\d+)%")
-# 防御力 = 机体（MS）数值词；驾驶员自身防御由「守备值」表达（见 _STAT_COMBO_RE）。
-_DEF_UP_RE = re.compile(
-    r"(?:防御力)(?:及|与|和)?(?:攻击力)?(?:再)?提升\s*(\d+)%"
-)
-_ATK_UP_RE = re.compile(
-    r"攻击力(?:及|与|和)?(?:防御力)?(?:再)?提升\s*(\d+)%"
-)
-_DEF_STACK_RE = re.compile(
-    r"每次受到(?:来自敌方的)?损伤时，\s*自身防御力提升(\d+)%（最高(\d+)%）"
-)
-_HP_RECOVER_RE = re.compile(r"自身HP为(\d+)%以下时，\s*自身HP恢复(\d+)%（1次）")
-_CRIT_DMG_RE = re.compile(r"爆击损伤提升\s*(\d+)%")
-_CRIT_RATE_RE = re.compile(r"爆击率提升\s*(\d+)%")
-_STAT_COMBO_RE = re.compile(
-    r"((?:射击值|格斗值|守备值|觉醒值|反应值)(?:及|与|和)?"
-    r"(?:射击值|格斗值|守备值|觉醒值|反应值)?)(?:再)?提升\s*(\d+)%"
-)
-_STAT_ALIAS = {
-    "射击值": "ranged", "格斗值": "melee",
-    "守备值": "defense", "觉醒值": "awaken", "反应值": "reaction",
-}
 _EXTRA_ACTION_RE = re.compile(r"额外行动")
 _SUPPORT_WORD_RE = re.compile(r"支援(?:攻击|防御)|反击|支援攻击|支援防御")
 
@@ -153,43 +139,43 @@ def _parse_effects(d: str) -> dict:
         eff["atk_pct"] += pct
         eff["def_pct"] += pct
         text = text[:combo.start()] + text[combo.end():]
-    m = _DMG_UP_RE.search(d or "")
+    m = DMG_UP_RE.search(d or "")
     if m:
         eff["dmg_up"] = float(m.group(1))
-    m = _DMG_DOWN_RE.search(d or "")
+    m = DMG_DOWN_RE.search(d or "")
     if m:
         eff["dmg_down"] = float(m.group(1))
-    m = _DEF_UP_RE.search(text)
+    m = DEF_UP_RE.search(text)
     if m:
         pct = float(m.group(1))
         eff["def_pct"] += pct
         if "攻击力" in m.group(0):
             eff["atk_pct"] = eff.get("atk_pct", 0.0) + pct
-    m = _ATK_UP_RE.search(text)
+    m = ATK_UP_RE.search(text)
     if m:
         pct = float(m.group(1))
         eff["atk_pct"] += pct
         if "防御力" in m.group(0):
             eff["def_pct"] = eff.get("def_pct", 0.0) + pct
-    m = _DEF_STACK_RE.search(d or "")
+    m = DEF_STACK_RE.search(d or "")
     if m:
         eff["def_stack"] = (int(m.group(1)), int(m.group(2)))
-    m = _HP_RECOVER_RE.search(d or "")
+    m = HP_RECOVER_RE.search(d or "")
     if m:
         eff["hp_recover"] = (int(m.group(1)), int(m.group(2)))
-    m = _CRIT_DMG_RE.search(d or "")
+    m = CRIT_DMG_RE.search(d or "")
     if m:
         eff["crit_dmg"] = float(m.group(1))
-    m = _CRIT_RATE_RE.search(d or "")
+    m = CRIT_RATE_RE.search(d or "")
     if m:
         eff["crit_rate"] = float(m.group(1))
-    m = _STAT_COMBO_RE.search(d or "")
+    m = STAT_COMBO_RE.search(d or "")
     if m:
         pct = float(m.group(2))
-        for nm in _STAT_ALIAS:
+        for nm in STAT_ALIAS:
             if nm in m.group(1):
-                eff["stat_pct"][_STAT_ALIAS[nm]] = (
-                    eff["stat_pct"].get(_STAT_ALIAS[nm], 0.0) + pct
+                eff["stat_pct"][STAT_ALIAS[nm]] = (
+                    eff["stat_pct"].get(STAT_ALIAS[nm], 0.0) + pct
                 )
     return eff
 

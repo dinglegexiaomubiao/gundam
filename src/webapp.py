@@ -33,18 +33,30 @@ from .db import (
     ingest_one_character,
     recompute_character_derived,
 )
-from .fetch import fetch_all
+from .fetch import collect_stage_ids, fetch_all
 from .labels import (
     ACQUISITION_ROUTE,
+    ATK_UP_RE,
     ATTACK_ATTR,
     ATTACK_ATTR_DEP_LABEL,
     ATTACK_ATTR_STAT,
     ATTACK_ATTR_STATS,
+    CRIT_DMG_RE,
+    CRIT_RATE_RE,
+    DEF_STACK_RE,
+    DEF_UP_RE,
+    DMG_DOWN_RE,
+    DMG_UP_RE,
+    HP_RECOVER_RE,
     RARITY,
+    ROLE_NAMES,
     STAR_LABEL,
     STAR_MULT,
+    STAT_ALIAS,
+    STAT_COMBO_RE,
     SUPPORTER_SKILL_TYPE,
     ULTIMATE_TAG,
+    WA_ID,
     WEAPON_ATTR,
     parse_ability_stat_bonuses,
     parse_weapon_max_level,
@@ -559,74 +571,48 @@ CHAR_STAR_STATS = ("ranged", "melee", "defense", "reaction", "awaken")
 CHAR_LEVEL_CAPS = {5: 100, 4: 90, 3: 80, 2: 70, 1: 60}
 UNIT_LEVEL_CAPS = {5: 100, 4: 90, 3: 80, 2: 70, 1: 60}
 
-ROLE_NAMES = {1: "攻击型", 2: "耐久型", 3: "支援型"}
-
-_DMG_UP_RE = re.compile(r"(?<!爆击)损伤(?:再)?提升\s*(\d+)%")
-_DMG_DOWN_RE = re.compile(r"损伤(?:减轻|降低)\s*(\d+)%")
-# 防御力 = 机体（MS）数值词；驾驶员自身防御由「守备值」表达（见 _STAT_COMBO_RE）。
-_DEF_UP_RE = re.compile(
-    r"(?:防御力)(?:及|与|和)?(?:攻击力)?(?:再)?提升\s*(\d+)%"
-)
-_ATK_UP_RE = re.compile(
-    r"攻击力(?:及|与|和)?(?:防御力)?(?:再)?提升\s*(\d+)%"
-)
-_DEF_STACK_RE = re.compile(
-    r"每次受到(?:来自敌方的)?损伤时，\s*自身防御力提升(\d+)%（最高(\d+)%）"
-)
-_HP_RECOVER_RE = re.compile(
-    r"自身HP为(\d+)%以下时，\s*自身HP恢复(\d+)%（1次）"
-)
-_CRIT_DMG_RE = re.compile(r"爆击损伤提升\s*(\d+)%")
-_CRIT_RATE_RE = re.compile(r"爆击率提升\s*(\d+)%")
-_STAT_COMBO_RE = re.compile(
-    r"((?:射击值|格斗值|守备值|觉醒值|反应值)(?:及|与|和)?"
-    r"(?:射击值|格斗值|守备值|觉醒值|反应值)?)(?:再)?提升\s*(\d+)%"
-)
-_STAT_ALIAS = {
-    "射击值": "ranged", "格斗值": "melee",
-    "守备值": "defense", "觉醒值": "awaken", "反应值": "reaction",
-}
-_WA_MAP = {"Physical": 1, "Beam": 2, "Special": 3}
-
 
 def _parse_ability_effects(d: str) -> list[dict]:
-    """从能力描述提取可应用的效果：增伤/减伤/攻击/防御百分比。"""
+    """从能力描述提取可应用的效果：增伤/减伤/攻击/防御百分比。
+
+    正则来自 labels（与 pairing 算分共用同一套口径）。
+    """
     effs: list[dict] = []
-    m = _DMG_UP_RE.search(d)
+    m = DMG_UP_RE.search(d)
     if m:
         effs.append({"kind": "dmg_up", "pct": int(m.group(1))})
-    m = _DMG_DOWN_RE.search(d)
+    m = DMG_DOWN_RE.search(d)
     if m:
         effs.append({"kind": "dmg_down", "pct": int(m.group(1))})
-    m = _DEF_UP_RE.search(d)
+    m = DEF_UP_RE.search(d)
     if m:
         effs.append({"kind": "def_pct", "pct": int(m.group(1))})
-    m = _ATK_UP_RE.search(d)
+    m = ATK_UP_RE.search(d)
     if m:
         effs.append({"kind": "atk_pct", "pct": int(m.group(1))})
-    m = _DEF_STACK_RE.search(d)
+    m = DEF_STACK_RE.search(d)
     if m:
         effs.append({
             "kind": "def_stack", "pct": int(m.group(1)), "max": int(m.group(2)),
         })
-    m = _HP_RECOVER_RE.search(d)
+    m = HP_RECOVER_RE.search(d)
     if m:
         effs.append({
             "kind": "hp_recover", "threshold": int(m.group(1)), "pct": int(m.group(2)),
         })
-    m = _CRIT_DMG_RE.search(d)
+    m = CRIT_DMG_RE.search(d)
     if m:
         effs.append({"kind": "crit_dmg", "pct": int(m.group(1))})
-    m = _CRIT_RATE_RE.search(d)
+    m = CRIT_RATE_RE.search(d)
     if m:
         effs.append({"kind": "crit_rate", "pct": int(m.group(1))})
-    m = _STAT_COMBO_RE.search(d)
+    m = STAT_COMBO_RE.search(d)
     if m:
         pct = int(m.group(2))
-        for name in _STAT_ALIAS:
+        for name in STAT_ALIAS:
             if name in m.group(1):
                 effs.append({
-                    "kind": "stat_pct", "stat": _STAT_ALIAS[name], "pct": pct,
+                    "kind": "stat_pct", "stat": STAT_ALIAS[name], "pct": pct,
                 })
     return effs
 
@@ -1315,6 +1301,52 @@ SUMMARY_TABLES = (
     "story_event_boss", "tower_event", "tower_stage",
 )
 
+# 「抓取目标」基线缓存的键（原始抓取产物的 mtime 组合），避免每次打开概览页
+# 都重新解析 1.7MB 的 unit/min.json。
+_EXPECTED_BASELINE: dict = {"key": None, "value": {"unit": None, "stage": None}}
+
+
+def _expected_counts() -> dict:
+    """抓取目标基线，来自最近一次抓取的站点清单，而不是硬编码常量。
+
+    - 机体：`unit/min.json`（站点 /unit/min 返回的机体 ID 列表）长度；
+    - 关卡：`fetch.collect_stage_ids()` 汇总出的关卡 ID 数（主线 + 剧情 Boss + 塔楼）。
+
+    任一来源缺失/损坏时对应值为 None，前端会退化成「不显示完成率」，
+    不会出现「1237 / 1210」这种一改数据就失真的过期基线。
+    """
+    paths = (
+        config.RAW_DIR / "unit" / "min.json",
+        config.RAW_DIR / "series" / "v2.json",
+        config.RAW_DIR / "event" / "story.json",
+        config.RAW_DIR / "event" / "tower.json",
+    )
+    try:
+        key = tuple(
+            (str(p), p.stat().st_mtime_ns if p.exists() else None) for p in paths
+        )
+    except OSError:
+        key = None
+    if key is not None and key == _EXPECTED_BASELINE["key"]:
+        return dict(_EXPECTED_BASELINE["value"])
+
+    out: dict = {"unit": None, "stage": None}
+    try:
+        data = json.loads(paths[0].read_text(encoding="utf-8"))
+        if isinstance(data, list) and data:
+            out["unit"] = len(data)
+    except (OSError, ValueError):
+        pass
+    try:
+        ids = collect_stage_ids()
+        if ids:
+            out["stage"] = len(ids)
+    except Exception:  # noqa: BLE001 - 概览页统计不应因原始数据缺失而 500
+        pass
+
+    _EXPECTED_BASELINE["key"], _EXPECTED_BASELINE["value"] = key, dict(out)
+    return out
+
 
 def api_summary() -> dict:
     counts = {t: 0 for t in SUMMARY_TABLES}
@@ -1338,10 +1370,9 @@ def api_summary() -> dict:
         finally:
             if conn is not None:
                 conn.close()
-    expected = {"unit": 1210, "stage": 594}
     return {
         "counts": counts,
-        "expected": expected,
+        "expected": _expected_counts(),
         "built_at": built,
         "db_exists": config.DB_PATH.exists(),
         "db_has_data": sum(counts.values()) > 0,
@@ -3567,7 +3598,17 @@ def api_stages(q: str, limit: int, offset: int) -> dict:
 
 def api_stage_detail(stage_id: int) -> dict | None:
     conn = _conn()
-    st = _one(conn, "SELECT * FROM stage WHERE id = ?", (stage_id,))
+    # 显式列：stage.map 是整份地图 JSON（实测均 273KB、最大 1.4MB），
+    # 前端只用到下方 npcs / npc_characters，这里不再回传（见 P0 性能优化）。
+    st = _one(
+        conn,
+        """SELECT id, stage_type, stage_category, icon, name,
+                  is_space, is_atmospheric, is_ground, is_surface, is_underwater,
+                  sortie_terrain, stage_terrain, has_guest, drop_set, drop_reward,
+                  first_reward, first_pickup_reward, cp, ap, condition, raw_path
+             FROM stage WHERE id = ?""",
+        (stage_id,),
+    )
     if not st:
         conn.close()
         return None
@@ -3745,7 +3786,7 @@ def _cond_met(cond: dict, own_unit, enemy_unit, weapon_attrs,
             return False
     wa = cond.get("weapon_attribute")
     if wa:
-        want = _WA_MAP.get(wa)
+        want = WA_ID.get(wa)
         # 多伤害集合：武器任一伤害属性与条件匹配即命中
         if want is None or not weapon_attrs or want not in weapon_attrs:
             return False

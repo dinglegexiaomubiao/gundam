@@ -654,10 +654,10 @@ async function loadSummary() {
   const c = d.counts || {};
   /* Step 3: 分离 hero KPI（前 4 个 2×2 大卡） + 次级 mini cards（后 4 个保留原有 stat-grid 风格） */
   const kpiDefs = [
-    { key: "units",      label: "机体",       value: c.unit,                          expected: d.expected.unit,                glyph: "⬢" },
+    { key: "units",      label: "机体",       value: c.unit,                          expected: d.expected?.unit ?? null,       glyph: "⬢" },
     { key: "characters", label: "驾驶员",     value: c.character,                     expected: null,                            glyph: "✦" },
     { key: "supporters", label: "支援角色",   value: c.supporter,                     expected: null,                            glyph: "❁" },
-    { key: "stages",     label: "关卡",       value: c.stage,                         expected: d.expected.stage,               glyph: "⚑" },
+    { key: "stages",     label: "关卡",       value: c.stage,                         expected: d.expected?.stage ?? null,      glyph: "⚑" },
   ];
   const miniDefs = [
     ["敌方机体",     c.stage_map_npc],

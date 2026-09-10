@@ -906,14 +906,28 @@ def restore_local_db_from_cloud(url: str | None = None,
                             f"{exc}"
                         )
                         continue
-                    ph = ", ".join("?" for _ in cols)
-                    cols_sql = ", ".join(f'"{c}"' for c in cols)
+                    # 只写入本地 schema 里存在的列：云端可能残留旧版本的列
+                    # （例如已废弃的 stage.map），否则 INSERT 会整表失败。
+                    local_cols = {
+                        r[1] for r in lite.execute(f'PRAGMA table_info("{tname}")')
+                    }
+                    use = [i for i, c in enumerate(cols) if c in local_cols]
+                    dropped = [c for c in cols if c not in local_cols]
+                    if dropped:
+                        print(f"  {tname}: 跳过本地不存在的列 {dropped}")
+                    if not use:
+                        raise RuntimeError(f"表 {tname} 与本地 schema 无共同列")
+                    use_cols = [cols[i] for i in use]
+                    ph = ", ".join("?" for _ in use_cols)
+                    cols_sql = ", ".join(f'"{c}"' for c in use_cols)
                     insert = (
                         f'INSERT INTO "{tname}" ({cols_sql}) '
                         f"VALUES ({ph})"
                     )
                     n = len(rows)
-                    lite.executemany(insert, [tuple(r) for r in rows])
+                    lite.executemany(
+                        insert, [tuple(r[i] for i in use) for r in rows]
+                    )
                     done.add(tname)
                     print(
                         f"  {tname}: {n} 行 "

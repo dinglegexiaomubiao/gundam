@@ -37,6 +37,41 @@ _CONDITION_HINTS = (
 _PCT_RE = re.compile(r"提升\s*(\d+)\s*%")
 _MAX_PCT_RE = re.compile(r"最高\s*(\d+)\s*%")
 
+# ---------------------------------------------------------------------------
+# 能力/技能效果文本解析：正则与常量
+#
+# webapp.py（详情/编辑展示）与 pairing.py（配对、组队算分）必须共用同一套口径，
+# 因此集中在本模块定义。此前这两处各自维护同一份正则，改一处忘另一处会让
+# 「界面显示的加成」与「配对得分的加成」悄悄不一致。
+# ---------------------------------------------------------------------------
+DMG_UP_RE = re.compile(r"(?<!爆击)损伤(?:再)?提升\s*(\d+)%")
+DMG_DOWN_RE = re.compile(r"损伤(?:减轻|降低)\s*(\d+)%")
+# 防御力 = 机体（MS）数值词；驾驶员自身防御由「守备值」表达（见 STAT_COMBO_RE）。
+DEF_UP_RE = re.compile(
+    r"(?:防御力)(?:及|与|和)?(?:攻击力)?(?:再)?提升\s*(\d+)%"
+)
+ATK_UP_RE = re.compile(
+    r"攻击力(?:及|与|和)?(?:防御力)?(?:再)?提升\s*(\d+)%"
+)
+DEF_STACK_RE = re.compile(
+    r"每次受到(?:来自敌方的)?损伤时，\s*自身防御力提升(\d+)%（最高(\d+)%）"
+)
+HP_RECOVER_RE = re.compile(
+    r"自身HP为(\d+)%以下时，\s*自身HP恢复(\d+)%（1次）"
+)
+CRIT_DMG_RE = re.compile(r"爆击损伤提升\s*(\d+)%")
+CRIT_RATE_RE = re.compile(r"爆击率提升\s*(\d+)%")
+STAT_COMBO_RE = re.compile(
+    r"((?:射击值|格斗值|守备值|觉醒值|反应值)(?:及|与|和)?"
+    r"(?:射击值|格斗值|守备值|觉醒值|反应值)?)(?:再)?提升\s*(\d+)%"
+)
+# 与 CHAR_STAT_KEYWORDS 内容一致，但刻意保留独立字面量：
+# 键的迭代顺序会影响多属性词条（如「射击值及格斗值提升」）的产出顺序。
+STAT_ALIAS = {
+    "射击值": "ranged", "格斗值": "melee",
+    "守备值": "defense", "觉醒值": "awaken", "反应值": "reaction",
+}
+
 
 def split_trait_stages(desc: str) -> list[str]:
     """把能力描述按「效果结束时」拆成顺序阶段，返回独立段文本列表。"""
@@ -87,8 +122,8 @@ def _resolve_condition(
     if not tags and not series:
         return ""
     role = cond.get("unit_role")
-    if role is not None and str(role).isdigit() and int(role) in UNIT_ROLE_NAMES:
-        parts.append("类型：" + UNIT_ROLE_NAMES[int(role)])
+    if role is not None and str(role).isdigit() and int(role) in ROLE_NAMES:
+        parts.append("类型：" + ROLE_NAMES[int(role)])
     return " · ".join(parts)
 
 
@@ -204,11 +239,13 @@ WEAPON_ATTR = {
     5: "特殊招式",
     6: "EX",
 }
+# 武器伤害类型名 → id（原始 JSON 的 weapon_attrs 存的是英文名）
+WA_ID = {"Physical": 1, "Beam": 2, "Special": 3}
 
 SUPPORTER_SKILL_TYPE = {"leader": "队长技", "active": "主动技"}
 ACQUISITION_ROUTE = {1: "扭蛋", 2: "活动", 3: "商店", 4: "其他"}
 TARGET_LABEL = {"Owner": "自身", "SameGroup": "同组"}
-UNIT_ROLE_NAMES = {1: "攻击型", 2: "耐久型", 3: "支援型"}
+ROLE_NAMES = {1: "攻击型", 2: "耐久型", 3: "支援型"}
 
 
 def resolve_trait_text(
@@ -241,8 +278,8 @@ def resolve_trait_text(
             if (int(sid), name) not in series_items:
                 series_items.append((int(sid), name))
     role = cond.get("unit_role")
-    if role is not None and str(role).isdigit() and int(role) in UNIT_ROLE_NAMES:
-        type_items.append((int(role), UNIT_ROLE_NAMES[int(role)]))
+    if role is not None and str(role).isdigit() and int(role) in ROLE_NAMES:
+        type_items.append((int(role), ROLE_NAMES[int(role)]))
     for uid in str(cond.get("unit_ids") or "").split(","):
         uid = uid.strip()
         if uid and uid.isdigit() and int(uid) in (unit_by_id or {}):
