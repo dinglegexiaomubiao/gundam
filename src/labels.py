@@ -1,6 +1,7 @@
 """显示用标签映射与结构化数据解析辅助。"""
 from __future__ import annotations
 
+import json
 import re
 
 RARITY = {5: "UR", 4: "SSR", 3: "SR", 2: "R", 1: "N"}
@@ -224,13 +225,77 @@ ATTACK_ATTR_DEP_LABEL = {
     7: "射击/格斗/觉醒最高值",
 }
 
-def attack_attr_value(stats: dict, attack_attr: int):
-    """按攻击属性规则取驾驶员依赖值（射击/格斗/觉醒 单项或最高值）。"""
-    keys = ATTACK_ATTR_STATS.get(attack_attr or 0)
+def attack_attr_value(stats: dict, attack_attr):
+    """按攻击属性规则取驾驶员依赖值（射击/格斗/觉醒 单项或最高值）。
+
+    attack_attr 可为 int / list / JSON 字符串；多选时取所有对应属性的最大值。
+    """
+    keys = _attack_attr_to_keys(attack_attr)
     if not keys:
         return None
     vals = [stats.get(k) for k in keys if stats.get(k) is not None]
     return max(vals) if vals else None
+
+
+def _attack_attr_to_keys(attack_attr):
+    """攻击属性 → 对应的依赖属性键集合（ranged/melee/awaken）。
+
+    attack_attr 兼容 int / list / JSON 字符串（如 "[1,2]"）。
+    4/5/6 是历史「双属性取最高」的内部值，已就地展开为对应键。
+    """
+    if attack_attr is None:
+        return ()
+    if isinstance(attack_attr, str):
+        s = attack_attr.strip()
+        if s.startswith("["):
+            try:
+                attack_attr = [int(x) for x in json.loads(s)]
+            except (ValueError, json.JSONDecodeError):
+                return ()
+        elif s.lstrip("-").isdigit():
+            attack_attr = int(s)
+        else:
+            return ()
+    if isinstance(attack_attr, int):
+        return ATTACK_ATTR_STATS.get(attack_attr, ())
+    if isinstance(attack_attr, (list, tuple, set)):
+        ks = []
+        for a in attack_attr:
+            try:
+                a = int(a)
+            except (TypeError, ValueError):
+                continue
+            ks.extend(ATTACK_ATTR_STATS.get(a, ()))
+        return tuple(ks)
+    return ()
+
+
+def attack_attr_labels(attack_attr):
+    """攻击属性 → 中文标签（多选用 、连接）；空返回 '—'。"""
+    if attack_attr is None:
+        return "—"
+    if isinstance(attack_attr, str):
+        s = attack_attr.strip()
+        if s.startswith("["):
+            try:
+                attack_attr = [int(x) for x in json.loads(s)]
+            except (ValueError, json.JSONDecodeError):
+                return "—"
+        elif s.lstrip("-").isdigit():
+            attack_attr = [int(s)]
+        else:
+            return "—"
+    if isinstance(attack_attr, int):
+        attack_attr = [attack_attr]
+    if isinstance(attack_attr, (list, tuple, set)):
+        labels = [ATTACK_ATTR.get(int(a), f"#{a}") for a in attack_attr if a]
+        return "、".join(dict.fromkeys(labels)) or "—"
+    return "—"
+
+
+def attack_attr_keys(attack_attr):
+    """攻击属性 → 依赖属性键列表（供配对引擎匹配『攻击属性为 X』条件）。"""
+    return list(_attack_attr_to_keys(attack_attr))
 
 
 # 武器伤害类型

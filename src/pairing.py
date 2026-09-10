@@ -39,6 +39,8 @@ from .labels import (
     STAT_COMBO_RE,
     ULTIMATE_TAG,
     WA_ID,
+    attack_attr_keys,
+    attack_attr_labels,
     split_trait_stages,
     star_value,
     support_label,
@@ -708,13 +710,11 @@ def _unit_ctx(conn, unit_id: int, weapon_row: dict | None,
         if not attrs and weapon_row.get("weapon_attr"):
             attrs = [int(weapon_row["weapon_attr"])]
         wa_ids = {a for a in attrs if a in (1, 2, 3)}
-        aattr = weapon_row.get("attack_attr")
-        if aattr:
-            for k in ATTACK_ATTR_KEYS.get(int(aattr), []):
-                if k in DEP_STAT_KEYS:
-                    wa_keys.add(ATTACK_ATTR_WORD.get(
-                        {"ranged": 1, "melee": 2, "awaken": 3}[k]
-                    ))
+        for k in attack_attr_keys(weapon_row.get("attack_attr")):
+            if k in DEP_STAT_KEYS:
+                wa_keys.add(ATTACK_ATTR_WORD.get(
+                    {"ranged": 1, "melee": 2, "awaken": 3}[k]
+                ))
     return {
         "id": unit_id,
         "role": u.get("role") or 0,
@@ -813,8 +813,7 @@ def _score_attack(
         triggered.extend(trig)
         potential.extend(pot)
         impossible.extend(imp)
-    dep_keys = ATTACK_ATTR_KEYS.get(int(weapon_row.get("attack_attr") or 1)) \
-        or ["ranged"]
+    dep_keys = attack_attr_keys(weapon_row.get("attack_attr")) or ["ranged"]
     dep_val = max(
         _effective_stat(pilot, k, tot["stat_pct"].get(k, 0.0))
         for k in dep_keys
@@ -895,9 +894,7 @@ def _score_attack(
         "damage": damage,
         "crit_damage": crit_damage,
         "crit_rate": crit_rate,
-        "dep_label": ATTACK_ATTR_DEP_LABEL.get(
-            int(weapon_row.get("attack_attr") or 1), "—"
-        ),
+        "dep_label": attack_attr_labels(weapon_row.get("attack_attr")),
         "dep_value": dep_val,
         "triggered": triggered[:8],
         "potential": potential[:8],
@@ -1322,9 +1319,7 @@ def match_pilot(
                 float(cfg["critdmg_ov"])
                 if str(cfg.get("critdmg_ov") or "").strip() else 0.0
             ),
-            "dep_label": ATTACK_ATTR_DEP_LABEL.get(
-                int(weapon_row.get("attack_attr") or 1), "—"
-            ),
+            "dep_label": attack_attr_labels(weapon_row.get("attack_attr")),
         }
     return info
 
@@ -1587,9 +1582,7 @@ def team_score(pairs, supporter_id=None, break_step=3, bench="low",
 
         weapon_info = None
         if weapon_row and pilot:
-            dep_keys = ATTACK_ATTR_KEYS.get(
-                int(weapon_row.get("attack_attr") or 1)
-            ) or ["ranged"]
+            dep_keys = attack_attr_keys(weapon_row.get("attack_attr")) or ["ranged"]
             dep_val = max(
                 _effective_stat(pilot, k, pilot_tot["stat_pct"].get(k, 0.0))
                 for k in dep_keys
@@ -1622,10 +1615,8 @@ def team_score(pairs, supporter_id=None, break_step=3, bench="low",
                 "id": weapon_row["id"],
                 "name": weapon_row.get("name"),
                 "power": power,
-                "attack_attr": int(weapon_row.get("attack_attr") or 1),
-                "dep_label": ATTACK_ATTR_DEP_LABEL.get(
-                    int(weapon_row.get("attack_attr") or 1), "—"
-                ),
+                "attack_attr": weapon_row.get("attack_attr"),
+                "dep_label": attack_attr_labels(weapon_row.get("attack_attr")),
                 "dep_value": dep_val,
                 "damage": damage,
             }

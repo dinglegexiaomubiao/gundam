@@ -48,7 +48,16 @@ const ATTACK_ATTR_KEYS = {
 
 function pilotDepValue(pilot, attackAttr) {
   if (!pilot) return null;
-  const keys = ATTACK_ATTR_KEYS[attackAttr] || [];
+  let keys = [];
+  if (Array.isArray(attackAttr)) {
+    attackAttr.forEach((a) => { keys = keys.concat(ATTACK_ATTR_KEYS[a] || []); });
+  } else if (typeof attackAttr === "string" && attackAttr.trim().startsWith("[")) {
+    try {
+      JSON.parse(attackAttr).forEach((a) => { keys = keys.concat(ATTACK_ATTR_KEYS[a] || []); });
+    } catch (e) { keys = []; }
+  } else {
+    keys = ATTACK_ATTR_KEYS[attackAttr] || [];
+  }
   const vals = keys.map((k) => pilot[k]).filter((v) => v != null);
   return vals.length ? Math.max(...vals) : null;
 }
@@ -1731,7 +1740,14 @@ function enterUnitEdit(u) {
     tags: (u.tags || []).slice(),
     weapons: (u.weapons || []).map((w) => ({
       weapon_id: w.weapon_id, name: w.name, weapon_max_level: w.weapon_max_level,
-      attack_attr: w.attack_attr, weapon_attr: w.weapon_attr,
+      attack_attr: (() => {
+        const a = w.attack_attr;
+        if (Array.isArray(a)) return a.slice();
+        if (typeof a === "string" && a.trim().startsWith("[")) {
+          try { return JSON.parse(a); } catch (e) { return []; }
+        }
+        return a != null ? [a] : [];
+      })(),
       weapon_attrs: (w.attrs || []).slice(),
       range_min: w.range_min, range_max: w.range_max,
       power_lv5: w.power_lv5, en_lv5: w.en_lv5, hit_lv5: w.hit_lv5, crit_lv5: w.crit_lv5,
@@ -1759,8 +1775,6 @@ function renderUnitEditForm() {
   if (_box) _box.classList.remove("modal-detail");
   const s = unitEdit;
   const roleOpts = [[1, "攻击型"], [2, "耐久型"], [3, "支援型"]];
-  const attrOpts = [[1, "射击"], [2, "格斗"], [3, "特殊"], [7, "EX"]];
-  const dmgOpts = [[1, "实弹"], [2, "光束"], [3, "特殊"], [4, "特殊招式"], [6, "EX"]];
   const statCell = (prefix) => (k) =>
     `<td><input class="edit-input" data-stat="${prefix}" data-k="${k}" value="${s.stats[prefix][k] ?? ""}"></td>`;
   const statRow = (prefix, label) =>
@@ -1771,11 +1785,19 @@ function renderUnitEditForm() {
   const weaponRows = s.weapons.map((w, wi) => {
     const lv9 = (w.weapon_max_level || 5) >= 9;
     const num = (k, val) => `<input class="edit-input" data-wi="${wi}" data-f="${k}" value="${val ?? ""}">`;
-    const attrVal = w.attack_attr in { 4: 1, 5: 1, 6: 1 } ? 3 : w.attack_attr;
+    const aattrs = (() => {
+      const a = w.attack_attr;
+      if (Array.isArray(a)) return a;
+      if (typeof a === "string" && a.trim().startsWith("[")) {
+        try { return JSON.parse(a); } catch (e) { return []; }
+      }
+      return a != null ? [a] : [];
+    })();
+    const attrCheckbox = (a, lb) =>
+      `<label class="chip sel-tag"><input type="checkbox" data-wi="${wi}" data-aa="${a}" ${aattrs.includes(a) ? "checked" : ""}>${lb}</label>`;
     return `<tr>
       <td>${esc(w.name)}</td>
-      <td><select class="edit-select" data-wi="${wi}" data-f="attack_attr">${attrOpts.map(([v, lb]) => `<option value="${v}" ${v == (attrVal || 1) ? "selected" : ""}>${lb}</option>`).join("")}</select></td>
-      <td><select class="edit-select" data-wi="${wi}" data-f="weapon_attr">${dmgOpts.map(([v, lb]) => `<option value="${v}" ${v == (w.weapon_attr in { 5: 1 } ? 4 : w.weapon_attr) ? "selected" : ""}>${lb}</option>`).join("")}</select></td>
+      <td class="edit-row">${[1, 2, 3, 7].map((a) => attrCheckbox(a, ({1:"射击",2:"格斗",3:"特殊",7:"EX"})[a])).join("")}</td>
       <td class="edit-row">${[1, 2, 3].map((a) => `<label class="chip sel-tag"><input type="checkbox" data-wi="${wi}" data-a="${a}" ${w.weapon_attrs.includes(a) ? "checked" : ""}>${({1:"实弹",2:"光束",3:"特殊"})[a]}</label>`).join("")}</td>
       <td>${num("range_min", w.range_min)}~${num("range_max", w.range_max)}</td>
       <td>${num("power_lv5", w.power_lv5)}${lv9 ? `<br>lv9 ${num("power_lv9", w.power_lv9)}` : ""}</td>
@@ -1807,7 +1829,7 @@ function renderUnitEditForm() {
     <div class="tags" id="edit-tags">${tagHtml}</div>
     <button id="edit-add-tag" class="cond-btn" style="margin-left:0">添加标签</button>
     <h3>武器（${s.weapons.length}）</h3>
-    <table><tr><th>名称</th><th>类别</th><th>伤害</th><th>多伤害集合</th><th>射程</th><th>威力</th><th>EN</th><th>命中</th><th>暴击</th><th>特效</th></tr>${weaponRows}</table>
+    <table><tr><th>名称</th><th>类别</th><th>多伤害集合</th><th>射程</th><th>威力</th><th>EN</th><th>命中</th><th>暴击</th><th>特效</th></tr>${weaponRows}</table>
     <h3>能力（${s.abilities.length}）</h3>
     <div id="edit-abilities">${abilityHtml}</div>
     <button id="edit-add-ability" class="cond-btn" style="margin-left:0">添加能力</button>
@@ -1833,6 +1855,13 @@ function bindUnitEditForm() {
       const a = Number(el.dataset.a);
       if (el.checked) { if (!w.weapon_attrs.includes(a)) w.weapon_attrs.push(a); }
       else w.weapon_attrs = w.weapon_attrs.filter((x) => x !== a);
+    }));
+  body.querySelectorAll("input[data-wi][data-aa]").forEach((el) =>
+    el.addEventListener("change", () => {
+      const w = unitEdit.weapons[Number(el.dataset.wi)];
+      const a = Number(el.dataset.aa);
+      if (el.checked) { if (!w.attack_attr.includes(a)) w.attack_attr.push(a); }
+      else w.attack_attr = w.attack_attr.filter((x) => x !== a);
     }));
   body.querySelectorAll("input[data-wi][data-f]").forEach((el) =>
     el.addEventListener("input", () => {
@@ -1887,7 +1916,7 @@ function buildEditPayload() {
     tags: s.tags.slice(),
     weapons: s.weapons.map((w) => ({
       weapon_id: w.weapon_id, attack_attr: w.attack_attr,
-      weapon_attr: w.weapon_attr, weapon_attrs: w.weapon_attrs.slice(),
+      weapon_attrs: w.weapon_attrs.slice(),
       range_min: w.range_min, range_max: w.range_max,
       power_lv5: w.power_lv5, en_lv5: w.en_lv5, hit_lv5: w.hit_lv5, crit_lv5: w.crit_lv5,
       power_lv9: w.power_lv9, en_lv9: w.en_lv9, hit_lv9: w.hit_lv9, crit_lv9: w.crit_lv9,
@@ -3139,7 +3168,7 @@ async function loadPicker(page = pickerState.page) {
       ? pb.effects.map((e) => `${e.name}（+${e.pct}%）`).join("；")
       : "—";
         $("#d-weapon-name").textContent = w.name || "—";
-        $("#d-wtype").textContent = w.weapon_attr_label ?? "—";
+        $("#d-wtype").textContent = w.attrs_label ?? "—";
         $("#d-wstat").textContent = w.pilot_stat ?? "—";
         $("#d-wcrit").textContent = (w.crit_lv5 ?? w.critical_rate ?? 0) + "%";
         const dep = pilotDepValue(calcSel.atkPilot, w.attack_attr);
@@ -3342,7 +3371,7 @@ async function autoCalcBonuses() {
     def_uid: du ? du.id : "", def_usrc: du ? du.source : "",
     def_pid: dp ? dp.id : "", def_psrc: dp ? dp.source : "",
     weapon_attr: w ? ((w.attrs && w.attrs.length) ? w.attrs.join(",") : (w.weapon_attr ?? "")) : "",
-    attack_attr: w ? w.attack_attr : "",
+    attack_attr: w ? (Array.isArray(w.attack_attr) ? w.attack_attr.join(",") : (w.attack_attr || "")) : "",
     attr_nullify: w && (w.effects || []).some((e) =>
       ((e.name || "") + (e.desc || "")).includes("武装属性损伤减轻无效")) ? "1" : "0",
     atk_u_on: calcSel.atkUOn.join(","), atk_p_on: calcSel.atkPOn.join(","),
@@ -4983,7 +5012,7 @@ function pairToDamageCalc(res, pilot) {
     if (calcSel.atkWeapon) {
       const w = calcSel.atkWeapon;
       $("#d-weapon-name").textContent = w.name || "—";
-      $("#d-wtype").textContent = w.weapon_attr_label ?? "—";
+      $("#d-wtype").textContent = w.attrs_label ?? "—";
       $("#d-wstat").textContent = w.pilot_stat ?? "—";
       $("#d-wp").value = res.weapon ? res.weapon.power : (w.power_lv5 ?? w.power);
       $("#d-wcrit").textContent = (pilot.crit_rate ?? 0) + "%";

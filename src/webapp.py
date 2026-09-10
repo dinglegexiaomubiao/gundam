@@ -41,6 +41,9 @@ from .labels import (
     ATTACK_ATTR_DEP_LABEL,
     ATTACK_ATTR_STAT,
     ATTACK_ATTR_STATS,
+    attack_attr_keys,
+    attack_attr_labels,
+    attack_attr_value,
     CRIT_DMG_RE,
     CRIT_RATE_RE,
     DEF_STACK_RE,
@@ -1250,9 +1253,10 @@ def _build_unit_form_content(
     for w in ssp_weapons:
         aattr = w.get("attack_attr")
         wattr = w.get("weapon_attr")
-        w.setdefault("attack_attr_label", ATTACK_ATTR.get(aattr, "—"))
-        w.setdefault("weapon_attr_label", WEAPON_ATTR.get(wattr, "—"))
-        w.setdefault("pilot_stat", ATTACK_ATTR_DEP_LABEL.get(aattr, "—"))
+        w.setdefault("attack_attr_label", attack_attr_labels(aattr))
+        if wattr is not None:
+            w.setdefault("weapon_attr_label", WEAPON_ATTR.get(wattr, "—"))
+        w.setdefault("pilot_stat", attack_attr_labels(aattr))
         # attrs
         if "attrs" not in w:
             try:
@@ -1943,9 +1947,10 @@ def api_unit_detail(unit_id: int) -> dict | None:
     for w in weapons:
         aattr = w.get("attack_attr")
         wattr = w.get("weapon_attr")
-        w["attack_attr_label"] = ATTACK_ATTR.get(aattr, "—")
-        w["weapon_attr_label"] = WEAPON_ATTR.get(wattr, "—")
-        w["pilot_stat"] = ATTACK_ATTR_DEP_LABEL.get(aattr, "—")
+        w["attack_attr_label"] = attack_attr_labels(aattr)
+        if wattr is not None:
+            w["weapon_attr_label"] = WEAPON_ATTR.get(wattr, "—")
+        w["pilot_stat"] = attack_attr_labels(aattr)
         try:
             raw_attrs = json.loads(w.get("weapon_attrs") or "[]")
             attrs = (
@@ -2472,12 +2477,24 @@ def api_unit_edit(payload: dict, preview: bool = True) -> dict:
         pw = weapon_payload.get(wid)
         if not pw:
             continue
-        attack_attr = _clean_int(pw.get("attack_attr"), "依赖属性", minimum=0)
-        weapon_attr = _clean_int(pw.get("weapon_attr"), "伤害类型", minimum=0)
+        raw_aattr = pw.get("attack_attr")
+        if isinstance(raw_aattr, list):
+            attack_attr = [int(x) for x in raw_aattr if str(x).isdigit()]
+        elif isinstance(raw_aattr, str) and raw_aattr.strip().startswith("["):
+            try:
+                attack_attr = [int(x) for x in json.loads(raw_aattr)]
+            except (ValueError, json.JSONDecodeError):
+                attack_attr = []
+        elif raw_aattr in (None, "", 0, "0"):
+            attack_attr = []
+        else:
+            attack_attr = [int(raw_aattr)]
+        attack_attr = list(dict.fromkeys(attack_attr))
+        if any(x not in (1, 2, 3, 7) for x in attack_attr):
+            conn.close()
+            return {"ok": False, "error": "类别只能包含 射击/格斗/特殊/EX"}
         attrs = [int(x) for x in (pw.get("weapon_attrs") or []) if str(x).isdigit()]
         attrs = list(dict.fromkeys(attrs))
-        if not attrs:
-            attrs = [weapon_attr] if weapon_attr else []
         if any(x not in (1, 2, 3) for x in attrs):
             conn.close()
             return {"ok": False, "error": f"多伤害集合只能包含 实弹/光束/特殊"}
@@ -2487,7 +2504,7 @@ def api_unit_edit(payload: dict, preview: bool = True) -> dict:
             conn.close()
             return {"ok": False, "error": "射程下限不能大于上限"}
         fields = {
-            "attack_attr": attack_attr, "weapon_attr": weapon_attr,
+            "attack_attr": json.dumps(attack_attr, ensure_ascii=False),
             "weapon_attrs": json.dumps(attrs, ensure_ascii=False),
             "range_min": rmin, "range_max": rmax,
         }
@@ -2516,7 +2533,7 @@ def api_unit_edit(payload: dict, preview: bool = True) -> dict:
         fields["weapon_effects"] = json.dumps(slots, ensure_ascii=False)
         old_row = {k: wrow[k] for k in fields}
         old_row["weapon_attrs"] = (
-            wrow["weapon_attrs"] or str([wrow["weapon_attr"]] if wrow["weapon_attr"] else [])
+            wrow["weapon_attrs"] or "[]"
         )
         old_effects = _json_list(wrow["weapon_effects"])
         changed = []
@@ -2535,7 +2552,14 @@ def api_unit_edit(payload: dict, preview: bool = True) -> dict:
         weapons_new.append({"weapon_id": wid, **fields})
 
     # ---- 能力 ----
-    abilities_new = payload.get("abilities") or []
+    # 能力是"全量替换"语义：payload 必须显式携带完整列表。
+    # 若整个键缺失（而非空列表），说明调用方只发了部分字段，此时按空列表
+    # 处理会把已有能力静默删光——直接拒绝，避免不可逆的数据丢失。
+    if "abilities" not in payload:
+        conn.close()
+        return {"ok": False, "error": "缺少 abilities 字段：能力为全量替换，"
+                                     "需显式提交完整列表（清空请传 []）"}
+    abilities_new = payload["abilities"] or []
     seen_aids = set()
     for a in abilities_new:
         aid = _clean_int(a.get("ability_id"), "能力", minimum=0)
@@ -2583,11 +2607,11 @@ def api_unit_edit(payload: dict, preview: bool = True) -> dict:
             )
         for w in weapons_new:
             conn.execute(
-                "UPDATE unit_weapon SET attack_attr=?, weapon_attr=?, "
+                "UPDATE unit_weapon SET attack_attr=?, "
                 "weapon_attrs=?, range_min=?, range_max=?, power_lv5=?, en_lv5=?, "
                 "hit_lv5=?, crit_lv5=?, power_lv9=?, en_lv9=?, hit_lv9=?, "
                 "crit_lv9=?, weapon_effects=? WHERE weapon_id=?",
-                (w["attack_attr"], w["weapon_attr"], w["weapon_attrs"],
+                (w["attack_attr"], w["weapon_attrs"],
                  w["range_min"], w["range_max"], w["power_lv5"], w["en_lv5"],
                  w["hit_lv5"], w["crit_lv5"], w.get("power_lv9"), w.get("en_lv9"),
                  w.get("hit_lv9"), w.get("crit_lv9"), w["weapon_effects"],
@@ -3875,7 +3899,7 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
         int(x) for x in str(weapon_attr or "").split(",")
         if x.strip().isdigit()
     }
-    attack_attr_i = int(attack_attr) if str(attack_attr).isdigit() else None
+    attack_attr_keys_list = attack_attr_keys(attack_attr)
     nullify = attr_nullify == "1"
     atk_star_i = int(atk_star) if str(atk_star).isdigit() else 0
     def_star_i = int(def_star) if str(def_star).isdigit() else 0
@@ -4062,12 +4086,12 @@ def api_damage_bonus(atk_uid, atk_usrc, atk_pid, atk_psrc,
             def_star_i,
         )[0]
     atk_pilot_attack = None
-    if atk_pilot and attack_attr_i in ATTACK_ATTR_STATS:
+    if atk_pilot and attack_attr_keys_list:
         skill_pcts = {
             "ranged": atk_skill_ranged, "melee": atk_skill_melee, "awaken": atk_skill_awaken,
         }
         candidates = []
-        for key in ATTACK_ATTR_STATS[attack_attr_i]:
+        for key in attack_attr_keys_list:
             if key not in atk_pilot["stats"]:
                 continue
             try:

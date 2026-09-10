@@ -34,6 +34,9 @@ from src.labels import (
     parse_weapon_max_level,
     split_trait_stages,
     star_value,
+    attack_attr_value,
+    attack_attr_labels,
+    attack_attr_keys,
 )
 
 
@@ -382,6 +385,38 @@ class TestRegexAgainstRealCorpus(unittest.TestCase):
                 msg=f"{rx.pattern[:40]}... 只命中 {hits} 条，"
                     f"疑似与真实措辞脱节",
             )
+
+
+class TestAttackAttrMulti(unittest.TestCase):
+    """武器攻击属性改多选取最大值后的核心计算行为（武器表重构 P2 后续）。"""
+
+    def test_单选取对应属性(self):
+        stats = {"ranged": 500, "melee": 400, "awaken": 300}
+        self.assertEqual(attack_attr_value(stats, 1), 500)   # 射击
+        self.assertEqual(attack_attr_value(stats, 2), 400)   # 格斗
+        self.assertEqual(attack_attr_value(stats, 3), 300)   # 特殊
+
+    def test_多选取最大值(self):
+        stats = {"ranged": 500, "melee": 400, "awaken": 300}
+        # 同时勾 射击+格斗 → 取较大者 500
+        self.assertEqual(attack_attr_value(stats, [1, 2]), 500)
+        # EX=[1,2,3] → 取三者最大 500
+        self.assertEqual(attack_attr_value(stats, [1, 2, 3]), 500)
+        # 隐藏值 4=格斗/射击最高值
+        self.assertEqual(attack_attr_value(stats, 4), 500)
+
+    def test_多选接受_json字符串(self):
+        stats = {"ranged": 500, "melee": 420, "awaken": 300}
+        self.assertEqual(attack_attr_value(stats, "[2, 3]"), 420)
+
+    def test_labels_多选拼接(self):
+        self.assertEqual(attack_attr_labels([1, 2]), "射击、格斗")
+        self.assertEqual(attack_attr_labels([1, 2, 3]), "射击、格斗、特殊")
+        self.assertEqual(attack_attr_labels(7), "EX")
+
+    def test_keys_多选展开(self):
+        self.assertEqual(set(attack_attr_keys([1, 2])), {"ranged", "melee"})
+        self.assertEqual(set(attack_attr_keys([7])), {"ranged", "melee", "awaken"})
 
 
 if __name__ == "__main__":
