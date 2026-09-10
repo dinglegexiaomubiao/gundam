@@ -4409,6 +4409,8 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("atk_skill_awaken", ["0"])[0],
                 q.get("atk_vigor", ["normal"])[0],
                 q.get("def_vigor", ["normal"])[0]))
+        if path == "/api/team/list":
+            return self._send_json(api_team_list())
         parts = path.split("/")
         if len(parts) == 4 and parts[1] == "api":
             kind, item_id = parts[2], parts[3]
@@ -4573,6 +4575,24 @@ class Handler(BaseHTTPRequestHandler):
                     "message": "导入成功，数据库已保存到本地",
                     "counts": info["counts"],
                 })
+            if api_path in ("/api/team/save", "/api/team/delete",
+                            "/api/team/config"):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        parsed = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                if api_path == "/api/team/save":
+                    return self._send_json(api_team_save(body))
+                if api_path == "/api/team/delete":
+                    return self._send_json(api_team_delete(body))
+                return self._send_json(api_team_config(body))
             if api_path == "/api/team/score":
                 length = int(self.headers.get("Content-Length") or 0)
                 body = {}
