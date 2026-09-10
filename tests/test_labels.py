@@ -198,6 +198,29 @@ class TestEffectRegex(unittest.TestCase):
         self.assertEqual(m.group(1), "5")
         self.assertEqual(m.group(2), "25")
 
+    def test_防御叠加_半角括号(self):
+        """真实文案存在半角括号写法；只认全角会让它被静默忽略。"""
+        m = DEF_STACK_RE.search(
+            "每次受到来自敌方的损伤时，自身防御力提升10%(最高50%)"
+        )
+        self.assertIsNotNone(m, msg="半角括号写法未被识别")
+        self.assertEqual(m.group(1), "10")
+        self.assertEqual(m.group(2), "50")
+
+    def test_防御叠加_真实文案含换行(self):
+        """数据库原文在「损伤时，」后有换行，两种括号都要能识别。"""
+        cases = (
+            ("每次受到来自敌方的损伤时，\n自身防御力提升5%（最高25%）",
+             "5", "25"),
+            ("每次受到来自敌方的损伤时，\n自身防御力提升10%(最高50%)",
+             "10", "50"),
+        )
+        for text, step, cap in cases:
+            m = DEF_STACK_RE.search(text)
+            self.assertIsNotNone(m, msg=f"未识别：{text!r}")
+            self.assertEqual(m.group(1), step)
+            self.assertEqual(m.group(2), cap)
+
     def test_HP恢复(self):
         m = HP_RECOVER_RE.search("自身HP为50%以下时，自身HP恢复20%（1次）")
         self.assertIsNotNone(m)

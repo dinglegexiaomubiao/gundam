@@ -80,11 +80,17 @@ class TestParseEffects(unittest.TestCase):
         self.assertEqual(eff["stat_pct"].get("awaken"), 20.0)
         self.assertEqual(eff["stat_pct"].get("reaction"), 20.0)
 
-    def test_防御叠加(self):
-        eff = _parse_effects(
-            "每次受到来自敌方的损伤时，自身防御力提升5%（最高25%）"
+    def test_防御叠加_半角与全角括号都能解析(self):
+        """两种括号写法在真实文案里都存在，漏掉半角会少算一条加成。"""
+        full = _parse_effects(
+            "每次受到来自敌方的损伤时，\n自身防御力提升5%（最高25%）"
         )
-        self.assertEqual(eff["def_stack"], (5, 25))
+        half = _parse_effects(
+            "每次受到来自敌方的损伤时，\n自身防御力提升10%(最高50%)"
+        )
+        self.assertEqual(full["def_stack"], (5, 25))
+        self.assertEqual(half["def_stack"], (10, 50),
+                         msg="半角括号写法的防御叠加被漏掉了")
 
     def test_HP恢复(self):
         eff = _parse_effects("自身HP为50%以下时，自身HP恢复20%（1次）")
