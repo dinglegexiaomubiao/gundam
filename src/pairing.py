@@ -707,8 +707,6 @@ def _unit_ctx(conn, unit_id: int, weapon_row: dict | None,
             attrs = [int(x) for x in attrs] if isinstance(attrs, list) else []
         except (TypeError, ValueError, json.JSONDecodeError):
             attrs = []
-        if not attrs and weapon_row.get("weapon_attr"):
-            attrs = [int(weapon_row["weapon_attr"])]
         wa_ids = {a for a in attrs if a in (1, 2, 3)}
         for k in attack_attr_keys(weapon_row.get("attack_attr")):
             if k in DEP_STAT_KEYS:

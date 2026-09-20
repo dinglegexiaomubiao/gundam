@@ -420,6 +420,19 @@ def _i(v):
     return None if v is None else int(v)
 
 
+def _weapon_attrs_from_attr(v):
+    """把旧的 weapon_attr 单值伤害类型推导为多伤害集合 JSON 字符串。
+
+    与 scripts/migrate_weapon_attack_attr.py 的回填规则保持一致：
+    1/2/3 -> 对应单元素数组；4(特殊招式) -> [3]；5/6 -> []（非物理/光束/特殊加成类型）。
+    """
+    if v in (1, 2, 3):
+        return json.dumps([v], ensure_ascii=False)
+    if v == 4:
+        return json.dumps([3], ensure_ascii=False)
+    return json.dumps([], ensure_ascii=False)
+
+
 def _load_json(path: Path):
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
@@ -680,6 +693,7 @@ def ingest_one_unit(conn, u: dict, tag_map: dict[int, str], series_by_id: dict, 
         ws = wep.get("weapon_status") or {}
         top = parse_weapon_max_level(ws)
         weapon_effects = top["effects"]
+        wattr_json = _weapon_attrs_from_attr(_i(wep.get("weapon_attr")))
         conn.execute(
             """INSERT OR IGNORE INTO unit_weapon
                (unit_id, weapon_id, sort, name, type, work_type, attack_attr,
@@ -688,7 +702,8 @@ def ingest_one_unit(conn, u: dict, tag_map: dict[int, str], series_by_id: dict, 
                 power_lv5, en_lv5, hit_lv5, crit_lv5,
                 weapon_max_level,
                 map_weapon_range, map_weapon_desc, map_weapon_trait,
-                map_weapon_can_use_after_move, is_full_animation, weapon_effects)
+                map_weapon_can_use_after_move, is_full_animation, weapon_effects,
+                weapon_attrs)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (_i(u["id"]), _i(wep.get("id") or ws.get("id")), _i(w.get("sort")),
              wep.get("name"), _i(wep.get("type")), _i(wep.get("work_type")),
@@ -702,7 +717,8 @@ def ingest_one_unit(conn, u: dict, tag_map: dict[int, str], series_by_id: dict, 
              ws.get("map_weapon_effect_range"),
              _i(ws.get("map_weapon_desc")), _i(ws.get("map_weapon_trait")),
              _b(ws.get("map_weapon_can_use_after_move")), _b(wep.get("is_full_animation")),
-             json.dumps(weapon_effects, ensure_ascii=False)),
+             json.dumps(weapon_effects, ensure_ascii=False),
+             wattr_json),
         )
     for a in u.get("abilities") or []:
         ab = a.get("ability") or {}
@@ -824,15 +840,17 @@ def ingest_units(conn, tag_map: dict[int, str]):
             ws = wep.get("weapon_status") or {}
             top = parse_weapon_max_level(ws)
             weapon_effects = top["effects"]
+            wattr_json = _weapon_attrs_from_attr(_i(wep.get("weapon_attr")))
             conn.execute(
                 """INSERT OR IGNORE INTO unit_weapon
                    (unit_id, weapon_id, sort, name, type, work_type, attack_attr,
-                    weapon_attr, weapon_capability, weapon_effect, weapon_level_up_material,
+                    weapon_capability, weapon_effect, weapon_level_up_material,
                     range_min, range_max, power, en, hit_rate, critical_rate,
                     power_lv5, en_lv5, hit_lv5, crit_lv5,
                     weapon_max_level,
                     map_weapon_range, map_weapon_desc, map_weapon_trait,
-                    map_weapon_can_use_after_move, is_full_animation, weapon_effects)
+                    map_weapon_can_use_after_move, is_full_animation, weapon_effects,
+                    weapon_attrs)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (_i(u["id"]), _i(wep.get("id") or ws.get("id")), _i(w.get("sort")),
                  wep.get("name"), _i(wep.get("type")), _i(wep.get("work_type")),
@@ -846,7 +864,8 @@ def ingest_units(conn, tag_map: dict[int, str]):
                  ws.get("map_weapon_effect_range"),
                  _i(ws.get("map_weapon_desc")), _i(ws.get("map_weapon_trait")),
                  _b(ws.get("map_weapon_can_use_after_move")), _b(wep.get("is_full_animation")),
-                 json.dumps(weapon_effects, ensure_ascii=False)),
+                 json.dumps(weapon_effects, ensure_ascii=False),
+                 wattr_json),
             )
         for a in u.get("abilities") or []:
             ab = a.get("ability") or {}
