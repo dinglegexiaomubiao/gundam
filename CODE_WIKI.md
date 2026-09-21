@@ -1009,7 +1009,10 @@ insights = {
 }
 ```
 
-**攻击型（`role=1`）**
+**攻击型（`role=1`）** —— ⚠️ **一支队伍可能有多台攻击型，全部都要展示**：
+`insights.attacks` 是**列表**（按最高伤害武器伤害降序），`insights.attack` 保留为
+「伤害最高的那台」以兼容旧调用/旧前端。`insights.match.groups` 与之一一对应，
+下面单台口径的字段（`attack_attrs` / `rows` / `covered` / `hit_count` …）指的是 `attacks[0]`。
 - `range.max_nomap`：全部武器的 `range_max` 最大值，**排除 MAP 武器**
   （判据 `IFNULL(map_weapon_range,'') NOT IN ('','null','0')`，与 webapp 的 `WFX_FILTERS` 一致）；
 - `best_weapon`：**理论最高伤害**的武器 —— 遍历该机全部武器逐把算伤害取最大，
@@ -1034,6 +1037,14 @@ insights = {
 
 - `rows`：逐类型一行 `{type, support_hit, support_by, defense_hit, defense_by}`，
   前端渲染为 `物理 │ 支援命中 ← 特效名 │ 防御减伤 ← 能力名` 的双列对照；
+- `groups`：**逐台攻击型一组**（多台时的主结构），每组含
+  `{unit, pilot, weapon, damage, attrs, rows, covered, missed, hit_count, total,
+    defense_hit_count, defense_total, missing_types}`；
+- 全队口径字段：`attack_count`（攻击型台数）、`total_hit_count` / `total_types`
+  （**合计命中 / 合计需求**，逐台相加 —— 同一类型在两台机体上会各算一次）、
+  `union_attrs`（各台最高伤害武器类型并集）、`full_count` / `none_count`
+  （完全覆盖 / 一条没命中的台数）、`defense_rows`（**按类型去重**的防御覆盖 ——
+  防御减伤与"是哪台攻击型打出去的"无关）、`defense_hit_total` / `defense_types`；
 - 兼容字段：`covered` / `missed` / `hit_count` / `total`（都指**支援侧**），
   另给 `support_hit_count` / `support_total` / `defense_hit_count` / `defense_total`
   与 `missing_types`（支援未覆盖的类型，供结论句点名）；
@@ -1101,12 +1112,16 @@ insights = {
 `synergy` = `{level, title, detail, defense_detail, defense_state, baseline}`。
 **没覆盖全就算减分项**（`level` 非 `full`），前端据此着色。
 
+多台攻击型时 `detail` 按台汇总并**点名有缺口的那几台**：
+`支援提供 物理损伤提升；2 台攻击型中 0 台完全覆盖，2 台仍有缺口（「神高达 (EX)」缺少 特殊 损伤提升；「吉翁号 (EX)」缺少 光束、特殊 损伤提升）：合计 1/4`
+（`_attack_gap_text()` 生成缺口说明，最多列 3 台）。单台时沿用原句式不变。
+
 **队伍及格线（`baseline`）** — 阈值集中在 `src/pairing.py: TEAM_BASELINE`，改一处即全链路生效：
 
 | 检查项 | 适用 | 及格线 | 超过即加分 | key |
 |---|---|---|---|---|
 | 移动力 | **任意类型，全队合并为一条**（逐台明细在 `units`） | 最差 ≥ 5 | 最高 ≥ 6 | `movement` |
-| 支援型特效射程 | 支援型**对攻击型生效**的特效（不含 MAP） | ≥ 5 | > 5 | `support_range` |
+| 支援型特效射程 | 支援型**对任一攻击型生效**的特效（不含 MAP） | ≥ 5 | > 5 | `support_range` |
 | 支援攻击次数 | 支援型槽位的驾驶员 | ≥ 2 次 | > 2 次 | `support_attack` |
 | UR 防御型 | UR（rarity 5）防御型槽位 | 支援防御 ≥ 2 次 **或** 能反击援防 | 两者兼具 | `defense_support` |
 
@@ -1118,6 +1133,8 @@ insights = {
 2. **支援射程只看「对攻击型生效」的特效** —— 不是机体最大射程。
    射程再远但打不出对应伤害类型也没用（取 `used` 特效；没有则退回该机全部损伤提升特效，
    再没有才退回全部特效）。
+   ⚠️ 判「生效」时 `want` 取**全部攻击型**最高伤害武器类型的**并集** ——
+   否则多台攻击型时，只服务第二台的特效会被误判成「额外特效」（`_effect_used_for()` 的 used/extra 分组）。
 
 `baseline` = `{items, bonuses, passed, total, bonus_count, ok}`：
 
