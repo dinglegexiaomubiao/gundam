@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.cloud import _translate_ddl
+from src.cloud import _translate_ddl, _translate_index
 
 
 class TestTranslateDDL(unittest.TestCase):
@@ -74,6 +74,35 @@ class TestTranslateDDL(unittest.TestCase):
             with self.subTest(table=name):
                 self.assertIsNotNone(sql, f"{name} 无 sql")
                 translated = _translate_ddl(sql)  # 不应抛异常
+                self.assertNotIn('""', translated, f"{name} 出现双重引号")
+
+    def test_quoted_index_on_quoted_table(self):
+        """旧库真实形态：索引作用在带引号表名上（idx_unit_pilot_pilot ON "unit_pilot"）。"""
+        sql = 'CREATE INDEX idx_unit_pilot_pilot ON "unit_pilot"(pilot_id)'
+        out = _translate_index(sql)  # 不应抛 ValueError
+        self.assertIn('CREATE INDEX "idx_unit_pilot_pilot"', out)
+        self.assertIn('ON "unit_pilot" ("pilot_id")', out)
+        self.assertNotIn('""', out)
+
+    def test_real_local_db_all_indexes_parse(self):
+        """用本地库校验全部索引（含带引号表名的）都能翻译。"""
+        import sqlite3
+        db_path = ROOT / "data" / "db" / "gundam.db"
+        if not db_path.exists():
+            self.skipTest("本地库不存在，跳过真实库校验")
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            rows = con.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type='index' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertTrue(rows, "本地库无索引？")
+        for name, sql in rows:
+            with self.subTest(index=name):
+                self.assertIsNotNone(sql, f"{name} 无 sql")
+                translated = _translate_index(sql)
                 self.assertNotIn('""', translated, f"{name} 出现双重引号")
 
 

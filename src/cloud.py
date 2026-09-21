@@ -139,8 +139,9 @@ def _translate_ddl(sqlite_sql: str) -> str:
 
 
 def _translate_index(idx_sql: str) -> str:
+    # 兼容旧库带引号索引名 / 表名
     m = re.match(
-        r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(\w+)\s+ON\s+(\w+)\s*\((.+)\)",
+        r'CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:"?([\w]+)"?)\s+ON\s+(?:"?([\w]+)"?)\s*\((.+)\)',
         idx_sql.strip(), re.S | re.I,
     )
     if not m:
