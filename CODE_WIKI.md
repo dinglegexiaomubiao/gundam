@@ -1053,6 +1053,18 @@ insights = {
   **数值一律取自 `desc`**（实测 `trait_value` 与 `desc` 存在错位：GN力场 `trait_type=79` 的
   `trait_value` 是 4500，而 desc 写的是“减轻20%”）；
   `attrs` 从 desc 里的「物理/光束/特殊」字样解析，所以「物理、光束武装减伤 20%」能正确表达；
+- `boosts` 每项带 `cond_ok` / `cond_text`：
+  - `cond_ok` —— `True` 无条件（或**机体侧**条件已满足）/ `False` 机体侧条件明确不满足
+    （这套搭配永远触发不了）/ `None` 只依赖战况或敌方（战意、HP·EN、距离、回合、
+    敌方武器属性），**静态判不出，不能当成"未达成"**；
+  - `cond_text` —— 从 `desc` 切出的条件子句（`_cond_clause()`：「…时，效果…」→「…时」），
+    无条件条目为空串；
+  - 判定入口 `_unit_cond_verdict()`：复用 `_cond_parse()` + `_unit_cond_ok()`，
+    以 `active_condition_set_id` 为「这条带条件」的权威标志
+    （**不能用「有没有 `active_condition` 对象」判断** —— 无条件条目也带一个字段全空的对象）；
+  - 📌 **实测结论**：全库 801 条带条件的机体能力**全部**是「依赖战况/敌方」
+    （`target` 为 Enemy/AttackTarget 或带 tension/HP 等阈值），**没有**一条针对自身标签/系列/类型
+    —— 所以 `False`（未达成）在现有数据里不会出现，它是一条防御性分支而非死代码；
 - `unit_skill`：`unit_skill` 表（目前仅 EX 机体有）；
 - `pilot_mechanics`：驾驶员的**基础机制**（取自 `_build_pilots` 的 `base_mech`，剔除主动技能），
   即「能支援防御 / 支援攻击几次」「反击援防」「额外行动」等，如
@@ -1118,10 +1130,15 @@ insights = {
   |---|---|
   | `support_extra` | 攻击型之外的支援特效（列条数与名称） |
   | `support_extra_match` | 上述额外特效**能命中队伍里其它机体的伤害类型**（更进一步的加分项） |
-  | `defense_mitigation` | 防御减伤覆盖哪些伤害类型 + 阈值无效 + **可触发的**特殊能力 |
+  | `defense_mitigation` | 防御减伤覆盖哪些伤害类型 + 阈值无效 + **可触发的**特殊能力 + **需条件能力的名称与条件** |
 
-  > `defense_mitigation` 只列「必须能触发」的能力：排除带 `active_condition_set_id` 的，
-  > 以及名字里就写明「条件」的（实测有条目无条件集但名字标了条件）。
+  > `defense_mitigation` 的「可触发能力」只收 `cond_ok is True` 的条目；
+  > 带条件的条目按判定结果分两段列出**名称 + 条件子句**：
+  > `条件能力（可达成）：名称 ｜ 自身战意为“超一击”以上时`、
+  > `条件能力（未达成）：名称 ｜ 需 搭乘单位为“独角兽高达”时`。
+  > **不要再写「另有 N 条需条件的能力」** —— 用户明确要求列出具体是哪些能力。
+  > 也不要用「名称里有没有『条件』二字」来判断：实测「（常态＆战意条件）攻击力提升 LV2」
+  > 有无条件（`active_condition_set_id=0`）与需战意两个变体，按名称判会把无条件那条也误伤。
 
 - `synergy` 与 `baseline` 在 `insights` 下各有一份（前端取 `insights.synergy.baseline`）。
 
