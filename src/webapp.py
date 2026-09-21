@@ -10,12 +10,15 @@ import mimetypes
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, urlparse
 import re
 
 from . import config
+from . import dbutil
 from .cloud import (
     cloud_diff,
     character_sync_diff,
@@ -656,19 +659,36 @@ def _parse_ability_effects(d: str) -> list[dict]:
 
 
 def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """只读连接（统一 timeout，见 dbutil）。"""
+    return dbutil.connect_ro(config.DB_PATH)
 
 
 def _write_conn() -> sqlite3.Connection:
     """可写连接（编辑保存等写操作使用，WAL 模式避免读写锁）。"""
-    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    return dbutil.connect_rw(config.DB_PATH)
+
+
+@contextmanager
+def _ro():
+    """只读连接上下文：自动 close，避免漏关。"""
+    conn = _conn()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
+def _rw():
+    """可写连接上下文：异常自动 rollback，退出自动 close。"""
+    conn = _write_conn()
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _one(conn, sql, args=()):
@@ -1733,7 +1753,9 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
     conn.close()
     if kind == "pilots" and support:
         if support == "反击援防":
-            items = [r for r in items if r["id"] in _counter_guard_ids(_conn())]
+            with _ro() as cg_conn:
+                cg_ids = _counter_guard_ids(cg_conn)
+            items = [r for r in items if r["id"] in cg_ids]
         else:
             items = [r for r in items if r.get("support_label") == support]
         total = len(items)
@@ -4214,7 +4236,7 @@ def _validate_sqlite_db(path: Path) -> bool:
         with path.open("rb") as f:
             if f.read(16) != b"SQLite format 3\x00":
                 return False
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = dbutil.connect_ro(path)
         try:
             tables = {
                 r[0] for r in conn.execute(
@@ -4326,12 +4348,12 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 uid = 0
             return self._send_json(refetch_unit_diff(uid))
-        if path == "/api/refetch-unit-apply":
-            try:
-                uid = int(q.get("unit_id", ["0"])[0])
-            except ValueError:
-                uid = 0
-            return self._send_json(refetch_unit_apply(uid))
+        # 这两个是写操作（会用网页数据覆盖本地），只接受 POST；
+        # 旧版前端/缓存若仍以 GET 调用，给出明确提示而不是静默 404。
+        if path in ("/api/refetch-unit-apply", "/api/refetch-char-apply"):
+            return self._send_json(
+                {"error": "该操作会覆盖本地数据，请改用 POST 调用"}, 405
+            )
         if path == "/api/char-sync-diff":
             try:
                 cid = int(q.get("char_id", ["0"])[0])
@@ -4344,16 +4366,18 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 cid = 0
             return self._send_json(refetch_character_diff(cid))
-        if path == "/api/refetch-char-apply":
-            try:
-                cid = int(q.get("char_id", ["0"])[0])
-            except ValueError:
-                cid = 0
-            return self._send_json(refetch_character_apply(cid))
         if path == "/api/export":
             if not config.DB_PATH.exists():
                 return self._send_json({"error": "数据库不存在"}, 404)
-            return self._send_file_download(config.DB_PATH, "gundam.db")
+            # 导出前用在线备份 API 生成一致快照（含尚未 checkpoint 的 WAL 内容），
+            # 避免直接下发主库时「库头已更新、WAL 未跟上」导致下载包不可用。
+            try:
+                with TemporaryDirectory(prefix="gge_export_") as td:
+                    snap = Path(td) / "gundam.db"
+                    dbutil.backup_db_file(config.DB_PATH, snap)
+                    return self._send_file_download(snap, "gundam.db")
+            except (sqlite3.Error, OSError) as exc:
+                return self._send_json({"error": f"导出失败：{exc}"}, 500)
         if path == "/api/series":
             return self._send_json(api_series())
         if path == "/api/tags":
@@ -4592,6 +4616,29 @@ class Handler(BaseHTTPRequestHandler):
                     except (ValueError, UnicodeDecodeError):
                         body = {}
                 return self._send_json(start_sync(body.get("direction", "")))
+            if api_path in ("/api/refetch-unit-apply", "/api/refetch-char-apply"):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length > 0:
+                    try:
+                        parsed = json.loads(
+                            self.rfile.read(length).decode("utf-8") or "{}"
+                        )
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (ValueError, UnicodeDecodeError):
+                        body = {}
+                if api_path == "/api/refetch-unit-apply":
+                    try:
+                        uid = int(body.get("unit_id") or 0)
+                    except (TypeError, ValueError):
+                        uid = 0
+                    return self._send_json(refetch_unit_apply(uid))
+                try:
+                    cid = int(body.get("char_id") or 0)
+                except (TypeError, ValueError):
+                    cid = 0
+                return self._send_json(refetch_character_apply(cid))
             if api_path == "/api/unit-edit":
                 length = int(self.headers.get("Content-Length") or 0)
                 body = {}
@@ -4669,8 +4716,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(
                         {"error": "文件不是有效的数据库备份"}, 400
                     )
-                config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-                tmp.replace(config.DB_PATH)
+                # 安全换库：先 checkpoint + 清边车，再 replace；被占用时给可读提示
+                try:
+                    dbutil.swap_db_file(tmp, config.DB_PATH)
+                except PermissionError as exc:
+                    self._cleanup_import_files(tmp)
+                    return self._send_json({"error": str(exc)}, 409)
                 self._cleanup_import_files(tmp)
                 info = api_summary()
                 return self._send_json({
@@ -4742,11 +4793,15 @@ def run_server(port: int = 8765) -> None:
     else:
         # 幂等补建驾驶员编辑日志表（已有数据库不会自动跑 SCHEMA）
         try:
-            _ensure_char_edit_log(_write_conn())
+            with _rw() as c:
+                _ensure_char_edit_log(c)
+                c.commit()
         except Exception as exc:  # noqa: BLE001
             print(f"补建 character_edit_log 失败：{exc}")
         try:
-            _ensure_team_tables(_write_conn())
+            with _rw() as c:
+                _ensure_team_tables(c)
+                c.commit()
         except Exception as exc:  # noqa: BLE001
             print(f"补建 team 表失败：{exc}")
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)

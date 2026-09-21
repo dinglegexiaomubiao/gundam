@@ -35,7 +35,7 @@
       <button data-tab="units"      role="tab" aria-selected="false" data-tab-color="hud-red" data-page-node-id="05MFHaSj9cbfy215JMWejD">机体</button>
       <button data-tab="characters" role="tab" aria-selected="false" data-tab-color="hud-blue" data-page-node-id="3RyR9NYHLPNFavvggCU4TZ">驾驶员</button>
       <button data-tab="supporters" role="tab" aria-selected="false" data-tab-color="hud-amber" data-page-node-id="swBYFlMiyQ5vz3DRyjuf86">支援角色</button>
-      <button data-tab="stages"     role="tab" aria-selected="false" data-tab-color="hud-green" data-page-node-id="hj9XRmrvSzMHKpHjluyGkm">关卡敌人</button>
+      <button data-tab="stages"     role="tab" aria-selected="false" data-tab-color="hud-green" title="数据已归档：不再随爬取更新" data-page-node-id="hj9XRmrvSzMHKpHjluyGkm">关卡敌人</button>
       <button data-tab="search"     role="tab" aria-selected="false" data-tab-color="role2" data-page-node-id="Pndf133h6wCdFT4IqudWV4">技能/能力/效果</button>
       <button data-tab="damage"     role="tab" aria-selected="false" data-tab-color="hud-amber" data-page-node-id="cuAeTQ1mUa3Fs1vMya5Jjf">伤害计算</button>
       <button data-tab="pairing"    role="tab" aria-selected="false" data-tab-color="hud-green" data-page-node-id="HxxRfwlrUGy0v3Ja1VH6gH">配对</button>
@@ -249,6 +249,9 @@
     </section>
 
     <section id="tab-stages" class="tab" role="tabpanel" aria-label="关卡敌人" data-page-node-id="qtYI9Jg8ooG11CzAcb4N1q">
+      <div class="archived-note" role="note">
+        <span class="arch-tag">已归档</span>自 2026-09-21 起，「爬取数据」不再抓取 <b>关卡敌人</b> 与 <b>剧情 / 塔楼事件</b>。下方为最后一次抓取的历史快照（stage / stage_map_npc / story_event / tower_event 等 7 张表，合计约 2.7 万行），不会随爬取更新。
+      </div>
       <div class="toolbar" data-page-node-id="l03HZ95RMTTyKVsAZcvTio">
         <input id="stage-q" placeholder="搜索关卡名称 / ID…" aria-label="搜索关卡名称或ID" data-page-node-id="722pSoYXx8irQL7z2vSgpV">
         <button id="stage-search" data-page-node-id="7DjW2kYjlBRnFeWNW0f6ki">查询</button>
@@ -713,7 +716,7 @@
       <div class="toolbar" data-page-node-id="BDEBP74lVbpeFqxkYjaPDr">
         <select id="picker-source" aria-label="选择来源" data-page-node-id="ixmU25wuCtDBlvDPeK2vqK">
           <option value="library" data-page-node-id="MvCFUYwKB0QeFyf3TFmU7q">机体库</option>
-          <option value="enemy" data-page-node-id="O7EGMvlmXAuUsdWpG4ez6Z">关卡敌人</option>
+          <option value="enemy" data-page-node-id="O7EGMvlmXAuUsdWpG4ez6Z">关卡敌人（已归档）</option>
         </select>
         <input id="picker-q" placeholder="搜索名称…" aria-label="搜索名称" data-page-node-id="a9cw4rwm15B6hD1b2iOyZf">
         <select id="picker-rarity" class="picker-filter hidden" aria-label="稀有度筛选" data-page-node-id="OeXFznw6OLsfZlZAPbCzcc">

@@ -2222,6 +2222,21 @@ nav button.active::after {
 .team-conflict b { color: var(--accent2); }
 .team-conflict .muted { color: var(--muted); }
 
+/* 归档数据说明：关卡 / 事件相关表自爬取范围裁剪后不再更新 */
+.archived-note {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--panel2); border: 1px dashed var(--line);
+  color: var(--muted); font-size: 12px; line-height: 1.75;
+}
+.archived-note .arch-tag {
+  display: inline-block; margin-right: 6px; padding: 1px 7px;
+  border-radius: 999px; font-size: 11px; font-weight: 700;
+  background: var(--type-unknown-soft);
+  border: 1px solid rgba(133, 147, 166, .5);
+  color: #c6d0dd;
+}
+.archived-note b { color: var(--text); font-weight: 600; }
+
 /* 选择器：行内类型色条 + 屏蔽提示 */
 .picker-list .picker-row[data-role] { position: relative; padding-left: 16px; }
 .picker-list .picker-row[data-role]::before {

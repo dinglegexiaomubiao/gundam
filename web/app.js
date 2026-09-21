@@ -2098,7 +2098,7 @@ async function refetchCurrentUnit(unitId) {
     btn.disabled = true;
     btn.textContent = "覆盖中…";
     try {
-      const r = await api(`/api/refetch-unit-apply?unit_id=${unitId}`);
+      const r = await apiPost("/api/refetch-unit-apply", { unit_id: unitId });
       if (r.ok) {
         await openUnit(unitId);  /* 刷新详情（详情本身即覆盖成功的反馈） */
         announceLive(`已用网页数据覆盖机体 ${r.name || unitId}`);
@@ -2743,7 +2743,7 @@ async function refetchCurrentChar(charId) {
     btn.disabled = true;
     btn.textContent = "覆盖中…";
     try {
-      const r = await api(`/api/refetch-char-apply?char_id=${charId}`);
+      const r = await apiPost("/api/refetch-char-apply", { char_id: charId });
       if (r.ok) {
         await openCharacter(charId);  /* 刷新详情（详情本身即覆盖成功的反馈） */
         announceLive(`已用网页数据覆盖驾驶员 ${r.name || charId}`);

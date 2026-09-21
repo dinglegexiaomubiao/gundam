@@ -6,6 +6,7 @@ import os
 import sqlite3
 
 from . import config
+from . import dbutil
 
 
 def _count(conn, sql):
@@ -29,7 +30,7 @@ def verify() -> None:
         size = os.path.getsize(p) if p.exists() else 0
         print(f"{rel}: {'存在' if p.exists() else '缺失'} ({size/1024/1024:.1f} MB)")
 
-    conn = sqlite3.connect(config.DB_PATH)
+    conn = dbutil.connect_ro(config.DB_PATH, row_factory=None)
     print("\n===== SQLite 表行数 =====")
     tables = [
         ("series", "SELECT COUNT(*) FROM series"),

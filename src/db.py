@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from . import config
+from . import dbutil
 from .labels import (
     STAR_LABEL,
     STAR_MULT,
@@ -406,11 +407,7 @@ CREATE TABLE IF NOT EXISTS team_config (
 
 
 def _conn() -> sqlite3.Connection:
-    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    return dbutil.connect_rw(config.DB_PATH)
 
 
 def _b(v) -> int | None:
@@ -454,6 +451,77 @@ _SUPPORT_RES = (
 )
 
 
+def _slot_variants(slot: dict, primary: str, sp_key: str,
+                   id_key: str, sp_id_key: str) -> list[tuple[int, dict]]:
+    """展开一个技能/能力槽位里的全部实体，返回 [(自然键 id, 实体字典), ...]。
+
+    原始数据里每个槽位可能同时带主对象（skill/ability）与 SP 对象
+    （skill_sp/ability_sp）：多数互为镜像（id 相同，只算一个），id 不同时
+    是两个不同实体，都要入库。两者皆空时用槽位自带 id 或 -(sort) 兜底，
+    确保自然键永不为 NULL —— SQLite 的 UNIQUE / PRIMARY KEY 对 NULL 不生效，
+    键为 NULL 会让 `INSERT OR IGNORE` 形同虚设，重复行会不断累积。
+    """
+    out: list[tuple[int, dict]] = []
+    seen: set[int] = set()
+    for key in (primary, sp_key):
+        obj = slot.get(key) or {}
+        sid = _i(obj.get("id"))
+        if sid is not None and sid not in seen:
+            seen.add(sid)
+            out.append((sid, obj))
+    if not out:
+        fallback = (_i(slot.get(sp_id_key)) or _i(slot.get(id_key))
+                    or -(_i(slot.get("sort")) or 0))
+        out.append((fallback, {}))
+    return out
+
+
+def _clear_character_children(conn, char_id: int) -> None:
+    """清空某驾驶员的技能/能力子表（重建前调用，避免重复累积）。"""
+    conn.execute("DELETE FROM character_skill WHERE character_id=?", (char_id,))
+    conn.execute("DELETE FROM character_ability WHERE character_id=?", (char_id,))
+
+
+def ingest_character_children(conn, c: dict) -> None:
+    """只写入某驾驶员的技能/能力子表（不碰 character 主行）。
+
+    单独抽出有两个用途：① `ingest_one_character` 复用；② 对既有库做
+    「补全 SP 技能/能力」的定向回填时，不会覆盖主表上其它人工修改。
+    调用方需保证 character 主行已存在（外键开启时有依赖），并自行先
+    `_clear_character_children`。
+    """
+    char_id = _i(c["id"])
+    for sk in c.get("skills") or []:
+        for skill_id, skill in _slot_variants(
+                sk, "skill", "skill_sp", "character_skill_id", "sp_character_skill_id"):
+            traits = [t.get("trait") or t for t in skill.get("trait_set") or []]
+            conn.execute(
+                """INSERT OR IGNORE INTO character_skill
+                   (character_id, character_skill_id, sort, level, name, desc, sp,
+                    duration, is_auto_usage, auto_usage_priority, traits)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (char_id, skill_id, _i(sk.get("sort")),
+                 _i(sk.get("level")), skill.get("name"), skill.get("desc"),
+                 _i(skill.get("sp")), _i(skill.get("duration")),
+                 _b(skill.get("is_auto_usage")), _i(skill.get("auto_usage_priority")),
+                 json.dumps(traits, ensure_ascii=False)),
+            )
+    for ab in c.get("abilities") or []:
+        for ability_id, ability in _slot_variants(
+                ab, "ability", "ability_sp", "ability_id", "sp_ability_id"):
+            detail = ability.get("detail") or {}
+            traits = [t.get("trait") or t for t in ability.get("traits") or []]
+            conn.execute(
+                """INSERT OR IGNORE INTO character_ability
+                   (character_id, ability_id, sort, level, name, desc, ability_type, traits)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (char_id, ability_id, _i(ab.get("sort")),
+                 _i(ab.get("level")), detail.get("name") or ability.get("name"),
+                 detail.get("desc"), _i(ability.get("ability_type")),
+                 json.dumps(traits, ensure_ascii=False)),
+            )
+
+
 def _support_info(abilities, skills) -> dict:
     """支援次数仅从能力（abilities）统计，技能不计入。"""
     info = {
@@ -481,7 +549,11 @@ def _support_info(abilities, skills) -> dict:
                         info[kind]["cond"] = True
 
     for ab in abilities or []:
-        scan([t.get("trait") or t for t in (ab.get("ability") or {}).get("traits") or []])
+        # 主能力与 SP 能力都要统计；互为镜像时 _slot_variants 已按 id 去重，
+        # 不会重复计数。
+        for _aid, obj in _slot_variants(ab, "ability", "ability_sp",
+                                        "ability_id", "sp_ability_id"):
+            scan([t.get("trait") or t for t in obj.get("traits") or []])
     return info
 
 
@@ -917,29 +989,30 @@ def ingest_one_character(conn, c: dict, tag_map: dict[int, str],
     """
     char_id = _i(c["id"])
     # 单条覆盖：先清该驾驶员的子表，再重插，避免重复累积
-    conn.execute("DELETE FROM character_skill WHERE character_id=?", (char_id,))
-    conn.execute("DELETE FROM character_ability WHERE character_id=?", (char_id,))
+    _clear_character_children(conn, char_id)
     st = c.get("stats") or {}
     tags = [t.get("tag", {}).get("name") for t in c.get("tags") or [] if t.get("tag")]
     stat_bonuses: dict[str, int] = {}
     conditional_bonuses: list[dict] = []
     for ab in c.get("abilities") or []:
-        ability = ab.get("ability") or {}
-        ab_name = (ability.get("detail") or {}).get("name") or ability.get("name") or ""
-        for t in ability.get("traits") or []:
-            tr = t.get("trait") or t
-            ub, cb = parse_ability_stat_bonuses(
-                tr.get("desc") or "",
-                "character",
-                tr.get("active_condition"),
-                tag_map,
-                series_by_id,
-            )
-            for key, pct in ub.items():
-                stat_bonuses[key] = stat_bonuses.get(key, 0) + pct
-            for item in cb:
-                item["name"] = ab_name
-                conditional_bonuses.append(item)
+        # 主能力 + SP 能力都参与派生计算（此前只算主能力，SP 加成被漏算）
+        for _aid, ability in _slot_variants(ab, "ability", "ability_sp",
+                                            "ability_id", "sp_ability_id"):
+            ab_name = (ability.get("detail") or {}).get("name") or ability.get("name") or ""
+            for t in ability.get("traits") or []:
+                tr = t.get("trait") or t
+                ub, cb = parse_ability_stat_bonuses(
+                    tr.get("desc") or "",
+                    "character",
+                    tr.get("active_condition"),
+                    tag_map,
+                    series_by_id,
+                )
+                for key, pct in ub.items():
+                    stat_bonuses[key] = stat_bonuses.get(key, 0) + pct
+                for item in cb:
+                    item["name"] = ab_name
+                    conditional_bonuses.append(item)
     series_id = None
     char_series_ids = set()
     for ss in c.get("series_set") or []:
@@ -984,33 +1057,7 @@ def ingest_one_character(conn, c: dict, tag_map: dict[int, str],
          json.dumps(support_info, ensure_ascii=False),
          raw_path),
     )
-    for sk in c.get("skills") or []:
-        skill = sk.get("skill") or {}
-        traits = [t.get("trait") or t for t in skill.get("trait_set") or []]
-        conn.execute(
-            """INSERT OR IGNORE INTO character_skill
-               (character_id, character_skill_id, sort, level, name, desc, sp,
-                duration, is_auto_usage, auto_usage_priority, traits)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (char_id, _i(skill.get("id")), _i(sk.get("sort")),
-             _i(sk.get("level")), skill.get("name"), skill.get("desc"),
-             _i(skill.get("sp")), _i(skill.get("duration")),
-             _b(skill.get("is_auto_usage")), _i(skill.get("auto_usage_priority")),
-             json.dumps(traits, ensure_ascii=False)),
-        )
-    for ab in c.get("abilities") or []:
-        ability = ab.get("ability") or {}
-        detail = ability.get("detail") or {}
-        traits = [t.get("trait") or t for t in ability.get("traits") or []]
-        conn.execute(
-            """INSERT OR IGNORE INTO character_ability
-               (character_id, ability_id, sort, level, name, desc, ability_type, traits)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (char_id, _i(ability.get("id")), _i(ab.get("sort")),
-             _i(ab.get("level")), detail.get("name") or ability.get("name"),
-             detail.get("desc"), _i(ability.get("ability_type")),
-             json.dumps(traits, ensure_ascii=False)),
-        )
+    ingest_character_children(conn, c)
 
 
 def ingest_characters(conn, tag_map: dict[int, str]):
@@ -1034,6 +1081,8 @@ def recompute_character_derived(conn, char_id: int) -> None:
         "SELECT name, traits FROM character_ability WHERE character_id = ?",
         (char_id,),
     ).fetchall()
+    # 按位置取值，避免隐式依赖连接的 row_factory（Row / tuple 均可用）
+    rows = [{"name": r[0], "traits": r[1]} for r in rows]
     tag_map = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
     series_by_id = {
         r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")

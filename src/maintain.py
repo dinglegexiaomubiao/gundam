@@ -10,11 +10,11 @@ build 阶段抛异常时自动用快照回滚。
 """
 from __future__ import annotations
 
-import shutil
 import sqlite3
 import time
 
 from . import config
+from . import dbutil
 from .db import build_db
 from .fetch import fetch_all
 from .labels import RARITY
@@ -41,7 +41,9 @@ def backup_db() -> "str | None":
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     dest = BACKUP_DIR / f"gundam_{stamp}.db"
-    shutil.copy2(config.DB_PATH, dest)
+    # 用在线备份 API：快照一定包含已提交但尚未 checkpoint 的 WAL 内容，
+    # 直接 copy2 主库会漏掉这部分（回滚时表现为「丢最近的编辑」）。
+    dbutil.backup_db_file(config.DB_PATH, dest)
     print(f"已快照数据库 -> {dest.name}（{dest.stat().st_size / 1024 / 1024:.1f} MB）")
     prune_backups()
     return str(dest)
@@ -59,12 +61,13 @@ def prune_backups() -> None:
 
 def rollback(snapshot: str) -> None:
     """用快照覆盖当前数据库（update 失败时调用）。"""
-    shutil.copy2(snapshot, config.DB_PATH)
+    # 走统一的安全换库：checkpoint + 清边车，避免残留陈旧 WAL 造成脏读。
+    dbutil.swap_db_file(snapshot, config.DB_PATH)
     print(f"!! 已回滚数据库到快照 {snapshot}")
 
 
 def _table_counts(db_path) -> dict[str, int]:
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = dbutil.connect_ro(db_path, row_factory=None)
     counts = {}
     for t in DIFF_TABLES:
         try:
@@ -76,7 +79,7 @@ def _table_counts(db_path) -> dict[str, int]:
 
 
 def _rows(db_path, table: str, cols: str = "*") -> dict:
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = dbutil.connect_ro(db_path, row_factory=None)
     try:
         cur = conn.execute(f"SELECT {cols} FROM {table}")
         names = [d[0] for d in cur.description]

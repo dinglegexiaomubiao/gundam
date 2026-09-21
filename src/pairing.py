@@ -17,6 +17,7 @@ import sqlite3
 import threading
 
 from . import config
+from . import dbutil
 from .damage import (
     CRITICAL_CORRECTION,
     CombatantStats,
@@ -94,9 +95,7 @@ _SUPPORT_WORD_RE = re.compile(r"支援(?:攻击|防御)|反击|支援攻击|支�
 
 
 def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return dbutil.connect_ro(config.DB_PATH)
 
 
 def _json_list(raw) -> list:
@@ -1816,10 +1815,7 @@ def build_unit_pilot() -> dict:
     人工修正（signal='manual'）不会被重建覆盖。
     """
     # 只读的 _conn() 无法写表，这里单独开读写连接
-    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.row_factory = sqlite3.Row
+    conn = dbutil.connect_rw(config.DB_PATH)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS unit_pilot ("
         "unit_id INTEGER PRIMARY KEY, pilot_id INTEGER NOT NULL, "

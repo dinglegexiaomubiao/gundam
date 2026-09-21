@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from . import config
+from . import dbutil
 from .db import SCHEMA
 
 # 表顺序：父表在前（外键依赖），恢复 / 迁移时按此顺序写入。
@@ -151,7 +152,7 @@ def _translate_index(idx_sql: str) -> str:
 
 def _local_schema() -> tuple[dict[str, str], list[str]]:
     """读取本地 SQLite 的表定义与索引。"""
-    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    con = dbutil.connect_ro(config.DB_PATH)
     try:
         tables: dict[str, str] = {}
         indexes: list[str] = []
@@ -179,7 +180,7 @@ def _local_counts() -> dict[str, int] | None:
     if not config.DB_PATH.exists():
         return None
     try:
-        con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+        con = dbutil.connect_ro(config.DB_PATH)
         try:
             return {
                 t: con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
@@ -216,7 +217,7 @@ def upload_local_db_to_cloud(url: str | None = None) -> dict:
                 for idx in indexes:
                     cur.execute(_translate_index(idx))
             conn.commit()
-            con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+            con = dbutil.connect_ro(config.DB_PATH)
             try:
                 with conn.cursor() as cur:
                     for tname in TABLE_ORDER:
@@ -270,7 +271,7 @@ def cloud_diff(url: str | None = None) -> dict:
     local_check = None
     if local_counts is not None:
         try:
-            con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+            con = dbutil.connect_ro(config.DB_PATH)
             try:
                 row = con.execute(
                     "SELECT value FROM meta WHERE key='built_at'"
@@ -360,8 +361,7 @@ def _row_to_dict(cur, row) -> dict:
 
 def _unit_local(unit_id: int):
     """读取本地单机体：unit / weapons / abilities。"""
-    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
+    con = dbutil.connect_ro(config.DB_PATH)
     try:
         u = con.execute("SELECT * FROM unit WHERE id = ?", (unit_id,)).fetchone()
         if not u:
@@ -506,10 +506,7 @@ def unit_sync_push(unit_id: int) -> dict:
 
 def restore_unit_locally(unit: dict) -> None:
     """把单机体快照整行写回本地库（爬取重建后保留编辑用）。"""
-    con = sqlite3.connect(config.DB_PATH)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA foreign_keys=ON")
+    con = dbutil.connect_rw(config.DB_PATH)
     def cols_sql(keys):
         return ", ".join(f'"{c}"' for c in keys)
 
@@ -550,8 +547,7 @@ def restore_unit_locally(unit: dict) -> None:
 
 def _character_local(char_id: int):
     """读取本地单驾驶员：character / skills / abilities。"""
-    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
+    con = dbutil.connect_ro(config.DB_PATH)
     try:
         c = con.execute("SELECT * FROM character WHERE id = ?", (char_id,)).fetchone()
         if not c:
@@ -576,10 +572,7 @@ def _character_local(char_id: int):
 
 def restore_character_locally(snap: dict) -> None:
     """把单驾驶员快照整行写回本地库（爬取重建后保留编辑用）。"""
-    con = sqlite3.connect(config.DB_PATH)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA foreign_keys=ON")
+    con = dbutil.connect_rw(config.DB_PATH)
 
     def cols_sql(keys):
         return ", ".join(f'"{c}"' for c in keys)
@@ -894,7 +887,7 @@ def restore_local_db_from_cloud(url: str | None = None,
         db_path.parent.mkdir(parents=True, exist_ok=True)
         if tmp.exists():
             tmp.unlink()
-        lite = sqlite3.connect(tmp)
+        lite = sqlite3.connect(tmp, timeout=dbutil.DEFAULT_TIMEOUT)
         lite.executescript(SCHEMA)
         lite.execute("PRAGMA foreign_keys = OFF")
         done: set[str] = set()
@@ -959,7 +952,8 @@ def restore_local_db_from_cloud(url: str | None = None,
             last_cloud_error = "云端数据为空"
             tmp.unlink()
             return False
-        os.replace(tmp, db_path)
+        # 安全换库：checkpoint + 清边车后再 replace；被占用时给出可读提示
+        dbutil.swap_db_file(tmp, db_path)
         print(f"已从云端恢复本地数据库 -> {db_path}")
         return True
     except Exception as exc:  # noqa: BLE001
@@ -1037,7 +1031,7 @@ def upload_unit_pilot_to_cloud(url: str | None = None) -> dict:
     if not config.DB_PATH.exists():
         return {"ok": False, "message": f"本地数据库不存在: {config.DB_PATH}"}
 
-    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    con = dbutil.connect_ro(config.DB_PATH)
     try:
         has = con.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='unit_pilot'"
@@ -1102,7 +1096,7 @@ def push_unit_pilot_row(unit_id: int, url: str | None = None) -> dict:
     if not config.DB_PATH.exists():
         return {"ok": False, "message": f"本地数据库不存在: {config.DB_PATH}"}
 
-    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    con = dbutil.connect_ro(config.DB_PATH)
     try:
         has = con.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='unit_pilot'"
@@ -1177,7 +1171,7 @@ def push_team_row(team_id: str, url: str | None = None) -> dict:
         return {"ok": False, "message": "未设置 NEON_DB_URL"}
     if not config.DB_PATH.exists():
         return {"ok": False, "message": f"本地数据库不存在: {config.DB_PATH}"}
-    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    con = dbutil.connect_ro(config.DB_PATH)
     try:
         has = con.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='team'"
@@ -1223,7 +1217,7 @@ def push_team_config_row(gkey: str = "default", url: str | None = None) -> dict:
         return {"ok": False, "message": "未设置 NEON_DB_URL"}
     if not config.DB_PATH.exists():
         return {"ok": False, "message": f"本地数据库不存在: {config.DB_PATH}"}
-    con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    con = dbutil.connect_ro(config.DB_PATH)
     try:
         has = con.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_config'"
@@ -1292,8 +1286,7 @@ def restore_unit_pilot_from_cloud(url: str | None = None) -> dict:
     if not cloud_rows:
         return {"ok": False, "message": "云端 unit_pilot 为空"}
 
-    con = sqlite3.connect(config.DB_PATH)
-    con.row_factory = sqlite3.Row
+    con = dbutil.connect_rw(config.DB_PATH)
     try:
         _ensure_local_unit_pilot(con)
         local_by_id = {
