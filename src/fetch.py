@@ -19,14 +19,18 @@ def _load(rel: str):
         return json.load(fh)
 
 
-def _fetch_many(kind: str, ids: list, path_prefix: str, refresh: bool = False) -> list[tuple[int, str]]:
+def _fetch_many(kind: str, ids: list, path_prefix: str, refresh: bool = False,
+                on_progress=None) -> list[tuple[int, str]]:
     """分批并发抓取某类详情，已存在则跳过；批次间长暂停；限流时整体终止。
 
     refresh=True 时已存在的文件也重新抓取（用于周期性全量刷新旧数据）。
+    on_progress(kind, done, total) 用于上报当前类别的抓取进度（done 为累计完成数）。
     """
     failures: list[tuple[int, str]] = []
     total_done = 0
     total = len(ids)
+    if on_progress:
+        on_progress(kind, 0, total)
 
     for batch_start in range(0, total, config.BATCH_SIZE):
         batch = ids[batch_start:batch_start + config.BATCH_SIZE]
@@ -60,6 +64,11 @@ def _fetch_many(kind: str, ids: list, path_prefix: str, refresh: bool = False) -
                     total_done += 1
                 if done % 50 == 0 or done == len(batch):
                     print(f"  [{kind}] 本批 {done}/{len(batch)}")
+                    if on_progress:
+                        on_progress(kind, batch_start + done, total)
+
+        if on_progress:
+            on_progress(kind, total, total)
 
         if aborted:
             raise RateLimitAbort(
@@ -83,30 +92,34 @@ def fetch_dictionaries():
     return series, faction
 
 
-def fetch_units(limit: int | None = None, refresh: bool = False):
+def fetch_units(limit: int | None = None, refresh: bool = False, on_progress=None):
     units_min = api.http_get_json("/unit/min", {"order_by": "rarity:desc"})
     _save("unit/min.json", units_min)
     ids = [u["id"] for u in units_min]
     print(f"机体列表 {len(ids)} 台")
     if limit:
         ids = ids[:limit]
-    failed = _fetch_many("unit", ids, "/unit", refresh=refresh)
+    failed = _fetch_many("unit", ids, "/unit", refresh=refresh, on_progress=on_progress)
     return failed
 
 
-def fetch_characters():
+def fetch_characters(on_progress=None):
     chars = api.http_get_json("/character", {"order_by": "rarity:desc"})
     _save("character.json", chars)
     print(f"驾驶员 {len(chars)} 人")
+    if on_progress:
+        on_progress("character", len(chars), len(chars))
     return chars
 
 
-def fetch_supporters():
+def fetch_supporters(on_progress=None):
     supporters = api.http_get_json("/supporter", {"order_by": "rarity:desc"})
     _save("supporter.json", supporters)
     growth = api.http_get_json("/supporter/growth")
     _save("supporter_growth.json", growth)
     print(f"支援角色 {len(supporters)} 个，成长记录 {len(growth)} 条")
+    if on_progress:
+        on_progress("supporter", len(supporters), len(supporters))
     return supporters, growth
 
 
@@ -167,20 +180,42 @@ def write_manifest(failures: dict[str, list]) -> None:
     api.atomic_write_json(config.MANIFEST_PATH, manifest)
 
 
-def fetch_all(limit: int | None = None, refresh: bool = False) -> dict[str, list]:
+def fetch_all(limit: int | None = None, refresh: bool = False,
+              on_progress=None) -> dict[str, list]:
+    """全量抓取编排。
+
+    仅抓取四类核心数据：系列/阵营、机体、驾驶员、支援角色（其技能/能力/效果为子表，
+    随上述三类一并入库）；关卡敌人（stage）及其数据源事件（event）不再抓取，以缩减内容与时长。
+    on_progress(phase_label, done, total) 用于上报进度；done/total 为当前类别累计完成数。
+    """
     failures: dict[str, list] = {}
+    # 类别标签映射（kind -> 中文），供进度上报展示
+    label_of = {
+        "series": "系列与阵营", "faction": "系列与阵营",
+        "unit": "机体", "character": "驾驶员", "supporter": "支援角色",
+        "event/story": "剧情事件", "stage": "关卡敌人",
+    }
+
+    def prog(kind_or_label, done, total):
+        if on_progress:
+            on_progress(label_of.get(kind_or_label, kind_or_label), done, total)
+
     try:
-        print("== 1/5 系列与阵营 ==")
+        if on_progress:
+            on_progress("系列与阵营", 0, 1)
+        print("== 1/4 系列与阵营 ==")
         fetch_dictionaries()
-        print("== 2/5 机体 ==")
-        failures["unit"] = fetch_units(limit, refresh=refresh)
-        print("== 3/5 驾驶员 ==")
-        fetch_characters()
-        print("== 4/5 支援角色 ==")
-        fetch_supporters()
-        print("== 5/5 事件与关卡（敌人） ==")
-        failures["event/story"] = fetch_events(refresh=refresh)[2]
-        failures["stage"] = fetch_stages(limit, refresh=refresh)
+        if on_progress:
+            on_progress("系列与阵营", 1, 1)
+
+        print("== 2/4 机体 ==")
+        failures["unit"] = fetch_units(limit, refresh=refresh, on_progress=prog)
+
+        print("== 3/4 驾驶员 ==")
+        fetch_characters(on_progress=prog)
+
+        print("== 4/4 支援角色 ==")
+        fetch_supporters(on_progress=prog)
     except RateLimitAbort as exc:
         print(f"!! {exc}")
         write_manifest(failures)
@@ -188,5 +223,5 @@ def fetch_all(limit: int | None = None, refresh: bool = False) -> dict[str, list
     write_manifest(failures)
     total_fail = sum(len(v) for v in failures.values())
     mode = "全量刷新" if refresh else "增量（跳过已有）"
-    print(f"抓取完成（{mode}），共 {total_fail} 个失败项")
+    print(f"抓取完成（{mode}，已跳过关卡敌人与事件），共 {total_fail} 个失败项")
     return failures

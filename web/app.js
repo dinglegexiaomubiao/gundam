@@ -841,7 +841,7 @@ function bindOverviewActions(d) {
     } catch (e) { /* 忽略 */ }
     if (edits.length) {
       showModal("爬取数据",
-        `<p class="desc">全量爬取会用原始数据重建数据库，以下机体/驾驶员有本地编辑记录。勾选需要保留的编辑，未勾选的将被新数据覆盖：</p>
+        `<p class="desc">本次将爬取并重建：机体、驾驶员、支援角色（含其技能/能力/效果）。关卡敌人与事件不再抓取。以下机体/驾驶员有本地编辑记录，勾选需要保留的编辑，未勾选的将被新数据覆盖：</p>
          <div id="crawl-keep-list" class="tags">${edits.map((x) =>
            `<label class="chip sel-tag"><input type="checkbox" value="${x.kind === "character" ? "C" : "U"}${x.id}" checked> ${esc(x.name)}（${x.edits} 项编辑）</label>`).join("")}</div>
          <div class="calc-actions">
@@ -861,7 +861,7 @@ function bindOverviewActions(d) {
       $("#crawl-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
       return;
     }
-    if (!confirm("将开始全量爬取数据（耗时较长），确定继续？")) return;
+    if (!confirm("将开始爬取机体 / 驾驶员 / 支援角色数据（关卡敌人与事件已跳过，耗时较长），确定继续？")) return;
     doCrawl([]);
   });
   async function doCrawl(preserve) {
@@ -879,7 +879,11 @@ function bindOverviewActions(d) {
         crawlBtn.disabled = false;
         return;
       }
-      msg.textContent = "爬取已启动";
+      renderCrawlProgress(msg, {
+        running: true, step_index: -1,
+        steps: ["系列与阵营", "机体", "驾驶员", "支援角色", "构建数据库"],
+        done: 0, total: 0, detail: "准备中…",
+      });
       pollCrawlStatus(crawlBtn, msg);
     } catch (e) {
       msg.textContent = "启动爬取失败：" + (e.message || e);
@@ -998,19 +1002,58 @@ function pollSyncStatus(msg) {
   setTimeout(tick, 2000);
 }
 
+function renderCrawlProgress(msg, res) {
+  const steps = (res.steps && res.steps.length)
+    ? res.steps
+    : ["系列与阵营", "机体", "驾驶员", "支援角色", "构建数据库"];
+  let panel = msg.querySelector(".crawl-progress");
+  if (!panel) {
+    msg.innerHTML = `<div class="crawl-progress">
+      <div class="crawl-steps">${steps.map((s, i) => `<span class="crawl-step" data-step="${i}">${esc(s)}</span>`).join("")}</div>
+      <div class="progress crawl-bar"><i style="width:0%"></i></div>
+      <div class="crawl-detail"></div>
+    </div>`;
+    panel = msg.querySelector(".crawl-progress");
+  }
+  const idx = (res.step_index == null) ? -1 : res.step_index;
+  panel.querySelectorAll(".crawl-step").forEach((el) => {
+    const s = Number(el.dataset.step);
+    el.classList.toggle("done", s < idx);
+    el.classList.toggle("active", s === idx);
+  });
+  let pct;
+  if (res.total && res.total > 0) {
+    pct = ((idx + res.done / res.total) / steps.length) * 100;
+  } else {
+    pct = ((idx + 0.5) / steps.length) * 100;
+  }
+  const fill = panel.querySelector(".progress i");
+  fill.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + "%";
+  const detail = panel.querySelector(".crawl-detail");
+  if (res.detail) detail.textContent = res.detail;
+  else if (res.step === "build") detail.textContent = "构建数据库…";
+  else detail.textContent = "抓取数据…";
+}
+
 function pollCrawlStatus(btn, msg) {
   const tick = async () => {
     try {
       const res = await api("/api/crawl-status");
+      if (res.error) {
+        btn.disabled = false;
+        msg.innerHTML = `<span style="color:var(--error)">爬取失败：${esc(res.error)}</span>`;
+        return;
+      }
       if (res.running) {
-        msg.textContent = "正在爬取中（" + (res.step === "build" ? "构建数据库" : "抓取数据") + "）…";
-        setTimeout(tick, 3000);
+        renderCrawlProgress(msg, res);
+        setTimeout(tick, 2000);
         return;
       }
       btn.disabled = false;
-      if (res.error) msg.textContent = "爬取失败：" + res.error;
-      else {
-        msg.textContent = "爬取完成，数据库已更新";
+      if (res.step === "done") {
+        msg.innerHTML = `<span style="color:var(--ok)">✓ 爬取完成，数据库已更新</span>`;
+        setTimeout(loadSummary, 1200);
+      } else {
         loadSummary();
       }
     } catch (e) {

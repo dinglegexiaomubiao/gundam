@@ -75,7 +75,13 @@ WEB_DIR = config.PROJECT_ROOT / "web"
 _crawl_lock = threading.Lock()
 _crawl_state: dict = {
     "running": False,
-    "step": "",
+    "step": "",          # fetch | build | done
+    "phase": "",         # 当前子阶段中文标签，如「抓取机体」「构建：机体」
+    "done": 0,           # 当前阶段已完成数
+    "total": 0,          # 当前阶段总数（0 表示无法量化，仅显示进行中）
+    "detail": "",        # 明细文本，如「机体 500/1257」
+    "steps": [],         # 本次爬取的主要阶段列表（前端用于进度步骤条）
+    "step_index": -1,    # 当前处于 steps 中的索引
     "started_at": None,
     "error": None,
 }
@@ -109,9 +115,38 @@ def _run_crawl_worker(preserve: list | None) -> None:
         _crawl_state.update({
             "running": True,
             "step": "fetch",
+            "phase": "",
+            "done": 0,
+            "total": 0,
+            "detail": "",
+            "steps": ["系列与阵营", "机体", "驾驶员", "支援角色", "构建数据库"],
+            "step_index": 0,
             "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "error": None,
         })
+
+        def prog(phase_label: str, done: int, total: int) -> None:
+            """进度回调：更新爬取状态字典（线程安全）。"""
+            with _crawl_lock:
+                _crawl_state["phase"] = phase_label
+                _crawl_state["done"] = done
+                _crawl_state["total"] = total
+                if total and total > 0:
+                    _crawl_state["detail"] = f"{phase_label} {done}/{total}"
+                else:
+                    _crawl_state["detail"] = f"{phase_label} 进行中…"
+                # 依据阶段标签定位主要步骤索引（用于前端步骤条高亮）
+                if "构建" in phase_label:
+                    _crawl_state["step_index"] = 4
+                elif phase_label == "系列与阵营":
+                    _crawl_state["step_index"] = 0
+                elif phase_label == "机体":
+                    _crawl_state["step_index"] = 1
+                elif phase_label == "驾驶员":
+                    _crawl_state["step_index"] = 2
+                elif phase_label == "支援角色":
+                    _crawl_state["step_index"] = 3
+
         from .cloud import (
             _character_local,
             _unit_local,
@@ -130,9 +165,9 @@ def _run_crawl_worker(preserve: list | None) -> None:
             snap = _character_local(cid)
             if snap:
                 char_snaps[cid] = snap
-        fetch_all()
+        fetch_all(on_progress=prog)
         _crawl_state["step"] = "build"
-        build_db()
+        build_db(on_progress=prog)
         for uid, snap in unit_snaps.items():
             try:
                 restore_unit_locally(snap)

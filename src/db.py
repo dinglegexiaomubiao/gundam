@@ -1246,9 +1246,11 @@ def ingest_events(conn):
     print(f"剧情事件 {len(story)} 个（Boss {boss_total} 个），塔楼事件 {len(tower)} 个")
 
 
-def build_db() -> None:
+def build_db(on_progress=None) -> None:
     conn = _conn()
     conn.executescript(SCHEMA)
+    if on_progress:
+        on_progress("构建：系列与阵营", 0, 5)
     print("构建 tag_id -> tag_name 映射…")
     tag_map = _build_tag_map()
     conn.executemany(
@@ -1256,11 +1258,17 @@ def build_db() -> None:
         sorted(tag_map.items()),
     )
     ingest_series_faction(conn)
+    if on_progress:
+        on_progress("构建：系列与阵营", 1, 5)
     ingest_units(conn, tag_map)
+    if on_progress:
+        on_progress("构建：机体", 2, 5)
     ingest_characters(conn, tag_map)
+    if on_progress:
+        on_progress("构建：驾驶员", 3, 5)
     ingest_supporters(conn, tag_map)
-    ingest_stages(conn)
-    ingest_events(conn)
+    if on_progress:
+        on_progress("构建：支援角色", 4, 5)
     built_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('built_at', ?)", (built_at,))
     conn.execute(
@@ -1281,6 +1289,8 @@ def build_db() -> None:
 
     # 生成机体→原作驾驶员显式映射表（懒加载，避免模块级循环依赖）
     from . import pairing
+    if on_progress:
+        on_progress("构建：收尾（元数据/原作映射）", 5, 5)
     stats = pairing.build_unit_pilot()
     print(
         f"原作驾驶员映射表：{stats['total']} 条"

@@ -214,6 +214,19 @@ button.primary:hover, .toolbar button:hover { background: #f05047; }
 .stat-card .v small { font-size: 13px; color: var(--muted); font-weight: 400; }
 .progress { height: 6px; background: var(--panel2); border-radius: 4px; overflow: hidden; margin-top: 8px; }
 .progress i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+
+/* ===== 爬取数据进度 ===== */
+.crawl-progress { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+.crawl-steps { display: flex; flex-wrap: wrap; gap: 6px; }
+.crawl-step {
+  font-size: 12px; padding: 2px 9px; border-radius: 6px;
+  border: 1px solid var(--line); color: var(--muted); background: var(--panel2);
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.crawl-step.active { color: #fff; background: var(--accent); border-color: var(--accent); }
+.crawl-step.done { color: var(--ok); border-color: var(--ok); }
+.crawl-bar { height: 8px; }
+.crawl-detail { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 th { color: var(--muted); font-weight: 600; white-space: nowrap; }
