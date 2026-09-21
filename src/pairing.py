@@ -1999,19 +1999,24 @@ def _type_names(ids) -> str:
     return "、".join(DAMAGE_TYPE_NAMES.get(i, f"#{i}") for i in arr)
 
 
-def _defense_match_detail(match) -> str:
-    """防御型对攻击武器各伤害类型的覆盖情况（供协同块单独一行展示）。"""
+def _defense_match_detail(match) -> tuple[str, str]:
+    """防御型对攻击武器各伤害类型的覆盖情况，返回 `(文案, 状态)`。
+
+    状态用于前端着色（不靠解析文案）：`full` 全覆盖 / `partial` 部分覆盖
+    / `none` 完全没覆盖 / `na` 无法判定（没有攻击型武器类型或没有防御型）。
+    只要没覆盖全就算**减分项**。
+    """
     rows = (match or {}).get("rows") or []
     if not rows:
-        return ""
+        return "", "na"
     hit = [r for r in rows if r.get("defense_hit")]
     miss = [r for r in rows if not r.get("defense_hit")]
     if not hit:
-        return f"防御型对 {_type_names([r['type'] for r in miss])} 均无减伤"
-    s = f"防御型对 {_type_names([r['type'] for r in hit])} 有减伤"
+        return f"防御型对 {_type_names([r['type'] for r in miss])} 均无减伤", "none"
+    text = f"防御型对 {_type_names([r['type'] for r in hit])} 有减伤"
     if miss:
-        s += f"，未覆盖 {_type_names([r['type'] for r in miss])}"
-    return s
+        return text + f"，未覆盖 {_type_names([r['type'] for r in miss])}", "partial"
+    return text, "full"
 
 
 def _synergy_verdict(attack, support, match, defense=None) -> dict:
@@ -2073,7 +2078,9 @@ def _synergy_verdict(attack, support, match, defense=None) -> dict:
                                f"「{atk_name}」的 {atk_t}：{tot}/{tot}"),
                 }
 
-    sy["defense_detail"] = _defense_match_detail(match)
+    detail, state = _defense_match_detail(match)
+    sy["defense_detail"] = detail
+    sy["defense_state"] = state
     return sy
 
 

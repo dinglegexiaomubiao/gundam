@@ -2285,24 +2285,35 @@ nav button.active::after {
 .ts-sec.ts-tank { border-left-color: var(--type-tank); }
 .ts-sec.ts-empty { background: transparent; border-left-style: dashed; }
 .ts-sec.ts-syn { border-left-color: var(--accent); }
-.ts-chip.bonus { border-color: #7a5c1f; color: var(--accent2); }
+.ts-chip.bonus { border-color: var(--warning); color: var(--accent2); }
 .ts-chip.dcut { border-color: #2b6cb0; color: #a8d4ff; background: #17324d; }
 .ts-chip.mut { opacity: .6; }
 .ts-tag.used { margin-left: 4px; font-size: 11px; color: #9fe8c8; }
 .ts-mtype { min-width: 36px; color: var(--text); font-weight: 700; }
-.ts-syn-def { flex-basis: 100%; color: var(--muted); }
 .ts-syn-bonus {
   flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center;
   gap: 4px 8px; margin-top: 4px;
 }
 .ts-chip.bonusall {
   max-width: 100%; white-space: normal; line-height: 1.6;
-  border-color: #7a5c1f; color: var(--accent2); background: #3a2c14;
+  border-color: var(--warning); color: var(--accent2); background: var(--warning-container);
 }
-.ts-syn-detail { flex-basis: 100%; line-height: 1.75; }
-.ts-syn-detail.ok { color: #9fe8c8; }
-.ts-syn-detail.part { color: var(--accent2); }
-.ts-syn-detail.bad { color: #ffb4ae; }
+
+/* ===== 协同结论 / 防御覆盖：与及格线、加分项一致的带底条块 =====
+   三类语义各一种填充：达标=绿底、减分项=红底、无法判定=中性底、加分项=琥珀底 */
+.ts-line {
+  flex-basis: 100%; display: block;
+  padding: 6px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface-variant);
+  color: var(--text); font-size: 12px; line-height: 1.75;
+}
+.ts-line.ok {
+  border-color: var(--success); background: var(--success-container); color: #9fe8c8;
+}
+.ts-line.bad {
+  border-color: var(--error); background: var(--error-container); color: #ffc3bd;
+}
+.ts-line.na { color: var(--muted); }
 .ts-syn-base { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; }
 .ts-supcounts, .ts-mechs { gap: 6px; }
 .ts-chip.sup { border-color: #2f9e6e; color: #9fe8c8; background: #1d3d30; }
@@ -2329,8 +2340,11 @@ nav button.active::after {
   font-size: 11px; border: 1px solid var(--line);
   background: var(--panel); color: var(--muted); white-space: nowrap;
 }
-.ts-chip.up, .ts-chip.ok { border-color: #2f9e6e; color: #9fe8c8; background: #1d3d30; }
-.ts-chip.down, .ts-chip.bad { border-color: #7a5c1f; color: var(--accent2); background: #3a2c14; }
+.ts-chip.up, .ts-chip.ok { border-color: var(--success); color: #9fe8c8; background: var(--success-container); }
+/* down = 敌方的负面特效标记（琥珀）；bad = 减分项/未达标（红）——
+   两者语义不同，此前共用一套琥珀色会让人把"减分项"误读成"加分项" */
+.ts-chip.down { border-color: var(--warning); color: var(--accent2); background: var(--warning-container); }
+.ts-chip.bad { border-color: var(--error); color: #ffc3bd; background: var(--error-container); }
 .ts-eff { display: inline-flex; align-items: center; gap: 6px; }
 .ts-match {
   flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap;

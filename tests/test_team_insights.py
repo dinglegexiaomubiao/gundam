@@ -388,10 +388,18 @@ class TestSynergyAndBaseline(_TeamInsightBase):
         )
 
     def test_synergy_carries_defense_detail(self):
-        """匹配要同时纳入防御型：给出防御覆盖/未覆盖的伤害类型。"""
+        """匹配要同时纳入防御型：给出防御覆盖/未覆盖的伤害类型 + 可着色状态。"""
         sy = self._score(self._team(self.support_unit_id))["insights"]["synergy"]
         self.assertIn("defense_detail", sy)
         self.assertIn("防御型对", sy["defense_detail"])
+        # defense_state 供前端着色，前端不解析文案
+        self.assertIn(sy["defense_state"], ("full", "partial", "none", "na"))
+        # 文案与状态必须自洽
+        has_miss = "未覆盖" in sy["defense_detail"] or "均无减伤" in sy["defense_detail"]
+        if has_miss:
+            self.assertIn(sy["defense_state"], ("partial", "none"))
+        elif sy["defense_detail"]:
+            self.assertEqual(sy["defense_state"], "full")
 
     def test_synergy_none_points_out_missing_type_boost(self):
         """0/2 的结论里要写清缺的是哪几类损伤提升。"""

@@ -5550,7 +5550,18 @@ function renderTeamStatus(res) {
 }
 
 /* 整队协同结论 + 及格线体检 */
-const TS_SYN_CLS = { full: "ok", partial: "part", none: "bad", neutral: "", unknown: "" };
+// 协同结论的着色状态：full=达标（绿） / 其余=减分项（红） / unknown=无法判定（中性底）
+const TS_SYN_CLS = {
+  full: "ok", partial: "bad", none: "bad", neutral: "bad", unknown: "na",
+};
+// 防御覆盖的着色状态（后端给 defense_state，前端不解析文案）
+const TS_DEF_CLS = { full: "ok", partial: "bad", none: "bad", na: "na" };
+
+/* 减分项 / 达标项统一用带底色填充的条块，与及格线、加分项视觉一致 */
+function tsFilledLine(cls, text) {
+  const mark = cls === "ok" ? "✓ " : (cls === "bad" ? "✗ " : "");
+  return `<span class="ts-line ${cls || "na"}">${mark}${esc(text)}</span>`;
+}
 
 /* 及格线条目：后端已给出可直接读的 detail（如「全队移动力均为 5，达到及格线」），
    这里优先展示它，而不是干巴巴的 "5/5"。bonus 为加分项标记。 */
@@ -5573,11 +5584,11 @@ function tsSynergyBlock(ins) {
     `<span class="ts-chip bonusall" title="${esc(x.unit || "")}">＋ ${esc(x.label)}：${
       esc(x.detail || "")}</span>`).join("");
   const dLine = sy.defense_detail
-    ? `<span class="ts-kv ts-syn-def">${esc(sy.defense_detail)}</span>` : "";
+    ? tsFilledLine(TS_DEF_CLS[sy.defense_state] || "na", sy.defense_detail) : "";
   return `<div class="ts-sec ts-syn">
       <div class="ts-head"><span class="ts-dot"></span>整队协同 · ${esc(sy.title)}</div>
       <div class="ts-body">
-        <span class="ts-kv ts-syn-detail ${cls}">${esc(sy.detail)}</span>
+        ${tsFilledLine(cls, sy.detail)}
         ${dLine}
         ${items ? `<span class="ts-kv ts-syn-base">及格线 <b>${b.passed}/${b.total}</b>${items}</span>` : ""}
         ${bonuses ? `<span class="ts-kv ts-syn-bonus">加分项 <b>${b.bonus_count || 0}</b>${bonuses}</span>` : ""}

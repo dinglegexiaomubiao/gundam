@@ -154,6 +154,7 @@ const FULL = {
     title: '部分匹配',
     detail: '支援提供 物理损伤提升，攻击武器「洗牌同盟拳 EX」为 物理、特殊；命中 物理，未命中 特殊：1/2',
     defense_detail: '防御型对 物理 有减伤，未覆盖 特殊',
+    defense_state: 'partial',
     baseline: {
       passed: 3, total: 4, ok: false, bonus_count: 2,
       items: [
@@ -182,6 +183,15 @@ const FULL = {
 
 const FULL_ALIAS = FULL;
 
+// 完全匹配的变体：用于校验「达标 = 绿底」，与减分项的红底区分开
+const FULL_OK = JSON.parse(JSON.stringify(FULL));
+FULL_OK.synergy.level = 'full';
+FULL_OK.synergy.title = '完全匹配';
+FULL_OK.synergy.detail =
+  '支援提供 物理、特殊损伤提升，完全覆盖攻击武器「洗牌同盟拳 EX」的 物理、特殊：2/2';
+FULL_OK.synergy.defense_state = 'full';
+FULL_OK.synergy.defense_detail = '防御型对 物理、特殊 有减伤';
+
 const MISSING = {
   attack: null, support: null, defense: null, match: null,
   missing: { attack: true, support: true, defense: true },
@@ -189,6 +199,7 @@ const MISSING = {
 
 const TESTS = `
 __full = renderTeamStatus({ insights: ${JSON.stringify(FULL)} });
+__ok = renderTeamStatus({ insights: ${JSON.stringify(FULL_OK)} });
 __missing = renderTeamStatus({ insights: ${JSON.stringify(MISSING)} });
 __legacy = renderTeamStatus({ pairs: [] });
 __noRes = renderTeamStatus(null);
@@ -198,6 +209,7 @@ const ctx = vm.createContext(sandbox);
 vm.runInContext(src + '\n;' + TESTS, ctx, { filename: 'app.js+status-test' });
 
 const full = ctx.__full || '';
+const okAlt = ctx.__ok || '';
 const missing = ctx.__missing || '';
 const checks = [
   ['有 insights 时渲染队伍状态', full.includes('team-status') && full.includes('队伍状态')],
@@ -241,6 +253,15 @@ const checks = [
   ['超出及格线标为加分项', full.includes('ts-chip ok bonus') && full.includes('支援攻击 3 次，达到及格线（加分）')],
   ['及格线含 UR 防御项', full.includes('UR 防御型（支援防御 / 反击援防）：支援防御 2 次，达到及格线')],
   ['协同块显示防御覆盖', full.includes('防御型对 物理 有减伤，未覆盖 特殊')],
+  ['协同结论为带底条块（减分项红底 + ✗）',
+    /ts-line bad">✗ 支援提供 物理损伤提升/.test(full)],
+  ['防御覆盖也是带底条块（减分项红底 + ✗）',
+    /ts-line bad">✗ 防御型对 物理 有减伤，未覆盖 特殊/.test(full)],
+  ['完全匹配时结论为绿底（达标）',
+    /ts-line ok">✓ 支援提供 物理、特殊损伤提升，完全覆盖/.test(okAlt)],
+  ['完全覆盖时防御行为绿底', /ts-line ok">✓ 防御型对 物理、特殊 有减伤/.test(okAlt)],
+  ['协同条块不再用旧的无底色 class',
+    !full.includes('ts-syn-detail') && !full.includes('ts-syn-def')],
   ['协同块列出加分项', full.includes('加分项 <b>2</b>') && full.includes('支援额外特效')
     && full.includes('防御减伤 / 特殊能力')],
   ['缺少 role 时提示缺少', missing.includes('本队缺少攻击型机体')
