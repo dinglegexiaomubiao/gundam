@@ -1019,7 +1019,11 @@ insights = {
 **支援型（`role=3`）**
 - 扫描该机**非 MAP** 武器的 `weapon_effects`，归类为 `dmg_up`（损伤提升，按 物理/光束/特殊
   解析出 `types`）/ `def_down`（防御力减少），每条带来源武器与射程；
-- 多台支援型时特效合并，`units` 列出全部来源。
+- 多台支援型时特效合并，`units` 列出全部来源；
+- **支援次数**：`support_counts` = `{attack:{count,conditional}, defense:{…}, extra:{…}}`，
+  取自 `character.support_info`（经 `_support_counts()` 归一），前端在支援段显示
+  「支援攻击 N 次 / 支援防御 N 次 / 额外行动 N 次」；未选驾驶员时为 `{}`。
+  `pilot_mechanics` 同时给出可读标签（如「无条件支援攻击2次」）。
 
 **匹配判定（`match`）**
 - 攻击型最高伤害武器的伤害类型集合 × 支援提供的损伤提升类型集合；
@@ -1053,8 +1057,33 @@ insights = {
     「搭乘单位为…且自身 HP 为 0% 时，自身 HP 恢复 7%(1次)」→ `verdict="met"` + `note="条件已满足"`；
     换成非 00 系的耐久机（如 神高达 R4）→ `verdict="unmet"` + `note="不能触发"`。
 
+**整队协同结论（`synergy`）**
+
+把「支援的损伤提升类型」与「攻击型最高伤害武器的伤害类型」对比，给出一句话结论：
+
+| `level` | 含义 | `detail` 句式 |
+|---|---|---|
+| `full` | 完全覆盖 | `支援提供 物理损伤提升，完全覆盖攻击武器「洗牌同盟拳 EX」的 物理、特殊：2/2` |
+| `partial` | 部分覆盖 | `支援提供 物理损伤提升，攻击武器「洗牌同盟拳 EX」为 物理、特殊；命中 物理，未命中 特殊：1/2` |
+| `none` | 完全没命中 | `支援提供 光束损伤提升，但攻击型最高伤害武器「洗牌同盟拳 EX」为 物理、特殊，无法匹配：0/2` |
+| `neutral` | 支援无增伤特效 | 不提供「损伤提升」类特效，不影响攻击型伤害类型 |
+| `unknown` | 缺机体/数据 | 缺少攻击型或支援型机体，无法判定协同 |
+
+**队伍及格线（`baseline`）** — 阈值集中在 `src/pairing.py: TEAM_BASELINE`，改一处即全链路生效：
+
+| 检查项 | 适用 | 及格线 | key |
+|---|---|---|---|
+| 移动力 | **任意类型，全队每台机体逐一检查** | ≥ 5 | `movement` |
+| 支援型武器射程 | 支援型（不含 MAP） | ≥ 5 | `support_range` |
+| 支援攻击次数 | 支援型槽位的驾驶员 | ≥ 2 次 | `support_attack` |
+| UR 防御型 | UR（rarity 5）防御型槽位 | 支援防御 ≥ 2 次 **或** 能反击援防 | `defense_support` |
+
+`baseline` = `{items:[{key,label,unit,need,actual,ok}], passed, total, ok}`；
+`synergy` 与 `baseline` 在 `insights` 下各有一份（前端取 `insights.synergy.baseline`）。
+
 前端渲染见 `web/app.js` 的 `renderTeamStatus()`（`.team-status` / `.ts-*` 样式，
-复用 `--type-atk/tank/sup` 类型令牌）。
+复用 `--type-atk/tank/sup` 类型令牌）；匹配段逐项渲染「命中 ←来源」/「未命中 + 支援未提供 X 损伤提升」，
+底部渲染「整队协同」结论句与及格线 chips。
 
 ### 10.10 SSP 形态
 
