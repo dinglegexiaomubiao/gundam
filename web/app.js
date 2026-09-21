@@ -5413,17 +5413,26 @@ function renderTeamStatus(res) {
   const miss = ins.missing || {};
   const secs = [];
 
-  // ---- 攻击型 ----
-  if (ins.attack) {
-    const a = ins.attack, w = a.best_weapon || {};
-    const mapNote = a.range.map_count
-      ? `<span class="muted">（已排除 ${a.range.map_count} 把 MAP）</span>` : "";
-    secs.push(tsSection("atk", `攻击型 · ${esc(a.unit.name)}`, `
-      <span class="ts-kv">最大射程 <b>${a.range.max_nomap ?? "—"}</b>${mapNote}</span>
-      <span class="ts-kv">最高伤害武器 <b>${esc(w.name || "未选武器")}</b>${
-        w.damage ? ` <span class="num">${fmtNum(w.damage)}</span>` : ""}</span>
-      <span class="ts-kv">伤害类型 ${tsDmgChips(w.attrs)}</span>
-      ${w.range_max != null ? `<span class="ts-kv">射程 ${w.range_min}-${w.range_max} · 依赖 ${esc(w.dep_label || "—")}</span>` : ""}`));
+  // ---- 攻击型（可能不止一台：逐台都要展示）----
+  const atkList = (ins.attacks && ins.attacks.length)
+    ? ins.attacks : (ins.attack ? [ins.attack] : []);
+  if (atkList.length) {
+    atkList.forEach((a, i) => {
+      const w = a.best_weapon || {};
+      const rng = a.range || {};
+      const mapNote = rng.map_count
+        ? `<span class="muted">（已排除 ${rng.map_count} 把 MAP）</span>` : "";
+      const title = atkList.length > 1
+        ? `攻击型 ${i + 1} · ${esc(a.unit.name)}${
+            i === 0 ? '<span class="ts-tag best">伤害最高</span>' : ""}`
+        : `攻击型 · ${esc(a.unit.name)}`;
+      secs.push(tsSection("atk", title, `
+        <span class="ts-kv">最大射程 <b>${rng.max_nomap ?? "—"}</b>${mapNote}</span>
+        <span class="ts-kv">最高伤害武器 <b>${esc(w.name || "未选武器")}</b>${
+          w.damage ? ` <span class="num">${fmtNum(w.damage)}</span>` : ""}</span>
+        <span class="ts-kv">伤害类型 ${tsDmgChips(w.attrs)}</span>
+        ${w.range_max != null ? `<span class="ts-kv">射程 ${w.range_min}-${w.range_max} · 依赖 ${esc(w.dep_label || "—")}</span>` : ""}`));
+    });
   } else if (miss.attack) {
     secs.push(`<div class="ts-sec ts-atk ts-empty">
         <div class="ts-head"><span class="ts-dot"></span>攻击型</div>
@@ -5433,8 +5442,14 @@ function renderTeamStatus(res) {
   // ---- 支援型 ----
   if (ins.support) {
     const s = ins.support;
-    // 哪些特效对攻击型生效（在特效列表里标出来，说明"具体是哪几个特效"）
-    const usedLabels = new Set(((ins.match || {}).covered || []).map((c) => c.by));
+    // 哪些特效对**任一**攻击型生效（在特效列表里标出来，说明"具体是哪几个特效"）
+    const mGroups = ((ins.match || {}).groups) || [];
+    const usedLabels = new Set(
+      (mGroups.length
+        ? mGroups.flatMap((g) => g.covered || [])
+        : (((ins.match || {}).covered) || [])
+      ).map((c) => c.by)
+    );
 
     const effs = (s.effects || []).slice(0, 8).map((e) => `
       <span class="ts-eff">
@@ -5463,26 +5478,42 @@ function renderTeamStatus(res) {
     const atk = ins.attack;
     const m = ins.match;
     if (m) {
-      const cls = m.total === 0 ? "bad" : (m.hit_count === m.total ? "ok" : (m.hit_count ? "part" : "bad"));
-      const atkT = (m.attack_attrs || []).map((t) => TS_DMG_TYPES[t] || t).join(" · ") || "—";
+      const groups = mGroups.length ? mGroups : [m];
+      const multi = groups.length > 1;
+      const tot = multi ? m.total_types : m.total;
+      const hit = multi ? m.total_hit_count : m.hit_count;
+      const cls = !tot ? "bad" : (hit === tot ? "ok" : (hit ? "part" : "bad"));
       const supT = (s.dmg_up_types || []).map((t) => TS_DMG_TYPES[t] || t).join(" · ") || "无";
-      const atkName = m.attack_weapon || ((atk && atk.best_weapon) || {}).name || "—";
-      const rows = (m.rows || []).map((r) => {
-        const name = TS_DMG_TYPES[r.type] || ("#" + r.type);
-        const supCell = r.support_hit
-          ? `<span class="ts-chip ok">支援命中</span><span class="muted">← ${esc((r.support_by || []).join("、"))}</span>`
-          : `<span class="ts-chip bad">支援未命中</span><span class="muted">缺少「${name}损伤提升」</span>`;
-        const dfnCell = r.defense_hit
-          ? `<span class="ts-chip dcut">防御减伤</span><span class="muted">← ${esc((r.defense_by || []).join("、"))}</span>`
-          : `<span class="ts-chip mut">防御未减伤</span>`;
-        return `<span class="ts-mrow"><b class="ts-mtype">${name}</b>${supCell}${dfnCell}</span>`;
+      // 单台时沿用原来的两行标题；多台时标题汇总，逐台在下面分组列出
+      const head = multi
+        ? `<span class="ts-mline">伤害类型匹配 · ${groups.length} 台攻击型 · 支援提供 ${supT}损伤提升
+             · 命中 <b>${hit}/${tot}</b> ｜ 防御减伤 <b>${m.defense_hit_total}/${m.defense_types}</b></span>`
+        : `<span class="ts-mline">伤害类型匹配 · 攻击型最高伤害武器 <b>${
+             esc(m.attack_weapon || ((atk && atk.best_weapon) || {}).name || "—")}</b>（${
+             (m.attack_attrs || []).map((t) => TS_DMG_TYPES[t] || t).join(" · ") || "—"}）</span>
+           <span class="ts-mline">支援提供 ${supT}损伤提升 · 命中 <b>${m.hit_count}/${m.total}</b>
+             ｜ 防御减伤 <b>${m.defense_hit_count}/${m.defense_total}</b></span>`;
+      const blocks = groups.map((g) => {
+        const gT = (g.attrs || []).map((t) => TS_DMG_TYPES[t] || t).join(" · ") || "—";
+        const gCls = !g.total ? "bad"
+          : (g.hit_count === g.total ? "ok" : (g.hit_count ? "part" : "bad"));
+        const title = multi
+          ? `<span class="ts-mline">${esc(g.unit.name)} · <b>${esc(g.weapon || "—")}</b>（${gT}）
+               <span class="ts-mhit ${gCls}">命中 ${g.hit_count}/${g.total}</span></span>`
+          : "";
+        const rows = (g.rows || []).map((r) => {
+          const name = TS_DMG_TYPES[r.type] || ("#" + r.type);
+          const supCell = r.support_hit
+            ? `<span class="ts-chip ok">支援命中</span><span class="muted">← ${esc((r.support_by || []).join("、"))}</span>`
+            : `<span class="ts-chip bad">支援未命中</span><span class="muted">缺少「${name}损伤提升」</span>`;
+          const dfnCell = r.defense_hit
+            ? `<span class="ts-chip dcut">防御减伤</span><span class="muted">← ${esc((r.defense_by || []).join("、"))}</span>`
+            : `<span class="ts-chip mut">防御未减伤</span>`;
+          return `<span class="ts-mrow"><b class="ts-mtype">${name}</b>${supCell}${dfnCell}</span>`;
+        }).join("");
+        return `<div class="ts-mgroup">${title}<span class="ts-mrows">${rows}</span></div>`;
       }).join("");
-      matchHtml = `<div class="ts-match ${cls}">
-          <span class="ts-mline">伤害类型匹配 · 攻击型最高伤害武器 <b>${esc(atkName)}</b>（${atkT}）</span>
-          <span class="ts-mline">支援提供 ${supT}损伤提升 · 命中 <b>${m.support_hit_count}/${m.support_total}</b>
-            ｜ 防御减伤 <b>${m.defense_hit_count}/${m.defense_total}</b></span>
-          <span class="ts-mrows">${rows}</span>
-        </div>`;
+      matchHtml = `<div class="ts-match ${cls}">${head}${blocks}</div>`;
     } else if (atk && (atk.best_weapon || {}).attrs && !(atk.best_weapon.attrs || []).length) {
       matchHtml = '<div class="ts-match bad">攻击型最高伤害武器没有伤害类型，无法匹配</div>';
     }

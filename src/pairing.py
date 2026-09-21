@@ -1868,7 +1868,7 @@ def _eff_names(effects) -> str:
     return "、".join(sorted({str(e.get("label") or "—") for e in (effects or [])}))
 
 
-def _baseline_report(collected: list[dict], attack=None, support=None,
+def _baseline_report(collected: list[dict], attacks=None, support=None,
                      defense=None) -> dict:
     """按及格线逐项体检，并给出加分项。
 
@@ -1882,7 +1882,11 @@ def _baseline_report(collected: list[dict], attack=None, support=None,
     items: list[dict] = []
     bonuses: list[dict] = []
 
-    want = ((attack or {}).get("best_weapon") or {}).get("attrs") or []
+    # 支援该对「哪一类」生效要照顾**全部**攻击型 —— 取各台最高伤害武器类型的并集
+    want = sorted({
+        t for c in (attacks or [])
+        for t in ((c.get("best_weapon") or {}).get("attrs") or [])
+    })
     sup = next((c for c in collected if c["role"] == 3), None)
     effs = (support or {}).get("effects") or []
     used_effs, extra_effs = _effect_used_for(effs, want)
@@ -2064,7 +2068,8 @@ def _defense_match_detail(match) -> tuple[str, str]:
     / `none` 完全没覆盖 / `na` 无法判定（没有攻击型武器类型或没有防御型）。
     只要没覆盖全就算**减分项**。
     """
-    rows = (match or {}).get("rows") or []
+    # 防御减伤与"是哪台攻击型打的"无关，所以按伤害类型去重后看整体覆盖
+    rows = (match or {}).get("defense_rows") or []
     if not rows:
         return "", "na"
     hit = [r for r in rows if r.get("defense_hit")]
@@ -2077,7 +2082,17 @@ def _defense_match_detail(match) -> tuple[str, str]:
     return text, "full"
 
 
-def _synergy_verdict(attack, support, match, defense=None) -> dict:
+def _attack_gap_text(groups) -> str:
+    """多台攻击型时，列出「哪台还缺哪几类损伤提升」。"""
+    bits = []
+    for g in groups:
+        miss = [r["type"] for r in g.get("rows") or [] if not r.get("support_hit")]
+        if miss:
+            bits.append(f"「{g['unit']['name']}」缺少 {_type_names(miss)} 损伤提升")
+    return "；".join(bits[:3])
+
+
+def _synergy_verdict(attacks, support, match, defense=None) -> dict:
     """整队协同结论。
 
     把**攻击型的伤害类型**同时对上两侧：
@@ -2085,55 +2100,78 @@ def _synergy_verdict(attack, support, match, defense=None) -> dict:
       · 防御型 —— 对哪些伤害类型有减伤，能不能扛住同类伤害。
     支援的覆盖度决定 `level`，防御的覆盖度放在 `defense_detail`（性质不同，不混算）。
     """
+    attacks = list(attacks or [])
+    groups = list(((match or {}).get("groups") or []))
+    multi = len(groups) > 1
     sy: dict = {}
-    if attack is None and support is None:
+    if not attacks and support is None:
         sy = {"level": "unknown", "title": "无法判定",
               "detail": "本队缺少攻击型与支援型机体，无法判定协同"}
-    elif attack is None:
+    elif not attacks:
         sy = {"level": "unknown", "title": "无法判定",
               "detail": "本队缺少攻击型机体，无法判定支援是否命中"}
     elif support is None:
         sy = {"level": "unknown", "title": "无支援型",
               "detail": "本队缺少支援型机体，攻击型只能靠自身伤害类型"}
     else:
-        atk_name = (attack.get("best_weapon") or {}).get("name") or "最高伤害武器"
-        atk_t = _type_names((attack.get("best_weapon") or {}).get("attrs"))
-        total = ((match or {}).get("total")
-                 or len((attack.get("best_weapon") or {}).get("attrs") or []))
+        first = attacks[0]
+        atk_name = (first.get("best_weapon") or {}).get("name") or "最高伤害武器"
+        atk_t = _type_names((first.get("best_weapon") or {}).get("attrs"))
+        # 全队口径：所有攻击型的最高伤害武器类型（去重）
+        union = sorted({t for c in attacks
+                        for t in ((c.get("best_weapon") or {}).get("attrs") or [])})
+        union_t = _type_names(union)
+        total = ((match or {}).get("total_types") if multi
+                 else None) or ((match or {}).get("total") or len(union))
+        n_atk = len(attacks)
+        # 多台时用「每台的武器」描述，单台时沿用原来那句
+        scope = (f"{n_atk} 台攻击型的最高伤害武器为 {union_t}" if multi
+                 else f"攻击型最高伤害武器「{atk_name}」为 {atk_t}")
 
         if not support.get("dmg_up_types"):
             # 一条增伤特效都没有 —— 要点名缺的是哪几种损伤提升，而不是笼统说「无特效」
             sy = {
                 "level": "neutral", "title": "支援无增伤特效",
-                "detail": (f"支援型未提供「损伤提升」类特效；攻击型最高伤害武器"
-                           f"「{atk_name}」为 {atk_t}，缺少 {atk_t} 损伤提升：0/{total}"),
+                "detail": (f"支援型未提供「损伤提升」类特效；{scope}，"
+                           f"缺少 {union_t} 损伤提升：0/{total}"),
             }
-        elif match is None:
+        elif not groups:
             sy = {"level": "unknown", "title": "无法判定",
-                  "detail": f"攻击型最高伤害武器为 {atk_t}，但支援增益数据缺失"}
+                  "detail": f"{scope}，但支援增益数据缺失"}
         else:
-            hit, tot = match["hit_count"], match["total"]
-            hit_t = _type_names([c["type"] for c in match["covered"]])
-            miss_t = _type_names([c["type"] for c in match["missed"]])
+            hit = (match.get("total_hit_count") if multi else match.get("hit_count")) or 0
+            hit_t = _type_names([c["type"] for g in groups for c in g.get("covered") or []])
+            miss_t = _type_names([c["type"] for g in groups for c in g.get("missed") or []])
             sup_t = _type_names(support.get("dmg_up_types"))
+            full_n = sum(1 for g in groups if g["hit_count"] == g["total"])
             if hit == 0:
                 sy = {
                     "level": "none", "title": "支援未命中",
-                    "detail": (f"支援提供 {sup_t}损伤提升，但攻击型最高伤害武器"
-                               f"「{atk_name}」为 {atk_t}，无法匹配：0/{tot}"
-                               f"（缺少 {atk_t} 损伤提升）"),
+                    "detail": (f"支援提供 {sup_t}损伤提升，但 {scope}，无法匹配：0/{total}"
+                               f"（缺少 {union_t} 损伤提升）"),
                 }
-            elif hit < tot:
-                sy = {
-                    "level": "partial", "title": "部分匹配",
-                    "detail": (f"支援提供 {sup_t}损伤提升，攻击武器「{atk_name}」为 {atk_t}；"
-                               f"命中 {hit_t}，未命中 {miss_t}：{hit}/{tot}"),
-                }
+            elif hit < total:
+                if multi:
+                    gap = _attack_gap_text(groups)
+                    sy = {
+                        "level": "partial", "title": "部分匹配",
+                        "detail": (f"支援提供 {sup_t}损伤提升；{n_atk} 台攻击型中 "
+                                   f"{full_n} 台完全覆盖，{n_atk - full_n} 台仍有缺口"
+                                   f"（{gap}）：合计 {hit}/{total}"),
+                    }
+                else:
+                    sy = {
+                        "level": "partial", "title": "部分匹配",
+                        "detail": (f"支援提供 {sup_t}损伤提升，攻击武器「{atk_name}」为 {atk_t}；"
+                                   f"命中 {hit_t}，未命中 {miss_t}：{hit}/{total}"),
+                    }
             else:
                 sy = {
                     "level": "full", "title": "完全匹配",
-                    "detail": (f"支援提供 {sup_t}损伤提升，完全覆盖攻击武器"
-                               f"「{atk_name}」的 {atk_t}：{tot}/{tot}"),
+                    "detail": (f"支援提供 {sup_t}损伤提升，完全覆盖"
+                               + (f" {n_atk} 台攻击型的最高伤害武器类型（{union_t}）"
+                                  if multi else f"攻击武器「{atk_name}」的 {atk_t}")
+                               + f"：{total}/{total}"),
                 }
 
     detail, state = _defense_match_detail(match)
@@ -2144,14 +2182,18 @@ def _synergy_verdict(attack, support, match, defense=None) -> dict:
 
 def _build_team_insights(conn, collected: list[dict]) -> dict:
     """把各槽位的采集结果汇总成「攻击 / 支援 / 防御 / 匹配」四块。"""
-    attack_units = [c for c in collected if c["role"] == 1 and c.get("best_weapon")]
+    # 攻击型**可能不止一台** —— 全部保留（按最高伤害武器降序）。
+    # 旧的单数 `attack` 仍指向最强那台，避免既有调用与前端旧代码失效。
+    attacks = sorted(
+        [c for c in collected if c["role"] == 1 and c.get("best_weapon")],
+        key=lambda c: -(c["best_weapon"].get("damage") or 0),
+    )
+    for c in attacks:
+        c.setdefault("pilot_mechanics", [])
+        c.setdefault("support_counts", {})
+    attack = attacks[0] if attacks else None
     support_units = [c for c in collected if c["role"] == 3 and c.get("support_effects")]
     defense_units = [c for c in collected if c["role"] == 2 and c.get("defense")]
-
-    attack = max(attack_units, key=lambda c: c["best_weapon"]["damage"]) if attack_units else None
-    if attack is not None:
-        attack.setdefault("pilot_mechanics", [])
-        attack.setdefault("support_counts", {})
 
     # 防御块拍平：直接暴露 unit / movement / mitigations / … 给前端
     defense = None
@@ -2190,30 +2232,43 @@ def _build_team_insights(conn, collected: list[dict]) -> dict:
     #      × 支援型提供的损伤提升（能否加成）
     #      × 防御型的减伤覆盖（能否扛住同类伤害）
     match = None
-    if attack and support and attack.get("best_weapon"):
-        want = list(attack["best_weapon"].get("attrs") or [])
-        if want:
-            sup_up = [e for e in effects_all if e.get("kind") == "dmg_up"]
-            dfn_mits = (defense or {}).get("mitigations") or []
-            rows: list[dict] = []
-            for t in want:
-                s_by = [str(e.get("label") or "—") for e in sup_up
-                        if t in (e.get("types") or [])]
-                d_by = [
-                    str(m.get("label") or "—")
-                    + (f" 减伤 {m['value']}%" if m.get("value") else "")
-                    for m in dfn_mits if t in (m.get("attrs") or [])
-                ]
-                rows.append({
+    if attacks and support:
+        sup_up = [e for e in effects_all if e.get("kind") == "dmg_up"]
+        dfn_mits = (defense or {}).get("mitigations") or []
+        union_attrs = sorted({
+            t for c in attacks for t in (c["best_weapon"].get("attrs") or [])
+        })
+        # 防御减伤只跟伤害类型有关，与"是哪台攻击型打出去的"无关 → 先按类型算一份
+        dfn_by_type = {
+            t: [
+                str(m.get("label") or "—")
+                + (f" 减伤 {m['value']}%" if m.get("value") else "")
+                for m in dfn_mits if t in (m.get("attrs") or [])
+            ]
+            for t in union_attrs
+        }
+        groups: list[dict] = []
+        for c in attacks:
+            want = list(c["best_weapon"].get("attrs") or [])
+            if not want:
+                continue
+            rows = [
+                {
                     "type": t,
-                    "support_hit": bool(s_by), "support_by": s_by,
-                    "defense_hit": bool(d_by), "defense_by": d_by,
-                })
+                    "support_hit": any(t in (e.get("types") or []) for e in sup_up),
+                    "support_by": [str(e.get("label") or "—") for e in sup_up
+                                   if t in (e.get("types") or [])],
+                    "defense_hit": bool(dfn_by_type.get(t)),
+                    "defense_by": dfn_by_type.get(t) or [],
+                }
+                for t in want
+            ]
             hit = [r for r in rows if r["support_hit"]]
-            match = {
-                "attack_attrs": want,
-                "attack_weapon": attack["best_weapon"].get("name"),
-                "rows": rows,
+            groups.append({
+                "unit": c["unit"], "pilot": c.get("pilot"),
+                "weapon": c["best_weapon"].get("name"),
+                "damage": c["best_weapon"].get("damage"),
+                "attrs": want, "rows": rows,
                 "covered": [{"type": r["type"], "by": r["support_by"][0]} for r in hit],
                 "missed": [{"type": r["type"]} for r in rows if not r["support_hit"]],
                 "hit_count": len(hit), "total": len(want),
@@ -2221,15 +2276,46 @@ def _build_team_insights(conn, collected: list[dict]) -> dict:
                 "defense_hit_count": sum(1 for r in rows if r["defense_hit"]),
                 "defense_total": len(want),
                 "missing_types": [r["type"] for r in rows if not r["support_hit"]],
+            })
+        if groups:
+            first = groups[0]
+            match = {
+                # 逐台攻击型一组（前端按组渲染）
+                "groups": groups,
+                "defense_rows": [
+                    {"type": t, "defense_hit": bool(dfn_by_type.get(t)),
+                     "defense_by": dfn_by_type.get(t) or []}
+                    for t in union_attrs
+                ],
+                "attack_count": len(groups),
+                "total_hit_count": sum(g["hit_count"] for g in groups),
+                "total_types": sum(g["total"] for g in groups),
+                "full_count": sum(1 for g in groups if g["hit_count"] == g["total"]),
+                "none_count": sum(1 for g in groups if g["hit_count"] == 0),
+                "union_attrs": union_attrs,
+                "defense_hit_total": sum(1 for t in union_attrs if dfn_by_type.get(t)),
+                "defense_types": len(union_attrs),
+                # ---- 兼容字段：指「伤害最高的那台攻击型」（旧前端/旧断言仍可用）----
+                "attack_attrs": first["attrs"],
+                "attack_weapon": first["weapon"],
+                "rows": first["rows"],
+                "covered": first["covered"], "missed": first["missed"],
+                "hit_count": first["hit_count"], "total": first["total"],
+                "support_hit_count": first["support_hit_count"],
+                "support_total": first["support_total"],
+                "defense_hit_count": first["defense_hit_count"],
+                "defense_total": first["defense_total"],
+                "missing_types": first["missing_types"],
             }
 
-    baseline = _baseline_report(collected, attack=attack, support=support,
+    baseline = _baseline_report(collected, attacks=attacks, support=support,
                                 defense=defense)
-    synergy = _synergy_verdict(attack, support, match, defense)
+    synergy = _synergy_verdict(attacks, support, match, defense)
     synergy["baseline"] = baseline
 
     return {
         "attack": attack,
+        "attacks": attacks,
         "support": support,
         "defense": defense,
         "match": match,

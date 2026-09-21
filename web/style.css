@@ -2290,6 +2290,23 @@ nav button.active::after {
 .ts-chip.mut { opacity: .6; }
 .ts-tag.used { margin-left: 4px; font-size: 11px; color: #9fe8c8; }
 .ts-mtype { min-width: 36px; color: var(--text); font-weight: 700; }
+/* 多台攻击型时，每台一组（左侧竖线分组） */
+.ts-mgroup {
+  flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 4px 14px; padding: 5px 0 5px 10px;
+  border-left: 2px solid var(--line);
+}
+.ts-mgroup + .ts-mgroup { margin-top: 2px; }
+.ts-mhit { font-variant-numeric: tabular-nums; }
+.ts-mhit.ok { color: #9fe8c8; }
+.ts-mhit.part { color: var(--accent2); }
+.ts-mhit.bad { color: #ffc3bd; }
+.ts-tag.best {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 11px; font-weight: 400;
+  border: 1px solid var(--warning); color: var(--accent2);
+  background: var(--warning-container);
+}
 .ts-syn-bonus {
   flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center;
   gap: 4px 8px; margin-top: 4px;

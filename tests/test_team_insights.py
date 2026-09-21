@@ -564,5 +564,98 @@ class TestConditionalAbilityVerdict(_TeamInsightBase):
                 )
 
 
+class TestMultipleAttackers(_TeamInsightBase):
+    """多台攻击型：全部保留、逐台判定匹配，协同结论按台点名。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        con = dbutil.connect_ro(config.DB_PATH)
+        try:
+            row = con.execute(
+                "SELECT u.id FROM unit u WHERE u.role = 1 AND u.rarity = 5 AND u.id != ? "
+                "AND EXISTS (SELECT 1 FROM unit_weapon w WHERE w.unit_id = u.id "
+                "  AND IFNULL(w.map_weapon_range,'') IN ('','null','0')) LIMIT 1",
+                (GUNDAM_EX,),
+            ).fetchone()
+            cls.second_attack = row["id"] if row else None
+        finally:
+            con.close()
+
+    def _team2(self):
+        pairs = [
+            {"unit_id": GUNDAM_EX, "star": 3,
+             "weapon_id": self.gundam_weapon_id, "pilot_id": DOMON},
+            {"unit_id": self.second_attack, "star": 3,
+             "weapon_id": 0, "pilot_id": DOMON},
+            {"unit_id": OO_EX, "star": 3, "weapon_id": 0, "pilot_id": SETSUNA_TANK},
+        ]
+        if self.support_unit_id:
+            pairs.append({"unit_id": self.support_unit_id, "star": 3,
+                          "weapon_id": 0, "pilot_id": 0})
+        return pairs
+
+    def test_all_attackers_are_listed(self):
+        if not self.second_attack:
+            self.skipTest("库里找不到第二台攻击型")
+        ins = self._score(self._team2())["insights"]
+        ids = [a["unit"]["id"] for a in ins["attacks"]]
+        self.assertEqual(len(ids), 2, f"两台攻击型都要保留，实际 {ids}")
+        self.assertIn(GUNDAM_EX, ids)
+        self.assertIn(self.second_attack, ids)
+        # 按最高伤害武器伤害降序，且旧的单数 attack 指向最强那台
+        dmg = [a["best_weapon"]["damage"] for a in ins["attacks"]]
+        self.assertEqual(dmg, sorted(dmg, reverse=True))
+        self.assertEqual(ins["attack"]["unit"]["id"], ins["attacks"][0]["unit"]["id"])
+
+    def test_match_groups_per_attacker(self):
+        if not self.second_attack or not self.support_unit_id:
+            self.skipTest("需要第二台攻击型与一台支援型")
+        m = self._score(self._team2())["insights"]["match"]
+        self.assertEqual(m["attack_count"], 2)
+        self.assertEqual(len(m["groups"]), 2, "每台攻击型一组")
+        for g in m["groups"]:
+            self.assertTrue(g["weapon"])
+            self.assertTrue(g["attrs"], "每组都要有伤害类型，否则无从匹配")
+            self.assertEqual(len(g["rows"]), g["total"])
+            self.assertEqual(
+                g["hit_count"], sum(1 for r in g["rows"] if r["support_hit"]))
+            self.assertEqual(
+                g["defense_hit_count"], sum(1 for r in g["rows"] if r["defense_hit"]))
+        self.assertEqual(m["total_types"], sum(g["total"] for g in m["groups"]))
+        self.assertEqual(m["total_hit_count"], sum(g["hit_count"] for g in m["groups"]))
+        # 兼容字段仍等于第一组（伤害最高那台）
+        self.assertEqual(m["hit_count"], m["groups"][0]["hit_count"])
+        self.assertEqual(m["attack_weapon"], m["groups"][0]["weapon"])
+
+    def test_match_union_and_defense_rows(self):
+        if not self.second_attack or not self.support_unit_id:
+            self.skipTest("需要第二台攻击型与一台支援型")
+        ins = self._score(self._team2())["insights"]
+        m = ins["match"]
+        union = sorted({t for a in ins["attacks"]
+                        for t in (a["best_weapon"]["attrs"] or [])})
+        self.assertEqual(m["union_attrs"], union)
+        self.assertEqual(m["defense_types"], len(union))
+        # defense_rows 按类型去重（防御减伤与"哪台攻击型打的"无关）
+        types = [r["type"] for r in m["defense_rows"]]
+        self.assertEqual(types, union)
+        self.assertEqual(len(types), len(set(types)))
+
+    def test_synergy_names_the_attackers_with_gaps(self):
+        if not self.second_attack or not self.support_unit_id:
+            self.skipTest("需要第二台攻击型与一台支援型")
+        ins = self._score(self._team2())["insights"]
+        sy = ins["synergy"]
+        if sy["level"] != "partial":
+            self.skipTest(f"该组合协同结果为 {sy['level']}，不适用多台缺口断言")
+        self.assertIn("台攻击型", sy["detail"], "多台时结论要说明是几台")
+        self.assertIn("合计", sy["detail"])
+        gaps = [g for g in ins["match"]["groups"] if g["missed"]]
+        self.assertTrue(gaps, "partial 至少有一台存在缺口")
+        for g in gaps[:3]:
+            self.assertIn(g["unit"]["name"], sy["detail"], "缺口要点名是哪台机体")
+
+
 if __name__ == "__main__":
     unittest.main()

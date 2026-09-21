@@ -187,6 +187,49 @@ const FULL = {
   },
 };
 
+// 双攻击型变体：验证「两台都要展示」+「匹配按台分组」
+const TWO = JSON.parse(JSON.stringify(FULL));
+TWO.attacks = [
+  TWO.attack,
+  {
+    unit: { id: 1001003050, name: '吉翁号 (EX)' },
+    range: { max: 4, max_nomap: 4, weapon_count: 3, map_count: 0 },
+    best_weapon: {
+      id: 501, name: '全领域攻击 EX', damage: 86148, attrs: [2, 3],
+      dep_label: '射击', range_min: 1, range_max: 4, map: false,
+    },
+  },
+];
+TWO.match = Object.assign({}, TWO.match, {
+  attack_count: 2,
+  union_attrs: [1, 2, 3],
+  total_hit_count: 1, total_types: 4,
+  full_count: 0, none_count: 1,
+  defense_hit_total: 2, defense_types: 3,
+  groups: [
+    {
+      unit: { id: 1200003950, name: '神高达 (EX)' },
+      weapon: '洗牌同盟拳 EX', attrs: [1, 3],
+      hit_count: 1, total: 2, defense_hit_count: 1, defense_total: 2,
+      rows: [
+        { type: 1, support_hit: true, support_by: ['物理损伤提升（1回合）LV4'],
+          defense_hit: true, defense_by: ['GN力场 LV4 减伤 20%'] },
+        { type: 3, support_hit: false, support_by: [], defense_hit: false, defense_by: [] },
+      ],
+    },
+    {
+      unit: { id: 1001003050, name: '吉翁号 (EX)' },
+      weapon: '全领域攻击 EX', attrs: [2, 3],
+      hit_count: 0, total: 2, defense_hit_count: 1, defense_total: 2,
+      rows: [
+        { type: 2, support_hit: false, support_by: [], defense_hit: true,
+          defense_by: ['GN力场 LV4 减伤 20%'] },
+        { type: 3, support_hit: false, support_by: [], defense_hit: false, defense_by: [] },
+      ],
+    },
+  ],
+});
+
 const FULL_ALIAS = FULL;
 
 // 完全匹配的变体：用于校验「达标 = 绿底」，与减分项的红底区分开
@@ -206,6 +249,7 @@ const MISSING = {
 const TESTS = `
 __full = renderTeamStatus({ insights: ${JSON.stringify(FULL)} });
 __ok = renderTeamStatus({ insights: ${JSON.stringify(FULL_OK)} });
+__two = renderTeamStatus({ insights: ${JSON.stringify(TWO)} });
 __missing = renderTeamStatus({ insights: ${JSON.stringify(MISSING)} });
 __legacy = renderTeamStatus({ pairs: [] });
 __noRes = renderTeamStatus(null);
@@ -216,6 +260,7 @@ vm.runInContext(src + '\n;' + TESTS, ctx, { filename: 'app.js+status-test' });
 
 const full = ctx.__full || '';
 const okAlt = ctx.__ok || '';
+const two = ctx.__two || '';
 const missing = ctx.__missing || '';
 const checks = [
   ['有 insights 时渲染队伍状态', full.includes('team-status') && full.includes('队伍状态')],
@@ -277,6 +322,22 @@ const checks = [
   ['完全覆盖时防御行为绿底', /ts-line ok">✓ 防御型对 物理、特殊 有减伤/.test(okAlt)],
   ['协同条块不再用旧的无底色 class',
     !full.includes('ts-syn-detail') && !full.includes('ts-syn-def')],
+  ['多台攻击型：逐台都有状态段',
+    two.includes('攻击型 1 · 神高达 (EX)') && two.includes('攻击型 2 · 吉翁号 (EX)')],
+  ['多台攻击型：标出伤害最高的那台', two.includes('ts-tag best') && two.includes('伤害最高')],
+  ['多台攻击型：两台武器与类型都展示',
+    two.includes('洗牌同盟拳 EX') && two.includes('全领域攻击 EX')
+    && two.includes('>光束</span>')],
+  ['多台攻击型：匹配按台分组', (two.match(/ts-mgroup/g) || []).length === 2],
+  ['多台攻击型：汇总标题给出台数与合计',
+    two.includes('伤害类型匹配 · 2 台攻击型') && two.includes('命中 <b>1/4</b>')
+    && two.includes('防御减伤 <b>2/3</b>')],
+  ['多台攻击型：每组标出自己的命中数（部分=琥珀、全未命中=红）',
+    two.includes('ts-mhit part') && two.includes('ts-mhit bad')
+    && two.includes('命中 1/2') && two.includes('命中 0/2')],
+  ['多台攻击型：逐类型仍分支援/防御两列',
+    (two.match(/支援未命中/g) || []).length >= 2
+    && two.includes('防御未减伤') && two.includes('防御减伤')],
   ['协同块列出加分项', full.includes('加分项 <b>2</b>') && full.includes('支援额外特效')
     && full.includes('防御减伤 / 特殊能力')],
   ['条件能力列出名称与条件（可达成）',
