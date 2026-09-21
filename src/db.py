@@ -418,17 +418,29 @@ def _i(v):
     return None if v is None else int(v)
 
 
+# weapon_attr 单值 -> 伤害类型集合。
+# 1/2/3 是单一伤害类型；4/5/6 是双类型组合（与库内既有多类型值完全吻合）：
+#   4 = 光束 + 物理、5 = 物理 + 特殊、6 = 光束 + 特殊
+# 该映射必须与 scripts/migrate_weapon_attack_attr.py 的回填规则一致，
+# 否则「重新爬取重建」会与既有库产生差异（曾因此丢失 5 把 EX 武器的多类型信息）。
+WEAPON_ATTR_EXPAND = {
+    1: [1], 2: [2], 3: [3],
+    4: [1, 2], 5: [1, 3], 6: [2, 3],
+}
+
+
 def _weapon_attrs_from_attr(v):
     """把旧的 weapon_attr 单值伤害类型推导为多伤害集合 JSON 字符串。
 
-    与 scripts/migrate_weapon_attack_attr.py 的回填规则保持一致：
-    1/2/3 -> 对应单元素数组；4(特殊招式) -> [3]；5/6 -> []（非物理/光束/特殊加成类型）。
+    1/2/3 -> 单元素；4/5/6 -> 双元素组合（见 WEAPON_ATTR_EXPAND）；
+    其余（含 None）-> 空集合。集合内按升序排列，保证可比较、可幂等。
     """
-    if v in (1, 2, 3):
-        return json.dumps([v], ensure_ascii=False)
-    if v == 4:
-        return json.dumps([3], ensure_ascii=False)
-    return json.dumps([], ensure_ascii=False)
+    try:
+        key = int(v)
+    except (TypeError, ValueError):
+        key = 0
+    arr = WEAPON_ATTR_EXPAND.get(key)
+    return json.dumps(sorted(arr) if arr else [], ensure_ascii=False)
 
 
 def _load_json(path: Path):

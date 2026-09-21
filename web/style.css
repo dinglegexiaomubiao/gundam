@@ -2268,3 +2268,57 @@ nav button.active::after {
 .map-signal[data-signal="active"] { border-color: var(--accent2); color: var(--accent2); }
 .map-signal[data-signal="mention"] { border-color: var(--hud-amber); color: var(--hud-amber); }
 .map-signal[data-signal="role"] { color: var(--muted); }
+
+/* ===== 队伍状态摘要（队伍卡片底部） ===== */
+.team-status {
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  display: grid; gap: 8px;
+}
+.ts-title { font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+.ts-sec {
+  border-left: 3px solid var(--line); border-radius: 8px;
+  background: var(--panel2); padding: 7px 10px;
+}
+.ts-sec.ts-atk { border-left-color: var(--type-atk); }
+.ts-sec.ts-sup { border-left-color: var(--type-sup); }
+.ts-sec.ts-tank { border-left-color: var(--type-tank); }
+.ts-sec.ts-empty { background: transparent; border-left-style: dashed; }
+.ts-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 700; color: var(--text); margin-bottom: 3px;
+}
+.ts-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--type-unknown); flex: none; }
+.ts-atk .ts-dot { background: var(--type-atk); }
+.ts-sup .ts-dot { background: var(--type-sup); }
+.ts-tank .ts-dot { background: var(--type-tank); }
+.ts-body {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 4px 14px; font-size: 12px; color: var(--muted); line-height: 1.7;
+}
+.ts-body.ts-none { color: var(--muted); opacity: .8; }
+.ts-kv b { color: var(--text); font-weight: 700; }
+.ts-kv .num { color: var(--accent); font-variant-numeric: tabular-nums; }
+.ts-chip {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--muted); white-space: nowrap;
+}
+.ts-chip.up, .ts-chip.ok { border-color: #2f9e6e; color: #9fe8c8; background: #1d3d30; }
+.ts-chip.down, .ts-chip.bad { border-color: #7a5c1f; color: var(--accent2); background: #3a2c14; }
+.ts-eff { display: inline-flex; align-items: center; gap: 6px; }
+.ts-match {
+  flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap;
+  gap: 6px; margin-top: 4px; font-size: 12px; color: var(--muted);
+}
+.ts-match b { font-variant-numeric: tabular-nums; }
+.ts-match.ok b { color: #9fe8c8; }
+.ts-match.part b { color: var(--accent2); }
+.ts-match.bad b { color: #ffb4ae; }
+.ts-syns {
+  flex-basis: 100%; margin: 4px 0 0; padding-left: 16px;
+  display: grid; gap: 2px;
+}
+.ts-syn.counted { color: #9fe8c8; }
+.ts-syn.potential { color: var(--text); }
+.ts-syn.impossible { color: var(--muted); opacity: .55; }

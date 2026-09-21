@@ -19,6 +19,9 @@ import sys
 
 ATK_EXPAND = {1: [1], 2: [2], 3: [3], 4: [1, 2], 5: [1, 3], 6: [2, 3], 7: [1, 2, 3]}
 
+# weapon_attr（伤害类型）单值 -> 多伤害集合；与 src/db.py:WEAPON_ATTR_EXPAND 一致
+ATTR_EXPAND = {1: [1], 2: [2], 3: [3], 4: [1, 2], 5: [1, 3], 6: [2, 3]}
+
 
 def expand_attack_attr(v):
     if v is None:
@@ -39,12 +42,9 @@ def backfill_attrs(weapon_attrs_raw, weapon_attr):
                 return json.dumps([int(x) for x in arr if str(x).isdigit()], ensure_ascii=False)
         except (ValueError, json.JSONDecodeError):
             pass
-    # 否则用 weapon_attr 回填
-    if weapon_attr in (1, 2, 3):
-        return json.dumps([weapon_attr], ensure_ascii=False)
-    if weapon_attr == 4:
-        return json.dumps([3], ensure_ascii=False)
-    return json.dumps([], ensure_ascii=False)
+    # 否则用 weapon_attr 回填（与 src/db.py 的 WEAPON_ATTR_EXPAND 保持一致）
+    arr = ATTR_EXPAND.get(weapon_attr)
+    return json.dumps(sorted(arr) if arr else [], ensure_ascii=False)
 
 
 def main():

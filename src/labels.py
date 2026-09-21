@@ -310,6 +310,18 @@ WEAPON_ATTR = {
 # 武器伤害类型名 → id（原始 JSON 的 weapon_attrs 存的是英文名）
 WA_ID = {"Physical": 1, "Beam": 2, "Special": 3}
 
+# 伤害类型的展示名。注意与 WEAPON_ATTR 的差别：WEAPON_ATTR 是「武装属性」标签
+# （1 显示为「实弹」），这里是「损伤类型」词条的措辞（游戏内写作「物理损伤提升」）。
+# 两者 id 相同，只是语境不同 —— 新功能（伤害类型匹配）统一用本表。
+DAMAGE_TYPE_NAMES = {1: "物理", 2: "光束", 3: "特殊"}
+DAMAGE_TYPE_ORDER = (1, 2, 3)
+
+
+def damage_type_label(attrs) -> str:
+    """[1,2] -> '物理、光束'；空 -> '—'。"""
+    ids = sorted({int(x) for x in (attrs or []) if str(x).isdigit()})
+    return "、".join(DAMAGE_TYPE_NAMES.get(i, f"#{i}") for i in ids) or "—"
+
 SUPPORTER_SKILL_TYPE = {"leader": "队长技", "active": "主动技"}
 ACQUISITION_ROUTE = {1: "扭蛋", 2: "活动", 3: "商店", 4: "其他"}
 TARGET_LABEL = {"Owner": "自身", "SameGroup": "同组"}

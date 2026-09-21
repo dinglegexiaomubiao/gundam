@@ -584,17 +584,49 @@ def _pilot_series_ids(row: dict) -> set[int]:
 
 _pilots: list | None = None
 _pilots_lock = threading.Lock()
+# 缓存指纹：库被重建 / 换库后自动失效（见 _pilots_fingerprint）
+_pilots_key: tuple | None = None
 _TAG_ID: dict | None = None
 _TAG_NAME: dict = {}
 _SERIES_NAME: dict = {}
 
 
-def _build_pilots() -> list:
-    global _pilots, _TAG_ID, _TAG_NAME, _SERIES_NAME
+def _pilots_fingerprint(conn) -> tuple:
+    """驾驶员缓存指纹：库路径 + character 行数 + 最大 id。
+
+    驾驶员缓存是一份重量级的内存快照，原先「一次构建、永不失效」——
+    但 `build_db()`（点「爬取数据」）会重建 character 表、`/api/import` 与云端恢复
+    会整库替换，此时旧缓存会让评分配错人（实测表现为评分里驾驶员凭空消失）。
+    改用指纹后，这类变更会自动触发重建。
+    """
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*), IFNULL(MAX(id), 0) FROM character"
+        ).fetchone()
+        return (str(config.DB_PATH), int(row[0]), int(row[1]))
+    except sqlite3.Error:
+        return (str(config.DB_PATH), -1, -1)
+
+
+def reset_caches() -> None:
+    """显式清空模块级缓存（换库、导入、重建后由外部调用）。"""
+    global _pilots, _pilots_key, _TAG_ID, _TAG_NAME, _SERIES_NAME
     with _pilots_lock:
-        if _pilots is not None:
-            return _pilots
+        _pilots = None
+        _pilots_key = None
+        _TAG_ID = None
+        _TAG_NAME = {}
+        _SERIES_NAME = {}
+
+
+def _build_pilots() -> list:
+    global _pilots, _pilots_key, _TAG_ID, _TAG_NAME, _SERIES_NAME
+    with _pilots_lock:
         conn = _conn()
+        key = _pilots_fingerprint(conn)
+        if _pilots is not None and _pilots_key == key:
+            conn.close()
+            return _pilots
         _TAG_ID = {r[1]: r[0] for r in conn.execute("SELECT id, name FROM tag")}
         _TAG_NAME = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
         _SERIES_NAME = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
@@ -679,6 +711,7 @@ def _build_pilots() -> list:
             })
         conn.close()
         _pilots = pilots
+        _pilots_key = key
         return _pilots
 
 
@@ -1460,6 +1493,321 @@ def _supporter_applies(unit_ctx: dict, sup: dict | None) -> bool:
     return False
 
 
+# ==================== 队伍状态摘要（insight） ====================
+# 给「组队」页提供每支队伍的作战画像：
+#   · 攻击型 —— 最大武器射程（排除 MAP）+ 理论最高伤害武器（含武器特效的 POWER 提升）
+#   · 支援型 —— 武器特效（损伤提升按伤害类型 / 防御力减少）与其来源武器射程
+#   · 防御型 —— 移动力 + 减伤/阈值无效机制 + 单位技能 + 驾驶员可激活条目
+# 伤害口径与 team_score 完全一致（同一 _weapon_damage 函数），避免两套算法漂移。
+
+_MAP_EMPTY = ("", "null", "0")
+_DMG_ATTR_WORDS = ((1, "物理"), (2, "光束"), (3, "特殊"))
+_NOTABLE_PILOT_RE = re.compile(
+    r"HP恢复|MP提升|移动力提升|损伤|额外行动|支援防御|闪避|防御力提升"
+)
+
+
+def _has_map_range(w: dict) -> bool:
+    """是否 MAP 武器。判据与 webapp 的 WFX_FILTERS 保持一致。"""
+    v = w.get("map_weapon_range")
+    return str("" if v is None else v).strip() not in _MAP_EMPTY
+
+
+def _weapon_attr_ids(w: dict) -> list[int]:
+    """伤害类型集合（升序）。"""
+    out: set[int] = set()
+    for x in _json_list(w.get("weapon_attrs")):
+        try:
+            out.add(int(x))
+        except (TypeError, ValueError):
+            continue
+    return sorted(out)
+
+
+def _range_info(conn, unit_id: int) -> dict:
+    """该机体的射程概览（含/不含 MAP 两个口径）。"""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT name, range_min, range_max, map_weapon_range "
+        "FROM unit_weapon WHERE unit_id = ? ORDER BY sort", (unit_id,))]
+    norm = [r for r in rows if not _has_map_range(r)]
+
+    def _mx(rs):
+        vals = [r.get("range_max") or 0 for r in rs]
+        return max(vals) if vals else None
+
+    return {
+        "max": _mx(rows), "max_nomap": _mx(norm),
+        "weapon_count": len(rows), "map_count": len(rows) - len(norm),
+    }
+
+
+def _weapon_damage(
+    stats: dict, pilot: dict, pilot_tot: dict, weapon_row: dict,
+    unit_def: float, char_def: float, unit_tot: dict,
+) -> dict:
+    """某把武器对基准敌人的单次伤害（与 team_score 的口径一致）。
+
+    `_weapon_power` 已经把武器特效里的「武装POWER提升（最高提升X%）」算进去了，
+    所以这里得到的即是「武器伤害 + 武器特效」的理论值。
+    """
+    dep_keys = attack_attr_keys(weapon_row.get("attack_attr")) or ["ranged"]
+    dep_val = max(
+        _effective_stat(pilot, k, pilot_tot["stat_pct"].get(k, 0.0))
+        for k in dep_keys
+    )
+    power = _weapon_power(weapon_row)
+    dmg_percent = [x for x in (unit_tot["dmg_up"], pilot_tot["dmg_up"]) if x]
+    att = CombatantStats(
+        unit_attack=float(stats["attack"]), unit_defense=0.0,
+        character_attack=float(dep_val), character_defense=0.0,
+    )
+    defender = CombatantStats(
+        unit_attack=0.0, unit_defense=unit_def,
+        character_attack=0.0, character_defense=char_def,
+    )
+    ctx = DamageContext(
+        weapon_power=power, terrain_correction=1.0,
+        defensive_correction=DEFENSE_CORRECTION,
+        attacker_damage_dealt_percent=dmg_percent,
+        attacker_vigor="normal",
+    )
+    return {
+        "power": power,
+        "damage": int(calculate_damage(att, defender, ctx)["final_damage"]),
+        "dep_label": attack_attr_labels(weapon_row.get("attack_attr")),
+        "dep_value": dep_val,
+    }
+
+
+def _weapon_effects_classified(w: dict) -> list[dict]:
+    """把 weapon_effects 归类为可展示条目：损伤提升（按伤害类型）/ 防御力减少。"""
+    out: list[dict] = []
+    for e in _json_list(w.get("weapon_effects")):
+        text = f"{e.get('name') or ''} {e.get('desc') or ''}"
+        if "损伤提升" in text:
+            kind = "dmg_up"
+        elif re.search(r"防御力(?:减少|降低)", text):
+            kind = "def_down"
+        else:
+            continue
+        types = (
+            [i for i, word in _DMG_ATTR_WORDS if word in text]
+            if kind == "dmg_up" else []
+        )
+        m = re.search(r"(\d+)%", text)
+        out.append({
+            "label": str(e.get("name") or "—").strip(),
+            "kind": kind,
+            "types": types,
+            "value": int(m.group(1)) if m else None,
+            "desc": str(e.get("desc") or "").replace("\n", " ").strip(),
+            "weapon": w.get("name"),
+            "range_min": w.get("range_min"),
+            "range_max": w.get("range_max"),
+        })
+    return out
+
+
+def _unit_defense_insight(conn, unit_id: int) -> dict:
+    """机体侧：减伤 / 阈值无效 / 其它增益 / 单位技能。
+
+    数值一律从 `desc` 解析 —— 实测 `trait_value` 与 `desc` 存在错位
+    （如 GN力场：trait_type=79 的 trait_value 是 4500，而 desc 写的是减轻 20%）。
+    """
+    mitigations: list[dict] = []
+    thresholds: list[dict] = []
+    boosts: list[dict] = []
+    for r in conn.execute(
+        "SELECT name, traits FROM unit_ability WHERE unit_id = ?", (unit_id,)
+    ):
+        for tr in _json_list(r["traits"]):
+            t = tr.get("trait") or tr
+            desc = str(t.get("desc") or "").replace("\n", " ").strip()
+            if not desc:
+                continue
+            item = {
+                "label": r["name"],
+                "desc": desc,
+                "trait_type": t.get("trait_type"),
+                "conditional": bool(t.get("active_condition_set_id")),
+                "attrs": [i for i, word in _DMG_ATTR_WORDS if word in desc],
+            }
+            m = re.search(r"损伤(?:减轻|降低)\s*(\d+)%", desc)
+            if m:
+                item["value"] = int(m.group(1))
+                mitigations.append(item)
+                continue
+            m = re.search(r"损伤(\d+)以下时，?\s*损伤无效", desc)
+            if m:
+                item["value"] = int(m.group(1))
+                thresholds.append(item)
+                continue
+            m = re.search(r"(\d+)%", desc)
+            if m:
+                item["value"] = int(m.group(1))
+                boosts.append(item)
+
+    skill = None
+    row = conn.execute(
+        "SELECT name, desc FROM unit_skill WHERE unit_id = ? LIMIT 1", (unit_id,)
+    ).fetchone()
+    if row:
+        skill = {
+            "name": row["name"],
+            "desc": str(row["desc"] or "").replace("\n", " ").strip(),
+        }
+    return {
+        "mitigations": mitigations, "thresholds": thresholds,
+        "boosts": boosts, "unit_skill": skill,
+    }
+
+
+def _one_line(text) -> str:
+    """把多行 desc 压成单行，便于前端一行展示。"""
+    return re.sub(r"\s*\n\s*", " ", str(text or "")).strip()
+
+
+def _unit_cond_ok(cond: dict | None, unit_ctx: dict, unit_id: int):
+    """只判定「机体侧」条件：搭乘单位的 id / 标签 / 系列 / 类型。
+
+    返回 None = 该条没有机体侧条件（或依赖敌方信息）；True / False = 明确结论。
+    战意、特定行动、HP/EN/距离等**时机类**条件不在这里判定（它们交给 `timing`）。
+    """
+    if not cond or cond.get("side") == "enemy":
+        return None
+    if cond.get("unit_ids") and unit_id not in cond["unit_ids"]:
+        return False
+    if cond.get("tags") and not (cond["tags"] & unit_ctx.get("tag_ids", set())):
+        return False
+    if cond.get("series") and not (cond["series"] & unit_ctx.get("series_ids", set())):
+        return False
+    if cond.get("role") and str(unit_ctx.get("role")) != str(cond["role"]):
+        return False
+    if not any(cond.get(k) for k in ("unit_ids", "tags", "series", "role")):
+        return None
+    return True
+
+
+def _pilot_synergy(unit_ctx: dict, pilot: dict | None, unit_id: int = 0,
+                   limit: int = 10) -> list[dict]:
+    """驾驶员条目中与生存/耐久相关、且标注能否被本机体「点亮」。
+
+    两个维度分开表达，因为它们的确定性不同：
+
+    · `unit_ok`  —— **机体侧条件**是否满足（搭乘单位的 id / 标签 / 系列 / 类型）。
+                    这是静态可判定的，例如刹那的 EX 能力限定「搭乘单位为 00强化模组(最后决战式样)(EX)」。
+    · `status`   —— 整体判定：counted（无条件，恒生效）/ potential（机体条件满足、
+                    但触发时机取决于战斗，如「自身 HP 为 0% 时」）/ impossible（本机不满足）。
+    · `unknown`  —— potential 时说明卡在哪一步。
+    """
+    if not pilot:
+        return []
+    out: list[dict] = []
+    for source, group in (
+        ("能力", pilot.get("abilities") or []),
+        ("技能", pilot.get("skills") or []),
+    ):
+        for ab in group:
+            for item in ab.get("items") or []:
+                desc = _one_line(item.get("desc"))
+                if not _NOTABLE_PILOT_RE.search(desc):
+                    continue
+                cond = item.get("cond") or {}
+                unit_ok = _unit_cond_ok(cond, unit_ctx, unit_id)
+                # 时机类条件（战意 / 特定行动 / HP·EN·距离等）无法预先判定
+                timing = bool(
+                    cond.get("battle_action") or cond.get("tension")
+                    or item.get("mech")
+                )
+                if cond.get("side") == "enemy":
+                    status = "potential"
+                elif unit_ok is False:
+                    status = "impossible"
+                elif timing:
+                    status = "potential"
+                else:
+                    status = "counted"
+                out.append({
+                    "source": source,
+                    "ability": ab.get("name"),
+                    "desc": desc,
+                    "status": status,
+                    "unit_ok": unit_ok,
+                    "unknown": _one_line(item.get("mech")),
+                })
+
+    # 排序：机体条件已满足且能生效 > 条件待定（时机）> 无条件 > 本机不满足
+    rank = {"counted": 1, "potential": 0, "impossible": 2}
+    out.sort(key=lambda x: (rank.get(x["status"], 3), 0 if x["unit_ok"] else 1))
+    return out[:limit]
+
+
+def _build_team_insights(conn, collected: list[dict]) -> dict:
+    """把各槽位的采集结果汇总成「攻击 / 支援 / 防御 / 匹配」四块。"""
+    attack_units = [c for c in collected if c["role"] == 1 and c.get("best_weapon")]
+    support_units = [c for c in collected if c["role"] == 3 and c.get("support_effects")]
+    defense_units = [c for c in collected if c["role"] == 2 and c.get("defense")]
+
+    attack = max(attack_units, key=lambda c: c["best_weapon"]["damage"]) if attack_units else None
+
+    # 防御块拍平：直接暴露 unit / movement / mitigations / … 给前端
+    defense = None
+    if defense_units:
+        c = defense_units[0]
+        defense = {
+            "unit": c["unit"], "pilot": c["pilot"], "range": c["range"],
+            **(c.get("defense") or {}),
+        }
+
+    # 支援特效合并（多台支援型时全列）
+    effects_all: list[dict] = []
+    support_units_info: list[dict] = []
+    for c in support_units:
+        support_units_info.append(c["unit"])
+        effects_all.extend(c.get("support_effects") or [])
+
+    support = None
+    if support_units:
+        support = {
+            "units": support_units_info,
+            "effects": effects_all,
+            "dmg_up_types": sorted({
+                t for e in effects_all if e["kind"] == "dmg_up" for t in e.get("types") or []
+            }),
+        }
+
+    # ---- 匹配判定：支援提供的损伤提升类型 vs 攻击型最高伤害武器的伤害类型 ----
+    match = None
+    if attack and support and support["dmg_up_types"]:
+        want = attack["best_weapon"]["attrs"]
+        covered = []
+        for t in want:
+            by = [e for e in effects_all
+                  if e["kind"] == "dmg_up" and t in (e.get("types") or [])]
+            if by:
+                covered.append({"type": t, "by": by[0]["label"]})
+        hit = {c["type"] for c in covered}
+        match = {
+            "attack_attrs": want,
+            "covered": covered,
+            "missed": [{"type": t} for t in want if t not in hit],
+            "hit_count": len(covered),
+            "total": len(want),
+        }
+
+    return {
+        "attack": attack,
+        "support": support,
+        "defense": defense,
+        "match": match,
+        "missing": {
+            "attack": attack is None,
+            "support": support is None,
+            "defense": defense is None,
+        },
+    }
+
+
 def team_score(pairs, supporter_id=None, break_step=3, bench="low",
                custom_enemy=None) -> dict:
     """组队评分：给定若干组（机体/星级/武器/驾驶员）+ 支援角色，返回每组的最终多项属性。
@@ -1487,6 +1835,7 @@ def team_score(pairs, supporter_id=None, break_step=3, bench="low",
     sup = _supporter_bonus(conn, supporter_id, break_step) if supporter_id else None
 
     out_pairs = []
+    ins_pairs: list[dict] = []
     for p in pairs:
         try:
             unit_id = int(p.get("unit_id") or 0)
@@ -1579,44 +1928,70 @@ def team_score(pairs, supporter_id=None, break_step=3, bench="low",
 
         weapon_info = None
         if weapon_row and pilot:
-            dep_keys = attack_attr_keys(weapon_row.get("attack_attr")) or ["ranged"]
-            dep_val = max(
-                _effective_stat(pilot, k, pilot_tot["stat_pct"].get(k, 0.0))
-                for k in dep_keys
+            calc = _weapon_damage(
+                stats, pilot, pilot_tot, weapon_row, unit_def, char_def, unit_tot
             )
-            power = _weapon_power(weapon_row)
-            dmg_percent = [
-                x for x in (unit_tot["dmg_up"], pilot_tot["dmg_up"]) if x
-            ]
-            att = CombatantStats(
-                unit_attack=float(stats["attack"]),
-                unit_defense=0.0,
-                character_attack=float(dep_val),
-                character_defense=0.0,
-            )
-            defender = CombatantStats(
-                unit_attack=0.0,
-                unit_defense=unit_def,
-                character_attack=0.0,
-                character_defense=char_def,
-            )
-            ctx = DamageContext(
-                weapon_power=power,
-                terrain_correction=1.0,
-                defensive_correction=DEFENSE_CORRECTION,
-                attacker_damage_dealt_percent=dmg_percent,
-                attacker_vigor="normal",
-            )
-            damage = int(calculate_damage(att, defender, ctx)["final_damage"])
             weapon_info = {
                 "id": weapon_row["id"],
                 "name": weapon_row.get("name"),
-                "power": power,
+                "power": calc["power"],
                 "attack_attr": weapon_row.get("attack_attr"),
-                "dep_label": attack_attr_labels(weapon_row.get("attack_attr")),
-                "dep_value": dep_val,
-                "damage": damage,
+                "dep_label": calc["dep_label"],
+                "dep_value": calc["dep_value"],
+                "damage": calc["damage"],
+                "attrs": _weapon_attr_ids(weapon_row),
+                "range_min": weapon_row.get("range_min"),
+                "range_max": weapon_row.get("range_max"),
+                "map": _has_map_range(weapon_row),
             }
+
+        # ---- 队伍状态摘要：按本槽位机体的 role 采集 ----
+        pair_role = unit_row.get("role")
+        ins: dict = {
+            "role": pair_role,
+            "unit": {"id": unit_id, "name": unit_row.get("name")},
+            "pilot": None if not pilot else {"id": pilot["id"], "name": pilot["name"]},
+            "range": _range_info(conn, unit_id),
+        }
+        if pair_role == 1 and pilot:
+            best = None
+            for w in conn.execute(
+                "SELECT * FROM unit_weapon WHERE unit_id = ? ORDER BY sort", (unit_id,)
+            ):
+                w = dict(w)
+                c = _weapon_damage(
+                    stats, pilot, pilot_tot, w, unit_def, char_def, unit_tot
+                )
+                cand = {
+                    "id": w["id"], "name": w.get("name"), "power": c["power"],
+                    "damage": c["damage"], "attrs": _weapon_attr_ids(w),
+                    "dep_label": c["dep_label"],
+                    "range_min": w.get("range_min"), "range_max": w.get("range_max"),
+                    "map": _has_map_range(w),
+                }
+                if best is None or cand["damage"] > best["damage"]:
+                    best = cand
+            ins["best_weapon"] = best
+        elif pair_role == 3:
+            effects: list[dict] = []
+            for w in conn.execute(
+                "SELECT * FROM unit_weapon WHERE unit_id = ? ORDER BY sort", (unit_id,)
+            ):
+                w = dict(w)
+                if _has_map_range(w):
+                    continue
+                effects.extend(_weapon_effects_classified(w))
+            ins["support_effects"] = effects
+        elif pair_role == 2:
+            d = _unit_defense_insight(conn, unit_id)
+            d["movement"] = {
+                "base": unit_row.get("movement"),
+                "max": unit_row.get("max_movement"),
+                "star": star,
+            }
+            d["pilot_synergy"] = _pilot_synergy(unit_ctx, pilot, unit_id)
+            ins["defense"] = d
+        ins_pairs.append(ins)
 
         out_pairs.append({
             "unit": {
@@ -1639,11 +2014,13 @@ def team_score(pairs, supporter_id=None, break_step=3, bench="low",
             "weapon": weapon_info,
         })
 
+    insights = _build_team_insights(conn, ins_pairs)
     conn.close()
     return {
         "ok": True,
         "bench": bench_label,
         "bench_def": {"unit_defense": unit_def, "character_defense": char_def},
+        "insights": insights,
         "supporter": None if not sup else {
             "id": sup["id"],
             "name": sup["name"],

@@ -187,6 +187,8 @@ def _run_crawl_worker(preserve: list | None) -> None:
     except Exception as exc:  # noqa: BLE001
         _crawl_state["error"] = str(exc)
     finally:
+        # 库已重建 → 清掉 pairing 的驾驶员/标签缓存
+        pairing.reset_caches()
         _crawl_state["running"] = False
 
 
@@ -587,6 +589,8 @@ def _run_sync_worker(direction: str) -> None:
     except Exception as exc:  # noqa: BLE001
         _sync_state["error"] = str(exc)
     finally:
+        # 同步可能整库替换（download 方向）→ 清缓存
+        pairing.reset_caches()
         _sync_state["running"] = False
 
 
@@ -4723,6 +4727,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._cleanup_import_files(tmp)
                     return self._send_json({"error": str(exc)}, 409)
                 self._cleanup_import_files(tmp)
+                pairing.reset_caches()
                 info = api_summary()
                 return self._send_json({
                     "ok": True,

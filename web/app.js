@@ -5375,7 +5375,114 @@ function renderTeamRow(team, ti) {
         ${unitCards}
         ${pilotCards}
       </div>
+      ${renderTeamStatus(res)}
     </div>`;
+}
+
+/* ---------- 队伍状态摘要（卡片底部） ---------- */
+const TS_DMG_TYPES = { 1: "物理", 2: "光束", 3: "特殊" };
+
+function tsDmgChips(ids, cls) {
+  const arr = (ids || []).slice().sort((a, b) => a - b);
+  if (!arr.length) return '<span class="muted">无伤害类型</span>';
+  return arr.map((i) => `<span class="ts-chip ${cls || ""}">${TS_DMG_TYPES[i] || "#" + i}</span>`).join("");
+}
+
+function tsSection(kind, title, bodyHtml) {
+  return `<div class="ts-sec ts-${kind}">
+      <div class="ts-head"><span class="ts-dot"></span>${title}</div>
+      <div class="ts-body">${bodyHtml}</div>
+    </div>`;
+}
+
+function renderTeamStatus(res) {
+  const ins = res && res.insights;
+  if (!ins) return "";
+  const miss = ins.missing || {};
+  const secs = [];
+
+  // ---- 攻击型 ----
+  if (ins.attack) {
+    const a = ins.attack, w = a.best_weapon || {};
+    const mapNote = a.range.map_count
+      ? `<span class="muted">（已排除 ${a.range.map_count} 把 MAP）</span>` : "";
+    secs.push(tsSection("atk", `攻击型 · ${esc(a.unit.name)}`, `
+      <span class="ts-kv">最大射程 <b>${a.range.max_nomap ?? "—"}</b>${mapNote}</span>
+      <span class="ts-kv">最高伤害武器 <b>${esc(w.name || "未选武器")}</b>${
+        w.damage ? ` <span class="num">${fmtNum(w.damage)}</span>` : ""}</span>
+      <span class="ts-kv">伤害类型 ${tsDmgChips(w.attrs)}</span>
+      ${w.range_max != null ? `<span class="ts-kv">射程 ${w.range_min}-${w.range_max} · 依赖 ${esc(w.dep_label || "—")}</span>` : ""}`));
+  } else if (miss.attack) {
+    secs.push(`<div class="ts-sec ts-atk ts-empty">
+        <div class="ts-head"><span class="ts-dot"></span>攻击型</div>
+        <div class="ts-body ts-none">本队缺少攻击型机体</div></div>`);
+  }
+
+  // ---- 支援型 ----
+  if (ins.support) {
+    const s = ins.support;
+    const effs = (s.effects || []).slice(0, 8).map((e) => `
+      <span class="ts-eff">
+        <span class="ts-chip ${e.kind === "dmg_up" ? "up" : "down"}">${esc(e.label)}${e.value ? ` ${e.value}%` : ""}</span>
+        <span class="muted">射程 ${e.range_max != null ? `${e.range_min}-${e.range_max}` : "—"}${e.weapon ? ` · ${esc(e.weapon)}` : ""}</span>
+      </span>`).join("") || '<span class="muted">无可对敌生效的武器特效</span>';
+
+    let matchHtml = "";
+    if (ins.match) {
+      const m = ins.match;
+      const cls = m.total === 0 ? "bad" : (m.hit_count === m.total ? "ok" : (m.hit_count ? "part" : "bad"));
+      const chips = [
+        ...(m.covered || []).map((c) =>
+          `<span class="ts-chip ok" title="来源：${esc(c.by)}">命中 ${TS_DMG_TYPES[c.type] || c.type}</span>`),
+        ...(m.missed || []).map((c) =>
+          `<span class="ts-chip bad">未命中 ${TS_DMG_TYPES[c.type] || c.type}</span>`),
+      ].join("");
+      matchHtml = `<div class="ts-match ${cls}">与攻击型最高伤害武器匹配
+          <b>${m.hit_count}/${m.total}</b> ${chips}</div>`;
+    } else if (ins.attack && (ins.attack.best_weapon || {}).attrs &&
+               !(ins.attack.best_weapon.attrs || []).length) {
+      matchHtml = '<div class="ts-match bad">攻击型最高伤害武器没有伤害类型，无法匹配</div>';
+    }
+
+    secs.push(tsSection("sup", `支援型 · ${esc((s.units || []).map((u) => u.name).join("、"))}`,
+      effs + matchHtml));
+  } else if (miss.support) {
+    secs.push(`<div class="ts-sec ts-sup ts-empty">
+        <div class="ts-head"><span class="ts-dot"></span>支援型</div>
+        <div class="ts-body ts-none">本队缺少支援型机体</div></div>`);
+  }
+
+  // ---- 防御型 ----
+  if (ins.defense) {
+    const d = ins.defense;
+    const mv = d.movement || {};
+    const bits = [`<span class="ts-kv">移动力 <b>${mv.max ?? mv.base ?? "—"}</b></span>`];
+    (d.mitigations || []).forEach((x) => bits.push(
+      `<span class="ts-kv">${esc(x.label)} 减伤 <b>${x.value}%</b> ${tsDmgChips(x.attrs)}</span>`));
+    (d.thresholds || []).forEach((x) => bits.push(
+      `<span class="ts-kv">损伤 ≤<b>${fmtNum(x.value)}</b> 时无效</span>`));
+    if (d.unit_skill && d.unit_skill.desc) {
+      bits.push(`<span class="ts-kv">单位技能 ${esc(d.unit_skill.desc)}</span>`);
+    }
+    const syn = (d.pilot_synergy || []).slice(0, 5);
+    if (syn.length) {
+      bits.push('<ul class="ts-syns">' + syn.map((p) => {
+        const tag = p.unit_ok === false
+          ? '<span class="muted">（本机不满足）</span>'
+          : (p.status === "potential" ? '<span class="muted">（触发时机待定）</span>' : "");
+        return `<li class="ts-syn ${p.status}">${esc(p.desc)}${tag}</li>`;
+      }).join("") + "</ul>");
+    }
+    secs.push(tsSection("tank", `防御型 · ${esc(d.unit.name)}${
+      d.pilot ? ` ｜ 驾驶员 ${esc(d.pilot.name)}` : ""}`, bits.join("")));
+  } else if (miss.defense) {
+    secs.push(`<div class="ts-sec ts-tank ts-empty">
+        <div class="ts-head"><span class="ts-dot"></span>防御型</div>
+        <div class="ts-body ts-none">本队缺少耐久型机体</div></div>`);
+  }
+
+  if (!secs.length) return "";
+  return `<div class="team-status"><div class="ts-title">队伍状态</div>${secs.join("")}</div>`;
 }
 
 function renderSupporterCard(team, sup) {

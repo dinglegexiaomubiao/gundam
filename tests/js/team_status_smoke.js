@@ -1,0 +1,175 @@
+/* 队伍状态摘要（卡片底部）渲染冒烟校验（无需浏览器）
+ *
+ * 用法：
+ *   node tests/js/team_status_smoke.js [app.js 路径]
+ *   默认路径：web/app.js（相对仓库根）
+ *
+ * 用同步版 DOM 桩真跑 app.js，再直接喂一份 insights 给 renderTeamStatus()，
+ * 校验渲染出的结构与关键文案：
+ *   - 三段（攻击 / 支援 / 防御）分别渲染，类型色类正确
+ *   - 攻击型：排除 MAP 的射程 + 最高伤害武器的伤害类型胶囊
+ *   - 支援型：特效条目带射程 + 匹配结果逐项列出命中/未命中
+ *   - 防御型：移动力 / 减伤含属性胶囊 / 阈值无效 / 单位技能 / 驾驶员协同状态
+ *   - 缺少 role 时显示「本队缺少 X 型机体」
+ *   - 无 insights 时不渲染（向后兼容旧响应）
+ * 退出码 0 = 全部通过。
+ */
+const fs = require('fs');
+const vm = require('vm');
+const path = process.argv[2] || 'web/app.js';
+const src = fs.readFileSync(path, 'utf8');
+
+const els = new Map();
+function makeEl(sel) {
+  return {
+    _sel: sel,
+    style: {}, dataset: {}, value: '', textContent: '', innerHTML: '', className: '', hidden: false,
+    children: [],
+    classList: {
+      _s: new Set(),
+      add(...c) { c.forEach((x) => this._s.add(x)); },
+      remove(...c) { c.forEach((x) => this._s.delete(x)); },
+      toggle(c, f) {
+        if (f === undefined) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); }
+        else if (f) { this._s.add(c); } else { this._s.delete(c); }
+      },
+      contains(c) { return this._s.has(c); },
+    },
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
+    appendChild(c) { this.children.push(c); return c; }, removeChild() {}, remove() {},
+    querySelector() { return makeEl('sub'); }, querySelectorAll() { return []; },
+    closest() { return null; }, matches() { return false; },
+    setAttribute() {}, getAttribute() { return null; }, removeAttribute() {},
+    getBoundingClientRect() { return { width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }; },
+    focus() {}, blur() {}, click() {}, insertAdjacentHTML() {},
+    firstChild: null, parentNode: null, scrollTop: 0, scrollHeight: 0,
+  };
+}
+const document = {
+  querySelector(sel) { if (!els.has(sel)) els.set(sel, makeEl(sel)); return els.get(sel); },
+  querySelectorAll() { return []; },
+  getElementById(id) { return this.querySelector('#' + id); },
+  createElement(tag) { return makeEl(tag); },
+  addEventListener() {}, removeEventListener() {},
+  body: makeEl('body'), documentElement: makeEl('html'), hidden: false,
+};
+const store = new Map();
+const sandbox = {
+  console, document, Intl, Math, JSON, Date, Promise, Object, Array, String, Number, Boolean,
+  Set, Map, RegExp, Error, setTimeout, clearTimeout, setInterval, clearInterval,
+  requestAnimationFrame: (f) => setTimeout(f, 0),
+  localStorage: {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  },
+  fetch: () => new Promise(() => {}),      // 同步测试：所有请求挂起
+  alert() {}, confirm: () => true,
+  location: { href: 'http://127.0.0.1:8765/', hash: '', search: '' },
+  navigator: { userAgent: 'node' },
+  matchMedia: () => ({ matches: false, addEventListener() {} }),
+  URLSearchParams, encodeURIComponent, decodeURIComponent, isNaN, parseInt, parseFloat,
+  addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
+};
+sandbox.window = sandbox;
+sandbox.globalThis = sandbox;
+
+const FULL = {
+  attack: {
+    unit: { id: 1200003950, name: '神高达 (EX)' },
+    range: { max: 5, max_nomap: 5, weapon_count: 5, map_count: 0 },
+    best_weapon: {
+      id: 1967, name: '洗牌同盟拳 EX', damage: 157214, attrs: [1, 3],
+      dep_label: '射击、格斗、特殊', range_min: 1, range_max: 3, map: false,
+    },
+  },
+  support: {
+    units: [{ id: 1001000400, name: '核心战机' }],
+    effects: [
+      { label: '物理损伤提升（1回合）LV4', kind: 'dmg_up', types: [1], value: 25,
+        weapon: '空对空导弹 SSP', range_min: 2, range_max: 5 },
+      { label: '防御力减少 LV3', kind: 'def_down', types: [], value: 15,
+        weapon: '机关枪', range_min: 1, range_max: 3 },
+    ],
+    dmg_up_types: [1],
+  },
+  defense: {
+    unit: { id: 1370005950, name: '00强化模组 (最后决战式样) (EX)' },
+    pilot: { id: 1370003701, name: '刹那·F·清英' },
+    movement: { base: 5, max: 5, star: 3 },
+    mitigations: [
+      { label: 'GN力场 LV4', value: 20, attrs: [1, 2], desc: '发起战斗的敌方使用物理、光束武装攻击时，自身受到的损伤减轻20%' },
+    ],
+    thresholds: [{ label: 'GN力场 LV4', value: 4500, desc: '自身受到的损伤4500以下时，损伤无效' }],
+    boosts: [],
+    unit_skill: { name: '单位技能【00强化模组】', desc: '自身攻击力提升25%（1回合） 自身防御力提升15%（1回合） （每场战斗1次）' },
+    pilot_synergy: [
+      { source: '能力', ability: 'EX角色能力', unit_ok: true, status: 'potential',
+        desc: '搭乘单位为“00强化模组 (最后决战式样) (EX)”且自身HP为0%时，自身HP恢复7%(1次)' },
+      { source: '能力', ability: '真正的变革者 LV5', unit_ok: true, status: 'counted',
+        desc: '搭乘单位含有高达、机动战士高达00，自身MP提升5' },
+      { source: '能力', ability: '支援防御 LV5', unit_ok: false, status: 'impossible',
+        desc: '搭乘单位含有类型且自身进行支援防御时，自身防御力提升25%' },
+    ],
+  },
+  match: {
+    attack_attrs: [1, 3],
+    covered: [{ type: 1, by: '物理损伤提升（1回合）LV4' }],
+    missed: [{ type: 3 }],
+    hit_count: 1,
+    total: 2,
+  },
+  missing: { attack: false, support: false, defense: false },
+};
+
+const MISSING = {
+  attack: null, support: null, defense: null, match: null,
+  missing: { attack: true, support: true, defense: true },
+};
+
+const TESTS = `
+__full = renderTeamStatus({ insights: ${JSON.stringify(FULL)} });
+__missing = renderTeamStatus({ insights: ${JSON.stringify(MISSING)} });
+__legacy = renderTeamStatus({ pairs: [] });
+__noRes = renderTeamStatus(null);
+`;
+
+const ctx = vm.createContext(sandbox);
+vm.runInContext(src + '\n;' + TESTS, ctx, { filename: 'app.js+status-test' });
+
+const full = ctx.__full || '';
+const missing = ctx.__missing || '';
+const checks = [
+  ['有 insights 时渲染队伍状态', full.includes('team-status') && full.includes('队伍状态')],
+  ['攻击段渲染 + 类型色类', full.includes('ts-sec ts-atk') && full.includes('攻击型 · 神高达 (EX)')],
+  ['攻击段显示排除 MAP 的射程', full.includes('最大射程') && full.includes('>5<')],
+  ['攻击段显示最高伤害武器与数值', full.includes('洗牌同盟拳 EX') && full.includes('157,214')],
+  ['攻击段伤害类型胶囊 物理/特殊', /ts-chip[^>]*>物理</.test(full) && /ts-chip[^>]*>特殊</.test(full)],
+  ['支援段渲染特效与射程', full.includes('ts-sec ts-sup') && full.includes('物理损伤提升（1回合）LV4') && full.includes('射程 2-5')],
+  ['支援段识别防御力减少', full.includes('ts-chip down') && full.includes('防御力减少 LV3')],
+  ['匹配结果含命中数与胶囊', full.includes('ts-match') && full.includes('1/2') && full.includes('命中 物理')],
+  ['匹配结果含未命中胶囊', full.includes('未命中 特殊')],
+  ['防御段渲染移动力', full.includes('ts-sec ts-tank') && full.includes('移动力')],
+  ['防御段减伤含属性胶囊', full.includes('GN力场 LV4') && full.includes('减伤') && full.includes('>20%<')],
+  ['防御段阈值无效', full.includes('时无效') && full.includes('4,500')],
+  ['防御段单位技能', full.includes('单位技能') && full.includes('攻击力提升25%')],
+  ['驾驶员协同：时机待定标记', full.includes('触发时机待定') && full.includes('HP恢复7%')],
+  ['驾驶员协同：恒生效条目', full.includes('ts-syn counted') && full.includes('MP提升5')],
+  ['驾驶员协同：本机不满足', full.includes('（本机不满足）') && full.includes('ts-syn impossible')],
+  ['缺少 role 时提示缺少', missing.includes('本队缺少攻击型机体')
+    && missing.includes('本队缺少支援型机体') && missing.includes('本队缺少耐久型机体')],
+  ['无 insights 时不渲染（向后兼容）', ctx.__legacy === '' && ctx.__noRes === ''],
+];
+let bad = 0;
+for (const [name, ok] of checks) {
+  console.log((ok ? 'PASS  ' : 'FAIL  ') + name);
+  if (!ok) bad++;
+}
+console.log('---');
+console.log('full html length:', full.length);
+if (bad) {
+  console.log('--- full html ---');
+  console.log(full.slice(0, 2400));
+}
+console.log(bad ? 'STATUS_SMOKE_FAILED=' + bad : 'STATUS_SMOKE_OK');
+process.exit(bad ? 1 : 0);
