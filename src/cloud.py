@@ -88,12 +88,20 @@ def _split_top(s: str) -> list[str]:
 
 
 def _quote_ids(ids: str) -> str:
-    return ", ".join(f'"{x.strip()}"' for x in ids.split(",") if x.strip())
+    """把逗号分隔的标识符列表规范为 PostgreSQL 双引号形式（幂等：先去掉已有引号）。"""
+    out = []
+    for x in ids.split(","):
+        x = x.strip().strip('"').strip("`").strip()
+        if x:
+            out.append(f'"{x}"')
+    return ", ".join(out)
 
 
 def _translate_ddl(sqlite_sql: str) -> str:
+    # 兼容：① 旧库 sqlite_master 中带双引号的表名/列名；② 可选 IF NOT EXISTS
     m = re.match(
-        r"CREATE\s+TABLE\s+(\w+)\s*\((.*)\)\s*$", sqlite_sql.strip(), re.S | re.I
+        r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?([\w]+)"?)\s*\((.*)\)\s*$',
+        sqlite_sql.strip(), re.S | re.I,
     )
     if not m:
         raise ValueError(f"无法解析建表语句: {sqlite_sql[:80]}")
@@ -109,7 +117,7 @@ def _translate_ddl(sqlite_sql: str) -> str:
             cols.append(f"UNIQUE ({_quote_ids(um.group(1))})")
         elif upper.startswith("FOREIGN KEY"):
             fm = re.match(
-                r"FOREIGN\s+KEY\s*\((.+)\)\s*REFERENCES\s+(\w+)\s*\((.+)\)",
+                r'FOREIGN\s+KEY\s*\((.+)\)\s*REFERENCES\s+(?:"?([\w]+)"?)\s*\((.+)\)',
                 chunk, re.S | re.I,
             )
             if not fm:
@@ -119,7 +127,8 @@ def _translate_ddl(sqlite_sql: str) -> str:
                 f'REFERENCES "{fm.group(2)}" ({_quote_ids(fm.group(3))})'
             )
         else:
-            cm = re.match(r"^([A-Za-z_][\w]*)\s+(\S+)\s*(.*)$", chunk, re.S)
+            # 列名允许可选双引号包裹（旧库 DDL 用 "col" 形式）
+            cm = re.match(r'^"?([A-Za-z_][\w]*)"?\s+(\S+)\s*(.*)$', chunk, re.S)
             if not cm:
                 raise ValueError(f"字段定义解析失败: {chunk}")
             cname, ctype, rest = cm.group(1), cm.group(2), cm.group(3).strip()
