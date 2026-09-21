@@ -178,12 +178,18 @@ gundam/
 
 ### 4.3 `src/fetch.py` — 全量抓取编排
 
-- 5 步抓取流程：系列与阵营 → 机体 → 驾驶员 → 支援角色 → 事件与关卡；
+- 4 步抓取流程：系列与阵营 → 机体 → 驾驶员 → 支援角色；**关卡敌人（stage）与事件（event）不再抓取**（见 4.3.1）；
+- `fetch_all(limit=None, refresh=False, on_progress=None)` / `build_db(on_progress=None)`：传入 `on_progress(phase_label, done, total)` 回调可上报进度（前端爬取进度条依赖此回调）；
 - `_fetch_many` 分批并发抓取（实际单线程），已存在则跳过（断点续传），`refresh=True` 时全量重抓；
 - 批次间长暂停（`BATCH_PAUSE`）让限流窗口计数回落；
-- `collect_stage_ids` 从系列 / 事件数据汇总所有需抓取的关卡 ID；
 - `write_manifest` 生成 `manifest.json` 记录抓取时间、各类计数与失败项；
 - 限流终止时保留已完成部分，下次运行自动续传。
+
+#### 4.3.1 爬取范围裁剪（2026-09-21 起）
+- 「爬取数据」按钮仅重建 机体 / 驾驶员 / 支援角色 三类；其技能/能力/效果为子表，随主表一并入库，无需单独爬取。
+- `fetch_all` 已移除 `fetch_events` / `fetch_stages` 调用，也不再调用 `collect_stage_ids`；
+- `build_db` 已移除 `ingest_stages(conn)` / `ingest_events(conn)` 调用（这两函数仍保留在 `src/db.py` 中，仅供历史库 / 手动脚本使用，常规爬取不再触发）；
+- 既有 `stage` / `story_event` / `tower_event` 等表数据仍保留在已构建的库中，stages 标签页可继续浏览，但重新爬取后不会被刷新。
 
 ### 4.4 `src/db.py` — 原始 JSON → SQLite 入库
 
@@ -371,13 +377,15 @@ baseDamage         = roundUp((四者之和) × 武器威力)
 #### `SCHEMA`
 完整的 SQLite 建表语句字符串，包含 `PRAGMA foreign_keys = ON` 与所有表/索引定义。
 
-#### `build_db() -> None`
+#### `build_db(on_progress=None) -> None`
 主入库流程：
 1. 连接 SQLite，开启 WAL 模式与外键；
 2. 执行 `SCHEMA`；
 3. 构建 `tag_id → tag_name` 映射（`_build_tag_map`）；
-4. 依次调用 `ingest_series_faction` / `ingest_units` / `ingest_characters` / `ingest_supporters` / `ingest_stages` / `ingest_events`；
-5. 写入 `meta` 表（`built_at` / `star_multipliers` / `star_labels` / `star_formula`）。
+4. 依次调用 `ingest_series_faction` / `ingest_units` / `ingest_characters` / `ingest_supporters`（**不再调用 `ingest_stages` / `ingest_events`**，见 4.3.1）；
+5. 写入 `meta` 表（`built_at` / `star_multipliers` / `star_labels` / `star_formula`）；
+6. 末尾自动调用 `pairing.build_unit_pilot()` 生成机体→原作驾驶员映射表；
+- `on_progress(phase_label, done, total)`：可选回调，用于上报构建进度（5 步：系列与阵营 0/1、机体 2、驾驶员 3、支援角色 4、收尾 5）。
 
 #### `ingest_units(conn, tag_map)`
 解析每个机体 JSON：
@@ -405,14 +413,15 @@ GET 站点 JSON API 并解析为 Python 对象（带节流、限流冷却与重�
 
 ### 5.5 `src/fetch.py`
 
-#### `fetch_all(limit, refresh) -> dict[str, list]`
-全量抓取编排，返回各类失败项字典。5 步流程：系列与阵营 → 机体 → 驾驶员 → 支援角色 → 事件与关卡。
+#### `fetch_all(limit=None, refresh=False, on_progress=None) -> dict[str, list]`
+全量抓取编排，返回各类失败项字典。4 步流程：系列与阵营 → 机体 → 驾驶员 → 支援角色（**不再抓取事件与关卡**，见 4.3.1）。
+- `on_progress(phase_label, done, total)`：可选回调，用于上报抓取进度（phase_label 为「系列与阵营/机体/驾驶员/支援角色」）。
 
-#### `_fetch_many(kind, ids, path_prefix, refresh) -> list[tuple[int, str]]`
-分批并发抓取某类详情，已存在则跳过；批次间长暂停；限流时整体终止。
+#### `_fetch_many(kind, ids, path_prefix, refresh=False, on_progress=None) -> list[tuple[int, str]]`
+分批并发抓取某类详情，已存在则跳过；批次间长暂停；限流时整体终止；`on_progress` 在批内每 50 条及批末上报。
 
-#### `collect_stage_ids() -> list[int]`
-从系列 / 事件数据中汇总所有需要抓取详情的关卡 ID。
+#### `collect_stage_ids() -> list[int]`（已弃用）
+从系列 / 事件数据中汇总所有需要抓取详情的关卡 ID。**常规爬取流程已不再调用**（关卡敌人与事件自 2026-09-21 起不再抓取），函数保留仅供历史脚本参考。
 
 ### 5.6 `src/labels.py`
 
