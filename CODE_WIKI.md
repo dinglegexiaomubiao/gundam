@@ -648,11 +648,11 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 #### 列表查询
 - `GET /api/units?q=&rarity=&acq=&series=&type=&tags=&tag_mode=&match=&wfx=&wfx_mode=&cond=&sort=&order=&limit=&offset=`
 - `GET /api/characters?q=&rarity=&series=&type=&tags=&tag_mode=&match=&skills=&skill_mode=&support=&sort=&order=&limit=&offset=`
-- `GET /api/supporters?q=&tags=&tag_mode=&skills=&skill_mode=&sort=&order=&limit=&offset=`
+- `GET /api/supporters?q=&tags=&tag_mode=&skills=&skill_mode=&sort=&order=&limit=&offset=&exclude=`
 - `GET /api/stages?q=&limit=&offset=`
 - `GET /api/search?type=&q=&kind=&sort=&order=&limit=&offset=` — 技能/能力/效果搜索
-- `GET /api/picker/units?q=&source=library|enemy&rarity=&type=&series=&tags=&sort=&order=&limit=&offset=` — 伤害计算器机体选择器
-- `GET /api/picker/pilots?...` — 驾驶员选择器
+- `GET /api/picker/units?q=&source=library|enemy&rarity=&type=&series=&tags=&sort=&order=&limit=&offset=&exclude=` — 伤害计算器/组队机体选择器（`exclude` 见 [10.9.1](#1091-选择器屏蔽参数-exclude)）
+- `GET /api/picker/pilots?...&exclude=` — 驾驶员选择器
 
 #### 详情
 - `GET /api/units/{id}` — 机体详情
@@ -819,6 +819,8 @@ python scripts/damage_demo.py
 ### 10.1 类型与稀有度
 
 - **类型**（`role`）：1=攻击型、2=耐久型、3=支援型（依据属性分布推断）。
+  UI 色彩身份：攻击型=红 `--type-atk`、耐久型=蓝 `--type-tank`、支援型=绿 `--type-sup`，
+  敌方/未知=灰 `--type-unknown`（详见 [10.9](#109-组队评分)「类型视觉语言」）。
 - **稀有度**（`rarity`）：5=UR、4=SSR、3=SR、2=R、1=N。
 - **等级上限**：UR=100、SSR=90、SR=80、R=70、N=60。
 - **多系列归属**：机体/驾驶员可同时属于多个系列（`series_set`），系列筛选按全量匹配。
@@ -915,6 +917,30 @@ python scripts/damage_demo.py
   `computeTeam(teamId)` 只用本队基准提交 `bench`/`custom_enemy`，切换某队基准只重算该队。
   顶部工具栏仅保留「＋ 新增队伍」；低防本 / 中防本 / 自定义按钮位于每张队伍卡片顶部的
   `.team-bench-bar` 一行内（自定义为该队专属输入）。
+- **跨队伍唯一**：机体 / 驾驶员 / 支援角色**在全体队伍之间不可重复**（同一支队伍内更不允许）。
+  前端 `usedIdsAcrossTeams(kind, skipTeamId, skipSlot)` 汇总所有队伍已占用的 id，
+  `openTeam*Picker()` 把该集合通过 `opts.exclude` 交给选择器、并用 `opts.validate` 二次拦截
+  （`pickerBlocked()`）。`skipSlot` 让「当前正在编辑的槽位」自身不计入排除集，
+  因此重新打开选择器时自己的当前选择仍然可见；支援角色则跳过整支当前队伍。
+  选择器顶部会提示「已自动屏蔽 N 个已被占用的…」。
+  机体选择时的**原作驾驶员自动填入**同样会先检查冲突，已被占用则不自动填入。
+  历史数据里已存在的跨队伍重复由 `collectTeamConflicts()` 检出，在 `#team-conflict` 横幅中列出队号。
+- **类型视觉语言**：机体 / 驾驶员的 `role`（1 攻击型 / 2 耐久型 / 3 支援型）在 UI 上以
+  统一色彩身份表达——攻击型红 `--type-atk`、耐久型蓝 `--type-tank`、支援型绿 `--type-sup`
+  （另有未知/敌方 `--type-unknown`）。卡片用左侧色条（`.team-card[data-role]::before`）
+  + 顶部色晕 + `roleChip()` 胶囊（含「攻/耐/援」字形）三重表达；选择器列表行同样带左侧色条
+  （`.picker-row[data-role]`）；组队页工具栏提供图例 `.team-legend`。徽标 `.badge.role.r-*`
+  已对齐到同一色系，正文对比度均 ≥ 4.5:1（WCAG AA）。
+
+### 10.9.1 选择器屏蔽参数 `exclude`
+
+组队页依赖 `exclude` 让选择器跳过已被占用的条目，避免「先选再弹窗报错」的糟糕体验。
+
+- `GET /api/picker/units|pilots?...&exclude=1,2,3`（`api_picker(..., exclude="")`）
+- `GET /api/supporters?...&exclude=1,2,3`（`api_supporters(..., exclude="")`）
+- 语义：`exclude` 为逗号分隔 id，非数字项忽略（`_exclude_ids()`），
+  在 WHERE 中追加 `NOT IN`（`_not_in_clause()`），因此 `total` 与分页同步收缩——
+  不会出现「某页被过滤成空」的错位。机体库与关卡敌人（`source=enemy`）两条来源都支持。
 
 ### 10.10 SSP 形态
 

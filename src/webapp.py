@@ -1528,28 +1528,52 @@ PICKER_SORT_KEYS = {
 }
 
 
+def _exclude_ids(exclude: str) -> list[int]:
+    """解析逗号分隔的排除 id 列表（组队页跨队伍去重用）。"""
+    out: list[int] = []
+    for part in (exclude or "").split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.append(int(part))
+    return out
+
+
+def _not_in_clause(col: str, ids: list[int]) -> str:
+    return f"{col} NOT IN (" + ",".join("?" for _ in ids) + ")"
+
+
 def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                series: str, tags: str, tag_mode: str, sort: str, order: str,
                limit: int, offset: int,
                acq: str = "", wfx: str = "", wfx_mode: str = "any",
                skills: str = "", skill_mode: str = "any",
-               support: str = "") -> dict:
+               support: str = "", exclude: str = "") -> dict:
     """伤害计算器的机体/驾驶员选择器：机体库 或 关卡敌人。
 
     支持筛选：稀有度、类型、系列、标签（多标签 tag_mode=any|all）、
     机体获取途径 acq、武器特效 wfx（仅机体）、
     驾驶员技能 skills（skill_mode）、支援次数 support（仅驾驶员）。
+    exclude：逗号分隔的 id，用于排除已被其它队伍占用的机体 / 驾驶员。
     """
     like = f"%{_like_escape(q)}%" if q else "%"
+    ex_ids = _exclude_ids(exclude)
     conn = _conn()
     items: list[dict] = []
     total = 0
     if kind == "units":
         if source == "enemy":
+            ex_where, ex_args = ("", [])
+            if ex_ids:
+                ex_where = " AND " + _not_in_clause("unit_id", ex_ids)
+                ex_args = list(ex_ids)
             total = conn.execute(
                 "SELECT COUNT(DISTINCT unit_id) FROM stage_map_npc "
-                "WHERE unit_name LIKE ? ESCAPE '\\'", (like,)
+                "WHERE unit_name LIKE ? ESCAPE '\\'" + ex_where, (like, *ex_args)
             ).fetchone()[0]
+            ex_where_n, ex_args_n = ("", [])
+            if ex_ids:
+                ex_where_n = " AND " + _not_in_clause("n.unit_id", ex_ids)
+                ex_args_n = list(ex_ids)
             items = _all(
                 conn,
                 f"""SELECT n.unit_id AS id, n.unit_name AS name, n.level,
@@ -1558,9 +1582,9 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                     JOIN (SELECT unit_id, MAX(level) AS ml FROM stage_map_npc
                           GROUP BY unit_id) m
                       ON n.unit_id = m.unit_id AND n.level = m.ml
-                    WHERE n.unit_name LIKE ? ESCAPE '\\'
+                    WHERE n.unit_name LIKE ? ESCAPE '\\'{ex_where_n}
                     ORDER BY n.unit_name""",
-                (like,),
+                (like, *ex_args_n),
             )
             for r in items:
                 r["source"] = "enemy"
@@ -1596,6 +1620,9 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
             if preds:
                 where.append(" AND ".join(preds))
                 args += f_args
+            if ex_ids:
+                where.append(_not_in_clause("u.id", ex_ids))
+                args += ex_ids
             w = "WHERE " + " AND ".join(where)
             total = conn.execute(f"SELECT COUNT(*) FROM unit u {w}", args).fetchone()[0]
             items = _all(
@@ -1626,11 +1653,19 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                     r[f"{k}_bonus"] = b
     elif kind == "pilots":
         if source == "enemy":
+            ex_where, ex_args = ("", [])
+            if ex_ids:
+                ex_where = " AND " + _not_in_clause("character_id", ex_ids)
+                ex_args = list(ex_ids)
             total = conn.execute(
                 "SELECT COUNT(*) FROM (SELECT 1 FROM stage_map_npc_character "
-                "WHERE IFNULL(character_name,'') LIKE ? ESCAPE '\\' "
-                "GROUP BY character_id, IFNULL(character_name,''))", (like,)
+                "WHERE IFNULL(character_name,'') LIKE ? ESCAPE '\\'" + ex_where +
+                " GROUP BY character_id, IFNULL(character_name,''))", (like, *ex_args)
             ).fetchone()[0]
+            ex_where_c, ex_args_c = ("", [])
+            if ex_ids:
+                ex_where_c = " AND " + _not_in_clause("c.character_id", ex_ids)
+                ex_args_c = list(ex_ids)
             items = _all(
                 conn,
                 f"""SELECT c.character_id AS id, c.character_name AS name, c.level,
@@ -1642,9 +1677,9 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                       ON c.character_id = m.character_id
                      AND IFNULL(c.character_name,'') = IFNULL(m.character_name,'')
                      AND c.level = m.ml
-                    WHERE IFNULL(c.character_name,'') LIKE ? ESCAPE '\\'
+                    WHERE IFNULL(c.character_name,'') LIKE ? ESCAPE '\\'{ex_where_c}
                     ORDER BY c.character_name""",
-                (like,),
+                (like, *ex_args_c),
             )
             for r in items:
                 r["source"] = "enemy"
@@ -1667,6 +1702,9 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
             if skill_sql:
                 where.append(skill_sql)
                 args += skill_args
+            if ex_ids:
+                where.append(_not_in_clause("c.id", ex_ids))
+                args += ex_ids
             w = "WHERE " + " AND ".join(where)
             total = conn.execute(f"SELECT COUNT(*) FROM character c {w}", args).fetchone()[0]
             items = _all(
@@ -3250,7 +3288,7 @@ SUPPORTER_SORT_KEYS = {
 
 def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: str,
                    sort: str, order: str, limit: int, offset: int,
-                   affected_tags: str = "") -> dict:
+                   affected_tags: str = "", exclude: str = "") -> dict:
     conn = _conn()
     tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
     series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
@@ -3258,6 +3296,10 @@ def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: st
     if q:
         where.append("(s.name LIKE ? OR s.tags LIKE ?)")
         args += [f"%{q}%", f"%{q}%"]
+    ex_ids = _exclude_ids(exclude)
+    if ex_ids:
+        where.append(_not_in_clause("s.id", ex_ids))
+        args += ex_ids
     tag_sql, tag_args = _tag_where("s", tags, tag_mode)
     if tag_sql:
         where.append(tag_sql)
@@ -4412,7 +4454,8 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("tag_mode", ["any"])[0],
                 q.get("skills", [""])[0], q.get("skill_mode", ["any"])[0],
                 q.get("sort", [""])[0], q.get("order", ["desc"])[0],
-                limit, offset, q.get("affected_tags", [""])[0]))
+                limit, offset, q.get("affected_tags", [""])[0],
+                q.get("exclude", [""])[0]))
         if path == "/api/search":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)
@@ -4435,7 +4478,8 @@ class Handler(BaseHTTPRequestHandler):
                 wfx_mode=q.get("wfx_mode", ["any"])[0],
                 skills=q.get("skills", [""])[0],
                 skill_mode=q.get("skill_mode", ["any"])[0],
-                support=q.get("support", [""])[0]))
+                support=q.get("support", [""])[0],
+                exclude=q.get("exclude", [""])[0]))
         if path == "/api/stages":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)

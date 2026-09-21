@@ -44,6 +44,16 @@ python scripts/pipeline.py serve --port 8765   # 启动本地 Web 查看器
 
 定期维护流程见 [MAINTENANCE.md](MAINTENANCE.md)。
 
+### 测试
+
+```powershell
+python -m unittest discover -s tests -t . -p "test_*.py"   # 后端/数据层单测
+node tests/js/team_render_smoke.js                          # 组队页渲染冒烟（无需浏览器）
+```
+
+`tests/js/team_render_smoke.js` 用 DOM 桩在 Node 里真跑一遍 `web/app.js`，
+校验组队页渲染、跨队伍去重与类型色标，可在没有浏览器的环境下捕获前端运行时错误。
+
 启动后浏览器打开 <http://127.0.0.1:8765>，可浏览机体 / 驾驶员 / 支援角色 / 关卡敌人，
 并使用伤害计算器（公式来自 formulas.docx）。
 

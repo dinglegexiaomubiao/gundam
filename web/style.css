@@ -44,9 +44,19 @@
   --rarity-3: #6bb6ff;              /* SR 蓝 */
   --rarity-2: #b2a6ff;              /* R 紫 */
   --rarity-1: #a7c0cd;              /* N 灰蓝 */
-  --role-1: rgba(230, 69, 60, .18); /* 攻击型 */
-  --role-2: rgba(77, 182, 172, .18);/* 耐久型 */
-  --role-3: rgba(245, 185, 60, .18);/* 支援型 */
+  /* 类型色系统（攻击型 / 耐久型 / 支援型）—— 组队卡片、选择器、徽标统一使用 */
+  --type-atk: #ff7a6e;                 /* 攻击型：进攻红 */
+  --type-tank: #5aa9ff;                /* 耐久型：稳重蓝 */
+  --type-sup: #43d29a;                 /* 支援型：辅助绿 */
+  --type-unknown: #8593a6;             /* 未知 / 敌方单位 */
+  --type-atk-soft: rgba(255, 122, 110, .14);
+  --type-tank-soft: rgba(90, 169, 255, .14);
+  --type-sup-soft: rgba(67, 210, 154, .14);
+  --type-unknown-soft: rgba(133, 147, 166, .12);
+  /* 旧别名（原为未启用变量，此处对齐到同一色系，保持向后兼容） */
+  --role-1: var(--type-atk-soft);
+  --role-2: var(--type-tank-soft);
+  --role-3: var(--type-sup-soft);
 
   /* ===== P1-2 补全：Type Scale 排版系统（Material 3 风格） ===== */
   --type-display-large:  clamp(36px, 4.2vw, 52px) / 1.12;
@@ -197,10 +207,11 @@ button.primary:hover, .toolbar button:hover { background: #f05047; }
 .badge.r4 { background: #6b4b0f; color: #ffe9b8; }
 .badge.r3 { background: #33445a; color: #cfe3ff; }
 .badge.role { background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
-.badge.role.r-1 { background: #5a1f1c; color: #ffb4ae; border-color: var(--accent); }
-.badge.role.r-2 { background: #17324d; color: #a8d4ff; border-color: #2b6cb0; }
-.badge.role.r-3 { background: #1d3d30; color: #9fe8c8; border-color: #2f9e6e; }
+.badge.role.r-1 { background: #4a2320; color: #ffb0a6; border-color: rgba(255, 122, 110, .55); }
+.badge.role.r-2 { background: #16304a; color: #a6d0ff; border-color: rgba(90, 169, 255, .55); }
+.badge.role.r-3 { background: #163a2c; color: #93e8c3; border-color: rgba(67, 210, 154, .55); }
 .badge.lv { background: #3a2c14; color: var(--accent2); border: 1px solid #7a5c1f; }
+.badge.ultimate { background: #3a2c14; color: var(--accent2); border: 1px solid #7a5c1f; }
 .pager { display: flex; gap: 10px; justify-content: center; align-items: center; margin-top: 14px; color: var(--muted); font-size: 13px; }
 .pager button { padding: 5px 12px; }
 .num { font-variant-numeric: tabular-nums; color: var(--muted); }
@@ -2155,6 +2166,75 @@ nav button.active::after {
 .team-applied {
   position: absolute; top: 6px; right: 8px; color: var(--accent2);
   font-size: 12px; font-weight: 700;
+}
+
+/* ---------- 机体 / 驾驶员「类型」视觉语言 ----------
+   三型各有一枚色彩身份：攻击型=红、耐久型=蓝、支援型=绿。
+   卡片用「左侧色条 + 顶部色晕」表达，选择器列表用色条，徽标同色系。 */
+.team-card[data-role]::before {
+  content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--role-c, transparent);
+}
+.team-card[data-role="1"] { --role-c: var(--type-atk); --role-bg: var(--type-atk-soft); }
+.team-card[data-role="2"] { --role-c: var(--type-tank); --role-bg: var(--type-tank-soft); }
+.team-card[data-role="3"] { --role-c: var(--type-sup); --role-bg: var(--type-sup-soft); }
+.team-card[data-role="0"] { --role-c: var(--type-unknown); --role-bg: var(--type-unknown-soft); }
+.team-unit-card[data-role], .team-pilot-card[data-role] {
+  background: linear-gradient(180deg, var(--role-bg), transparent 52%), var(--panel2);
+  padding-left: 13px;
+}
+
+.team-card-type { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; flex-wrap: wrap; }
+.type-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px 2px 2px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; line-height: 1.2; white-space: nowrap;
+  color: var(--role-c, var(--muted));
+  background: var(--role-bg, rgba(255, 255, 255, .04));
+  border: 1px solid rgba(255, 255, 255, .07);
+}
+.type-chip i {
+  font-style: normal; font-weight: 700; font-size: 10px;
+  width: 15px; height: 15px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--role-c, var(--type-unknown)); color: #0b0f14;
+}
+.type-chip.t-atk { --role-c: var(--type-atk); --role-bg: var(--type-atk-soft); }
+.type-chip.t-tank { --role-c: var(--type-tank); --role-bg: var(--type-tank-soft); }
+.type-chip.t-sup { --role-c: var(--type-sup); --role-bg: var(--type-sup-soft); }
+.type-chip.t-unknown { --role-c: var(--type-unknown); --role-bg: var(--type-unknown-soft); }
+
+/* 组队页类型图例 */
+.team-legend { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.team-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.team-legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+.team-legend .lg-1 { background: var(--type-atk); }
+.team-legend .lg-2 { background: var(--type-tank); }
+.team-legend .lg-3 { background: var(--type-sup); }
+
+/* 历史数据中的跨队伍重复提示 */
+.team-conflict {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: 10px;
+  background: rgba(245, 185, 60, .10);
+  border: 1px solid rgba(245, 185, 60, .35);
+  color: #ffe0a3; font-size: 12px; line-height: 1.65;
+}
+.team-conflict b { color: var(--accent2); }
+.team-conflict .muted { color: var(--muted); }
+
+/* 选择器：行内类型色条 + 屏蔽提示 */
+.picker-list .picker-row[data-role] { position: relative; padding-left: 16px; }
+.picker-list .picker-row[data-role]::before {
+  content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--role-c, transparent);
+}
+.picker-list .picker-row[data-role="1"] { --role-c: var(--type-atk); }
+.picker-list .picker-row[data-role="2"] { --role-c: var(--type-tank); }
+.picker-list .picker-row[data-role="3"] { --role-c: var(--type-sup); }
+.picker-list .picker-row[data-role="0"] { --role-c: var(--type-unknown); }
+.picker-exclude-hint {
+  padding: 8px 12px; font-size: 12px; color: var(--accent2);
+  background: rgba(245, 185, 60, .08); border-bottom: 1px solid var(--line);
 }
 
 /* 原作关联跳转 */

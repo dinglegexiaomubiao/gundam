@@ -185,6 +185,15 @@ function roleBadge(role, label) {
   return `<span class="badge role r-${role ?? 0}">${esc(label ?? "—")}</span>`;
 }
 
+/* 类型色标：攻击型=攻/红、耐久型=耐/蓝、支援型=援/绿（与 style.css 的 --type-* 对应） */
+const ROLE_MARK = { 1: "攻", 2: "耐", 3: "援" };
+function roleChip(role, label) {
+  const r = Number(role) || 0;
+  const cls = r === 1 ? "t-atk" : r === 2 ? "t-tank" : r === 3 ? "t-sup" : "t-unknown";
+  const html = ROLE_MARK[r] ? `<i>${ROLE_MARK[r]}</i>` : "";
+  return `<span class="type-chip ${cls}" data-role="${r}" title="类型：${esc(label ?? "—")}">${html}${esc(label ?? "—")}</span>`;
+}
+
 function lvBadge(level) {
   return level ? `<span class="badge lv">LV${level}</span>` : "";
 }
@@ -3077,7 +3086,7 @@ const calcSel = {
   abInit: { atkU: false, atkP: false, defU: false, defP: false },
 };
 const calcSeq = { n: 0 };
-const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", tag_mode: "any", acq: "", wfx: "", wfx_mode: "any", skills: "", skill_mode: "any", support: "", affectedTags: "", sort: "rarity", order: "desc", page: 0, size: 20, onPick: null };
+const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", tag_mode: "any", acq: "", wfx: "", wfx_mode: "any", skills: "", skill_mode: "any", support: "", affectedTags: "", sort: "rarity", order: "desc", page: 0, size: 20, onPick: null, exclude: "", validate: null };
 
 async function initPickerTagBox(kind) {
   if (kind !== "unit" && kind !== "pilot" && kind !== "supporter") return;
@@ -3121,6 +3130,10 @@ async function openPicker(kind, onPick, side, weaponUnit, opts) {
     skills: "", skill_mode: "any", support: "", affectedTags: "",
     sort: "rarity", order: "desc", page: 0, onPick,
     weaponUnit: weaponUnit || null,
+    // exclude: 逗号分隔 id——组队页用来屏蔽已被占用的机体/驾驶员/支援角色
+    exclude: opts.exclude && opts.exclude.length ? opts.exclude.join(",") : "",
+    // validate: (item) => boolean，返回 false 时拒绝该次选择（保留弹窗）
+    validate: opts.validate || null,
   });
   // 组队页：已选支援角色时，默认按该支援角色的词条（标签）过滤机体
   if (kind === "unit" && opts.defaultTags && opts.defaultTags.length) {
@@ -3286,6 +3299,7 @@ async function loadPicker(page = pickerState.page) {
   } else {
     params.set("source", s.source);
   }
+  if (s.exclude) params.set("exclude", s.exclude);
   if (s.kind !== "supporter" && s.source === "library") {
     params.set("rarity", s.rarity);
     params.set("type", s.type);
@@ -3338,7 +3352,7 @@ async function loadPicker(page = pickerState.page) {
     }
     const tags = (it.tags || []).slice(0, 3).join("、") || "—";
     const extra = (s.kind === "pilot" && it.support_label) ? ` · ${esc(it.support_label)}` : "";
-    return `<div class="picker-row picker-grid" data-i="${it.id}">
+    return `<div class="picker-row picker-grid" data-i="${it.id}" data-role="${Number(it.role) || 0}">
       <span class="name">${esc(it.name)}</span>
       ${it.rarity ? rarityBadge(it.rarity) : "<span>—</span>"}
       <span>${it.role_label ? roleBadge(it.role, it.role_label) : "—"}</span>
@@ -3355,7 +3369,17 @@ async function loadPicker(page = pickerState.page) {
       ].map(([k, label]) =>
         `<span><button class="sort-th picker-sort" data-sort="${k}">${label}${pickerState.sort === k ? (pickerState.order === "asc" ? " ▲" : " ▼") : ""}</button></span>`).join("") + '</div>'
     : "";
-  $("#picker-list").innerHTML = d.items.length ? head + body : '<div class="empty">无结果</div>';
+  const hiddenN = (s.exclude ? s.exclude.split(",").filter(Boolean).length : 0);
+  const hint = hiddenN
+    ? `<div class="picker-exclude-hint">已自动屏蔽 ${hiddenN} 个已被占用的${
+        s.kind === "unit" ? "机体" : s.kind === "pilot" ? "驾驶员" : "支援角色"
+      }（同一${
+        s.kind === "unit" ? "机体" : s.kind === "pilot" ? "驾驶员" : "支援角色"
+      }不能在不同队伍重复使用）</div>`
+    : "";
+  $("#picker-list").innerHTML = d.items.length
+    ? hint + head + body
+    : hint + '<div class="empty">无结果</div>';
   $("#picker-list").querySelectorAll(".picker-sort").forEach((b) =>
     b.addEventListener("click", () => {
       if (pickerState.sort === b.dataset.sort) {
@@ -3369,6 +3393,7 @@ async function loadPicker(page = pickerState.page) {
   $("#picker-list").querySelectorAll(".picker-row").forEach((r) =>
     r.addEventListener("click", () => {
       const it = d.items.find((x) => String(x.id) === r.dataset.i);
+      if (pickerState.validate && pickerState.validate(it) === false) return;
       if (pickerState.onPick) pickerState.onPick(it);
       $("#picker-modal").classList.add("hidden");
     }));
@@ -5300,12 +5325,14 @@ function renderTeam() {
   if (!list) return;
   if (!teamState.teams.length) {
     list.innerHTML = '<div class="empty">还没有队伍，点击上方「＋ 新增队伍」创建。</div>';
+    updateTeamConflictHint();
     return;
   }
-  list.innerHTML = teamState.teams.map((t) => renderTeamRow(t)).join("");
+  list.innerHTML = teamState.teams.map((t, i) => renderTeamRow(t, i)).join("");
+  updateTeamConflictHint();
 }
 
-function renderTeamRow(team) {
+function renderTeamRow(team, ti) {
   const res = teamResults[team.id];
   const sup = res ? res.supporter : null;
   const unitCards = team.slots.map((s, i) => renderUnitCard(team, s, i, res ? res.pairs[i] : null)).join("");
@@ -5314,7 +5341,7 @@ function renderTeamRow(team) {
   return `
     <div class="pair-panel team-row">
       <div class="team-row-head">
-        <span class="team-title">队伍</span>
+        <span class="team-title">队伍 ${ti + 1}</span>
         ${sup ? `<span class="muted">支援「${esc(sup.name)}」全能力 +${sup.leader_pct}% · 匹配机体 ${matched}/5</span>`
           : (team.supporter ? '<span class="muted">计算中…</span>' : '<span class="muted">未选择支援角色</span>')}
         <button class="cond-btn team-remove" data-team="${esc(team.id)}" title="删除本队">删除</button>
@@ -5383,9 +5410,10 @@ function renderUnitCard(team, s, i, pr) {
       ? `<div class="team-weapon">${esc(s.weapon.name)}${pr && pr.weapon && pr.weapon.damage != null ? ` · 伤害 ${fmtNum(pr.weapon.damage)}` : ""}</div>`
       : `<button class="team-weapon-btn" data-team="${esc(team.id)}" data-slot="${i}">选择武器</button>`;
     if (pr && pr.supporter_applied) badge = '<span class="team-applied" title="支援全能力生效">▲</span>';
-    return `<div class="team-card team-unit-card" data-team="${esc(team.id)}" data-slot="${i}" data-kind="unit">
+    return `<div class="team-card team-unit-card" data-team="${esc(team.id)}" data-slot="${i}" data-kind="unit" data-role="${Number(s.unit.role) || 0}">
       ${badge}
       <div class="team-card-name">${name}</div>
+      <div class="team-card-type">${roleChip(s.unit.role, s.unit.role_label)}${ultimate ? '<span class="badge ultimate" title="终极机体：强制按 0 星计算">终极</span>' : ""}</div>
       <div class="team-card-ctl"><label>星级 <select class="team-star" data-team="${esc(team.id)}" data-slot="${i}" ${ultimate ? "disabled" : ""}>${starOpts}</select></label></div>
       <div class="team-card-stats">${statsHtml}</div>
       ${weaponHtml}
@@ -5407,8 +5435,9 @@ function renderPilotCard(team, s, i, pr) {
     <div class="team-stat"><span>防御</span><b>${fmtNum(pr.pilot_stats.defense)}</b></div>
     <div class="team-stat"><span>反应</span><b>${fmtNum(pr.pilot_stats.reaction)}</b></div>
     <div class="team-stat"><span>觉醒</span><b>${fmtNum(pr.pilot_stats.awaken)}</b></div>` : '<div class="muted">计算中…</div>';
-  return `<div class="team-card team-pilot-card" data-team="${esc(team.id)}" data-slot="${i}" data-kind="pilot">
+  return `<div class="team-card team-pilot-card" data-team="${esc(team.id)}" data-slot="${i}" data-kind="pilot" data-role="${Number(s.pilot.role) || 0}">
     <div class="team-card-name">${rarityBadge(s.pilot.rarity)} ${esc(s.pilot.name)}</div>
+    <div class="team-card-type">${roleChip(s.pilot.role, s.pilot.role_label)}</div>
     <div class="team-card-stats">${statsHtml}</div></div>`;
 }
 
@@ -5476,6 +5505,73 @@ function onTeamListChange(e) {
   }
 }
 
+/* 跨队伍去重：收集所有队伍已占用的 机体 / 驾驶员 / 支援角色 id。
+   skipTeamId + skipSlot 用于「当前正在编辑的槽位」自身不计入，
+   这样打开选择器时自己当前的选择仍然可见，不会被自己屏蔽。 */
+function usedIdsAcrossTeams(kind, skipTeamId, skipSlot) {
+  const set = new Set();
+  teamState.teams.forEach((t) => {
+    const isSkipTeam = skipTeamId != null && t.id === skipTeamId;
+    if (kind === "supporter") {
+      if (!isSkipTeam && t.supporter) set.add(String(t.supporter.id));
+      return;
+    }
+    (t.slots || []).forEach((s, i) => {
+      if (isSkipTeam && skipSlot != null && i === skipSlot) return;
+      const v = kind === "unit" ? s.unit : s.pilot;
+      if (v) set.add(String(v.id));
+    });
+  });
+  return set;
+}
+
+const TEAM_KIND_LABEL = { unit: "机体", pilot: "驾驶员", supporter: "支援角色" };
+
+function pickerBlocked(kind, teamId, slot, item) {
+  if (!usedIdsAcrossTeams(kind, teamId, slot).has(String(item.id))) return false;
+  alert(`该${TEAM_KIND_LABEL[kind]}已被占用：同一${TEAM_KIND_LABEL[kind]}不能在不同队伍中重复使用`);
+  return true;
+}
+
+/* 已保存的数据里可能已经存在跨队伍重复，提示用户自行调整 */
+function collectTeamConflicts() {
+  const seen = { unit: new Map(), pilot: new Map(), supporter: new Map() };
+  const conflicts = [];
+  teamState.teams.forEach((t, ti) => {
+    const note = (kind, v) => {
+      const k = String(v.id);
+      if (seen[kind].has(k)) {
+        const first = seen[kind].get(k);
+        conflicts.push(`${TEAM_KIND_LABEL[kind]}「${v.name}」同时出现在第 ${first + 1} 支与第 ${ti + 1} 支队伍`);
+      } else {
+        seen[kind].set(k, ti);
+      }
+    };
+    if (t.supporter) note("supporter", t.supporter);
+    (t.slots || []).forEach((s) => {
+      if (s.unit) note("unit", s.unit);
+      if (s.pilot) note("pilot", s.pilot);
+    });
+  });
+  return conflicts;
+}
+
+function updateTeamConflictHint() {
+  const el = $("#team-conflict");
+  if (!el) return;
+  const conflicts = collectTeamConflicts();
+  if (!conflicts.length) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  el.classList.remove("hidden");
+  el.innerHTML = `<b>检测到 ${conflicts.length} 处跨队伍重复</b>（新选择已被限制，以下为历史数据）：<br>` +
+    conflicts.slice(0, 6).map((c) => esc(c)).join("<br>") +
+    (conflicts.length > 6 ? `<br>…另有 ${conflicts.length - 6} 处` : "") +
+    `<br><span class="muted">重新点击对应卡片选择一次即可修正。</span>`;
+}
+
 async function openTeamUnitPicker(team, slot) {
   // 队伍已选支援角色时，取其「词条」(标签) 作为机体选择器的默认过滤
   let defaultTags = [];
@@ -5493,31 +5589,34 @@ async function openTeamUnitPicker(team, slot) {
     } catch (_) {}
   }
   await openPicker("unit", async (u) => {
-    const dup = team.slots.some((s, i) => i !== slot && s.unit && String(s.unit.id) === String(u.id));
-    if (dup) { alert("该机体已在队伍中，不能重复选择"); return; }
     const ultimate = (u.tags || []).includes("终极");
     team.slots[slot].unit = { id: u.id, name: u.name, rarity: u.rarity, role: u.role, role_label: u.role_label, ultimate };
     team.slots[slot].weapon = null;
     if (ultimate) team.slots[slot].star = 0;
-    // 自动填原作驾驶员（可再手动改）
+    // 自动填原作驾驶员（可再手动改）；若该驾驶员已被其它队伍/槽位占用则不自动填入
     try {
       const c = await api(`/api/canonical?unit_id=${u.id}`);
-      if (c && c.pilot) {
+      if (c && c.pilot && !usedIdsAcrossTeams("pilot", team.id, slot).has(String(c.pilot.id))) {
         team.slots[slot].pilot = { id: c.pilot.id, name: c.pilot.name, rarity: c.pilot.rarity, role: c.pilot.role, role_label: c.pilot.role_label };
       }
     } catch (_) {}
     saveTeamState();
     computeTeam(team.id);
-  }, null, null, { defaultTags });
+  }, null, null, {
+    defaultTags,
+    exclude: [...usedIdsAcrossTeams("unit", team.id, slot)],
+    validate: (u) => !pickerBlocked("unit", team.id, slot, u),
+  });
 }
 
 async function openTeamPilotPicker(team, slot) {
   await openPicker("pilot", (p) => {
-    const dup = team.slots.some((s, i) => i !== slot && s.pilot && String(s.pilot.id) === String(p.id));
-    if (dup) { alert("该驾驶员已在队伍中，不能重复选择"); return; }
     team.slots[slot].pilot = { id: p.id, name: p.name, rarity: p.rarity, role: p.role, role_label: p.role_label };
     saveTeamState();
     computeTeam(team.id);
+  }, null, null, {
+    exclude: [...usedIdsAcrossTeams("pilot", team.id, slot)],
+    validate: (p) => !pickerBlocked("pilot", team.id, slot, p),
   });
 }
 
@@ -5526,6 +5625,9 @@ async function openTeamSupporterPicker(team) {
     team.supporter = { id: x.id, name: x.name, rarity: x.rarity };
     saveTeamState();
     computeTeam(team.id);
+  }, null, null, {
+    exclude: [...usedIdsAcrossTeams("supporter", team.id, null)],
+    validate: (x) => !pickerBlocked("supporter", team.id, null, x),
   });
 }
 
