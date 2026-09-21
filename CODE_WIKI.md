@@ -1043,7 +1043,9 @@ insights = {
 > **为什么把防御型也拉进来**：只看支援是否加成，只能回答"打得更痛吗"；
 > 把同一批伤害类型对到防御型的减伤上，才能回答"这类伤害我扛得住吗"。
 > 两者性质不同，所以**不混算**：支援覆盖度决定 `synergy.level`，
-> 防御覆盖度单独放在 `synergy.defense_detail`（如「防御型对 物理 有减伤，未覆盖 特殊」）。
+> 防御覆盖度单独放在 `synergy.defense_detail` + `synergy.defense_state`
+> （`full` / `partial` / `none` / `na`，如「防御型对 物理 有减伤，未覆盖 特殊」）。
+> **状态字段专供前端着色，前端不解析文案。**
 
 **防御型（`role=2`）**
 - `movement`：`unit.movement` / `max_movement` + 当前星级；
@@ -1084,7 +1086,8 @@ insights = {
 | `neutral` | 支援无增伤特效 | `支援型未提供「损伤提升」类特效；攻击型最高伤害武器「洗牌同盟拳 EX」为 物理、特殊，缺少 物理、特殊 损伤提升：0/2` |
 | `unknown` | 缺机体/数据 | 缺少攻击型或支援型机体，无法判定协同 |
 
-`synergy` = `{level, title, detail, defense_detail, baseline}`。
+`synergy` = `{level, title, detail, defense_detail, defense_state, baseline}`。
+**没覆盖全就算减分项**（`level` 非 `full`），前端据此着色。
 
 **队伍及格线（`baseline`）** — 阈值集中在 `src/pairing.py: TEAM_BASELINE`，改一处即全链路生效：
 
@@ -1123,8 +1126,24 @@ insights = {
 - `synergy` 与 `baseline` 在 `insights` 下各有一份（前端取 `insights.synergy.baseline`）。
 
 前端渲染见 `web/app.js` 的 `renderTeamStatus()`（`.team-status` / `.ts-*` 样式，
-复用 `--type-atk/tank/sup` 类型令牌）；匹配段逐项渲染「命中 ←来源」/「未命中 + 支援未提供 X 损伤提升」，
-底部渲染「整队协同」结论句与及格线 chips。
+复用 `--type-atk/tank/sup` 类型令牌）；匹配段逐类型双列渲染
+（`物理 │ 支援命中 ←特效名 │ 防御减伤 ←能力名`）；
+底部渲染「整队协同」块：结论句、防御覆盖句、及格线 chips、加分项 chips。
+
+**配色语义（`web/style.css`，用语义令牌而非硬编码色值）**：
+
+| 语义 | 令牌 | 用在 |
+|---|---|---|
+| 达标 / 命中 / 已满足 | `--success` / `--success-container` | `.ts-chip.ok`、`.ts-line.ok` |
+| **减分项**（未达标 / 未命中 / 未覆盖 / 缺特效） | `--error` / `--error-container` | `.ts-chip.bad`、`.ts-line.bad` |
+| 加分项（超出及格线、额外收益） | `--warning` / `--warning-container` | `.ts-chip.bonus`、`.ts-chip.bonusall` |
+| 无法判定 / 中性 | `--surface-variant` | `.ts-line.na`、`.ts-chip.mut` |
+
+> **减分项必须与及格线 chips、加分项 chips 一样有背景色填充**（用户明确要求，
+> 2026-09-21）。协同结论句与防御覆盖句统一用 `.ts-line` 系列（带底色、圆角、`✓`/`✗` 前缀），
+> 不再是裸文字。
+> 另注：`.ts-chip.down`（敌方「防御力减少」特效标记）与 `.ts-chip.bad`（减分项）
+> **曾共用一套琥珀色**，会让人把减分项误读成加分项，已拆成两套。
 
 ### 10.10 SSP 形态
 
