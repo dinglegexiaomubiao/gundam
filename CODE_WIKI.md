@@ -198,7 +198,15 @@ gundam/
 - 各 `ingest_*` 函数解析原始 JSON 并 `INSERT OR REPLACE` / `INSERT OR IGNORE`；
 - 解析能力（abilities）中的属性百分比加成，拆分为无条件加成（`stat_bonuses`）与条件加成（`conditional_bonuses`）；
 - 解析武器最高级数值（`parse_weapon_max_level`）与最高级特效；
-- 解析支援角色队长技条件（`parse_supporter_conditions`）。
+- 解析支援角色队长技条件（`parse_supporter_conditions`）；
+- **技能/能力槽位展开**（`_slot_variants`）：原始 JSON 每个槽位可能同时带主对象
+  （`skill`/`ability`）与 SP 对象（`skill_sp`/`ability_sp`）。id 相同视为同一实体的镜像
+  （只入一行），id 不同则是两个实体（都入库）；两者皆空时用槽位自带 id 或 `-sort` 兜底，
+  保证自然键永不为 NULL —— SQLite 的 UNIQUE / PRIMARY KEY **对 NULL 不生效**，
+  键为 NULL 会让 `INSERT OR IGNORE` 形同虚设、重复行不断累积（见 [11.6](#116-子表重复与-null-自然键)）;
+- 子表入库抽为 `ingest_character_children(conn, c)` + `_clear_character_children(conn, char_id)`，
+  供 `ingest_one_character` 复用，也便于对既有库做定向回填（见 `scripts/migrate_character_sp.py`）;
+- 连接统一走 `src/dbutil.py`：`connect_ro` / `connect_rw`（只读 URI / WAL + 外键 + busy_timeout）。
 
 ### 4.5 `src/labels.py` — 显示标签与数值解析辅助
 
@@ -215,12 +223,13 @@ gundam/
 - `TABLE_ORDER` 定义 21 张表的写入顺序（父表在前，外键依赖）；
 - `_translate_ddl` / `_translate_index` 把 SQLite DDL 翻译为 PostgreSQL DDL（类型映射、引号包裹）；
 - `upload_local_db_to_cloud` 把本地 SQLite 全量重建到云端（覆盖），逐表校验行数；
-- `restore_local_db_from_cloud` 从云端重建本地 SQLite，**带断点续传**（已恢复表不重复下载，失败表最多重试 3 轮），每张表由独立子进程拉取并带 180s 硬超时；
+- `restore_local_db_from_cloud` 从云端重建本地 SQLite，**带断点续传**（已恢复表不重复下载，失败表最多重试 3 轮），每张表由独立子进程拉取并带 180s 硬超时；落库走 `dbutil.swap_db_file()`（先 `wal_checkpoint(TRUNCATE)` → 清 `-wal`/`-shm` → 替换），避免 Windows 下文件被占用报 `WinError 5`；
 - `cloud_diff` 对比本地与云端各表行数、构建时间与本地完整性；
 - `unit_sync_diff` / `unit_sync_push` 单机体级别的差异对比与推送；
 - `direct_cloud_url` 把 Neon 池化地址转为直连地址（批量读写更快）；
 - `_friendly_cloud_error` 把常见云端连接错误转为可操作的中文提示；
-- 支持 `python -m src.cloud fetch-table <table> <outfile>` 子进程入口。
+- 支持 `python -m src.cloud fetch-table <table> <outfile>` 子进程入口；
+- 连接统一走 `dbutil.connect_ro` / `connect_rw`（原先的裸 `sqlite3.connect` 已全部替换）。
 
 ### 4.7 `src/verify.py` — 数量与抽样校验
 
@@ -232,8 +241,8 @@ gundam/
 
 ### 4.8 `src/maintain.py` — 定期维护
 
-- `backup_db` 快照当前数据库到 `data/backup/`，滚动保留最近 `KEEP_BACKUPS`（3）份；
-- `rollback` 用快照覆盖当前数据库（`update` 失败时调用）；
+- `backup_db` 快照当前数据库到 `data/backup/`，滚动保留最近 `KEEP_BACKUPS`（3）份；快照走 **SQLite 在线备份 API**（`dbutil.backup_db_file`），保证含已提交但尚未 checkpoint 的 WAL 内容（直接 `copy2` 主库会漏掉这部分，回滚时表现为「丢最近的编辑」）；
+- `rollback` 用快照覆盖当前数据库（`update` 失败时调用），走 `dbutil.swap_db_file` 安全换库；
 - `diff_report` 对比更新前后的数据库：各表行数增减、新增机体名单、机体/驾驶员行级变更；
 - `run_update` 一键更新：快照 → fetch → build → verify → 报告；**build 失败自动回滚**。
 
@@ -267,8 +276,9 @@ gundam/
 - 手动爬取任务（`_crawl_lock` / `_crawl_state`，仅由概览页「爬取数据」按钮触发，禁止自动爬取）；
 - 云端同步任务（`_sync_lock` / `_sync_state`，上传/下载方向）；
 - 机体编辑（`api_unit_edit`，校验 + 差异对比 + 写库 + `unit_edit_log`）；
-- 数据库导入（`/api/import`，流式写入临时文件 + 校验 + 替换）；
-- 数据库导出（`/api/export`，下载 `gundam.db`）。
+- 数据库导入（`/api/import`，流式写入临时文件 → 校验 → `dbutil.swap_db_file` 安全换库；被占用时返回「请先停掉其它 serve 进程」的可操作提示）；
+- 数据库导出（`/api/export`，**在线备份**生成临时快照后下载，含最新提交；旧实现直接下发主库文件会丢失未 checkpoint 的写入）；
+- 全部数据库连接收敛到 `_ro()` / `_rw()` 上下文管理器（`with _ro() as c:` 自动关闭），杜绝连接泄漏。
 
 ### 4.12 `scripts/` — 命令行入口
 
@@ -282,6 +292,7 @@ gundam/
 | [migrate_ssp_fields.py](file:///e:/lzf/1_study/gundam/scripts/migrate_ssp_fields.py) | 回填 unit 表 `ssp_*` 属性 + 补 `ssp_terrain` 列（见 10.10） |
 | [migrate_drop_stage_map.py](file:///e:/lzf/1_study/gundam/scripts/migrate_drop_stage_map.py) | 丢弃 `stage.map` 列并 VACUUM（幂等，198MB→23.5MB，见 6.4） |
 | [migrate_conditional_bonuses.py](file:///e:/lzf/1_study/gundam/scripts/migrate_conditional_bonuses.py) | 重算机体/驾驶员的 `conditional_bonuses` 派生列（见 10.11） |
+| [migrate_character_sp.py](file:///e:/lzf/1_study/gundam/scripts/migrate_character_sp.py) | 回填驾驶员的 SP 技能/能力（`skill_sp` / `ability_sp`）并重算派生列，含 `--dry-run`；执行前自动备份（见 10.4） |
 | [migrate_unit_pilot.py](file:///e:/lzf/1_study/gundam/scripts/migrate_unit_pilot.py) | 单独同步 `unit_pilot` 原作映射表到云端 / 拉回本地（默认上传，`--down` 反向） |
 | [build_unit_pilot.py](file:///e:/lzf/1_study/gundam/scripts/build_unit_pilot.py) | 机体 × 驾驶员组合数据构建 |
 
@@ -291,8 +302,24 @@ gundam/
 ### 4.13 `web/` — 前端单页应用
 
 - `index.html`：**10 个 Tab**（概览 / 机体 / 驾驶员 / 支援角色 / 关卡敌人 / 技能·能力·效果 / 伤害计算 / 配对 / **组队** / **原作映射**）；
-- `app.js`：原生 JavaScript，通过 `fetch` 调用后端 API，包含 `api(path)`、`loadSummary()`、`openSyncDiff(direction)` 等大量异步函数；
+- `app.js`：原生 JavaScript，通过 `fetch` 调用后端 API，包含 `api(path)`、`apiPost(path, body)`、`loadSummary()`、`openSyncDiff(direction)` 等大量异步函数；
 - `style.css`：样式表。
+
+### 4.14 `src/dbutil.py` — 数据库读写工具（连接 / 换库 / 快照）
+
+全项目数据库访问的唯一入口，解决三类系统性问题（详见 [11.6](#116-子表重复与-null-自然键)）：
+
+| 函数 | 作用 |
+|---|---|
+| `connect_ro(db_path, timeout=30, row_factory=Row)` | 只读连接：`file:...?mode=ro` URI **物理防写** + 统一 `busy_timeout`；`row_factory=None` 时返回元组（兼容 `verify.py` 的打印） |
+| `connect_rw(db_path, timeout=30)` | 读写连接：WAL + `foreign_keys=ON` + `busy_timeout` |
+| `swap_db_file(src, dst)` | 安全换库：`wal_checkpoint(TRUNCATE)` → 清 `-wal`/`-shm` → `os.replace`；`PermissionError` 转为「请先停掉其它 serve 进程」的中文提示 |
+| `backup_db_file(src, dst)` | 用 SQLite **在线备份 API**（`src.backup(dst)`）生成一致快照，含未 checkpoint 的 WAL 内容 |
+| `checkpoint_and_clear(db_path)` | 仅 checkpoint 并清理边车文件（换库前置步骤，可单独调用） |
+| `DEFAULT_TIMEOUT` | 默认 30 秒，`sqlite3.connect(timeout=)` 会映射为 `PRAGMA busy_timeout`（毫秒） |
+
+> 设计要点：`timeout` 不是「连接超时」，而是**锁等待时长**。爬取/云端同步是长事务写入，
+> 期间任何 `INSERT` 若无 busy_timeout 会立刻抛 `database is locked`。统一补 30s 后可自然等锁。
 
 ---
 
@@ -548,7 +575,11 @@ HTTP 请求处理器，实现：
 | `supporter_growth` | — | 支援角色成长表 |
 | `supporter_skill` | `supporter_id → supporter` | 支援角色技能（`leader` / `active`，含 `conditions`） |
 
-### 6.4 关卡与事件表
+### 6.4 关卡与事件表（已归档）
+
+> **自 2026-09-21 起，「爬取数据」不再抓取关卡敌人与事件**（见 [4.3.1](#431-爬取范围裁剪2026-09-21-起)），
+> 本组 7 张表为最后一次抓取的历史快照（合计约 2.7 万行），不再随爬取更新；前端关卡页与伤害计算
+> 的「关卡敌人」来源均已标注「已归档」。保留是为让历史数据仍可用，非活跃数据。
 
 | 表 | 主键 | 外键 | 说明 |
 |---|---|---|---|
@@ -592,6 +623,7 @@ HTTP 请求处理器，实现：
 
 ```
 config.py            （无依赖，被所有模块导入）
+dbutil.py            （无内部依赖，被所有需要连库的模块导入：连接 / 换库 / 快照）
    ↑
 api.py               （依赖 config）
    ↑
@@ -602,13 +634,13 @@ labels.py            （无内部依赖，纯解析）
 db.py                （依赖 config, labels）
    ↑
 verify.py            （依赖 config）
-maintain.py          （依赖 config, db, fetch, labels, verify）
+maintain.py          （依赖 config, db, dbutil, fetch, labels, verify）
 cloud.py             （依赖 config, db.SHEMA；延迟导入 psycopg）
 damage.py            （无内部依赖，纯计算）
    ↑
 pairing.py           （依赖 config, damage, labels）
    ↑
-webapp.py            （依赖 config, cloud, damage, pairing, db, fetch, labels）
+webapp.py            （依赖 config, cloud, damage, pairing, db, dbutil, fetch, labels）
    ↑
 scripts/pipeline.py  （依赖 src.* 多个模块）
 ```
@@ -680,7 +712,7 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 - `GET /api/unit-sync-diff?unit_id=` — 单机体云端差异
 
 #### 导出
-- `GET /api/export` — 下载 `gundam.db`
+- `GET /api/export` — 下载 `gundam.db`（服务端先做一次**在线备份**生成临时快照再下发，保证快照含最新提交；临时文件用后即删）
 
 ### 8.2 POST 接口
 
@@ -688,7 +720,9 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 - `POST /api/sync` — 启动云端同步（body: `{"direction": "upload|download"}`）
 - `POST /api/unit-edit?preview=0|1` — 机体编辑（`preview=1` 仅预览差异，`preview=0` 写库）
 - `POST /api/unit-sync` — 单机体推送到云端（body: `{"unit_id": ...}`）
-- `POST /api/import` — 导入数据库文件（流式上传，最大 512MB，校验后替换）
+- `POST /api/import` — 导入数据库文件（流式上传，最大 512MB，校验后经 `dbutil.swap_db_file` 安全换库）
+- `POST /api/refetch-unit-apply` — 把单机体「重新抓取」的结果覆盖到本地库（body：`{unit_id}`）。**写操作，故为 POST**；用 GET 调用会返回 405 并提示
+- `POST /api/refetch-char-apply` — 同上的驾驶员版（body：`{char_id}`）
 - `POST /api/team/save` — 保存/更新单支队伍（body: `{team_id, name, data:{supporter, breakStep, bench, customEnemy, slots:[{unit,star,weapon,pilot}×5]}}`），写本地库并自动单条上云（详见 [10.13](#1013-组队持久化与云端同步)）
 - `POST /api/team/delete` — 删除队伍（body: `{id}`），删本地库并同步删除云端行
 - `POST /api/team/config` — 保存全局配置（body: `{bench:"low"|"mid"|"high", customEnemy:{unit_defense,character_defense}}`），写本地库并自动单条上云
@@ -849,7 +883,10 @@ python scripts/damage_demo.py
 ### 10.4 能力加成
 
 - **无条件能力加成**（如「最大HP提升15%」）直接并入属性显示（`stat_bonuses`）；
-- **有条件能力加成**（需达成标签/系列/HP/战意等条件）存入 `conditional_bonuses`，可在属性栏点击「查看条件加成」查看。
+- **有条件能力加成**（需达成标签/系列/HP/战意等条件）存入 `conditional_bonuses`，可在属性栏点击「查看条件加成」查看；
+- **主能力与 SP 能力都参与计算**：`ability_sp` 的加成此前被漏算，现已一并计入 `stat_bonuses` /
+  `conditional_bonuses`（互为镜像的同 id 能力由 `_slot_variants` 去重，不会重复叠加）。
+  既有库可用 `scripts/migrate_character_sp.py` 定向回填派生列。
 
 ### 10.5 配对评分（满分 100）
 
@@ -1034,7 +1071,7 @@ SSP（Super SP）是部分机体在 SP 之上的最终形态，属性与技能�
 
 ### 11.3 备份约定
 
-- **本地**：`data/backup/` 滚动保留最近 3 份快照（`KEEP_BACKUPS`，单份约 190 MB）；
+- **本地**：`data/backup/` 滚动保留最近 3 份快照（`KEEP_BACKUPS`，单份约 190 MB）；快照经 **SQLite 在线备份 API** 生成，含未 checkpoint 的 WAL 写入；
 - **网盘**：每月把最新快照上传到项目资产（tdrive）`gundam/backup/`，历史快照按 `gundam_YYYYmmdd.db` 命名，保留最近 2 份；
 - **云端 Neon**：`update` 完成后可手动同步（Web 概览页「上传本地到服务器」，或 `python scripts/migrate_cloud.py`）。
 
@@ -1056,6 +1093,46 @@ SSP（Super SP）是部分机体在 SP 之上的最终形态，属性与技能�
 - 来源：`https://soshage.com/ggetapi/zh-CN/...`（仅 zh-CN）；
 - 保持低频访问，不要调大并发/降低间隔；限流终止是保护机制，别绕过；
 - 数据仅供个人研究使用，请注明来源。
+
+### 11.6 子表重复与 NULL 自然键
+
+**现象**：点一次「爬取数据」，`unit_weapon` / `character_skill` / `supporter_skill` 等子表行数翻倍
+（实测 `unit_weapon` 9206 行里 4559 组重复，每个武装恰好 2 份）。
+
+**三层叠加成因**：
+
+| 层 | 机制 |
+|---|---|
+| ① 表约束缺失 | `SCHEMA` 里其实有 `UNIQUE(unit_id, weapon_id)`，但旧版建的本地表没有；`CREATE TABLE IF NOT EXISTS` **不会给已存在的表补约束**，所以旧库一直没这把锁 |
+| ② NULL 不参与唯一性 | SQLite 的 `UNIQUE` / `PRIMARY KEY` **对 NULL 完全不生效**（多个 NULL 互不相等） |
+| ③ 重建不清空 | `build_db()` 是「建表 → ingest」，各 `ingest_*` 只 `INSERT OR IGNORE`，**从不先清空子表**；约束失效时 `OR IGNORE` 形同虚设 |
+
+**修复（双保险）**：
+
+1. **入库前先删**：`ingest_units` / `ingest_one_unit` / `ingest_one_character` / `ingest_supporters`
+   在写入前 `DELETE` 对应子表（单条覆盖只删该实体的）；`supporter_skill` 的 SCHEMA 补上
+   `UNIQUE(supporter_id, limit_break_step, skill_type)`；
+2. **自然键永不为 NULL**：`_slot_variants` 在槽位两来源皆空时用 `sp_id` → `id` → `-sort` 兜底；
+3. **唯一索引兜底**：对既有库补 `uq_unit_weapon` / `uq_character_skill` / `uq_character_ability` /
+   `uq_supporter_skill` 四个唯一索引，即使旧表缺约束也能拦住重复。
+
+> **教训**：不要指望用 UNIQUE 防重。真正兜住重复的是「**入库前先 DELETE 再 INSERT**」。
+> 排查同类问题时，先跑 `SELECT <自然键>, COUNT(*) FROM <子表> GROUP BY 1 HAVING COUNT(*)>1` 看数量级。
+
+### 11.7 数据库读写一致性（换库 / 并发锁 / 快照）
+
+2026-09-21 的读写专项审计产出，对应 `src/dbutil.py`（见 [4.14](#414-srcdbutilpy--数据库读写工具连接--换库--快照)）：
+
+| 问题 | 风险 | 处理 |
+|---|---|---|
+| 换库用裸 `os.replace` | Windows 下主库被任何连接占用即 `WinError 5`；**同进程另一线程持有连接也会失败**（不只别的进程）。替换后残留陈旧 `-wal` 还有脏读隐患 | 统一 `dbutil.swap_db_file`：`wal_checkpoint(TRUNCATE)` → 清 `-wal`/`-shm` → `os.replace`，失败给可操作提示 |
+| 备份/导出直接复制主库 | 漏掉已提交未 checkpoint 的 WAL 写入 → 快照看似成功但丢最近编辑 | 改走 `backup_db_file`（SQLite 在线备份 API）/ `/api/export` 先备份再下发 |
+| 连接未设 `timeout` | 吃默认 5s，爬取长事务与保存并发时抛 `database is locked` | `dbutil` 统一 30s（映射为 `PRAGMA busy_timeout`） |
+| 3 处连接未 `close()` | 长期运行句柄泄漏 | 收敛到 `_ro()` / `_rw()` 上下文管理器 |
+| `refetch-*-apply` 是写操作却走 GET | 浏览器预取 / 回退缓存可能**重复触发覆盖** | 改为 POST，GET 返回 405 并提示 |
+
+完整回归测试见 `tests/test_dbutil.py`（连接行为 / 换库 / 备份 / 边车清理）与
+`tests/test_character_sp.py`（SP 槽位展开 / 自然键非 NULL / 幂等 / 派生列）。
 
 ---
 

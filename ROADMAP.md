@@ -180,6 +180,26 @@
 
 ---
 
+## 数据层加固（2026-09-21）
+
+对全部数据库读写路径做了一次专项审计（源码 AST 扫描 + 真实库体检 + 文件占用实测），
+产出 `src/dbutil.py` 并修掉 P0/P1/P2 共 7 项：
+
+| 项 | 问题 | 状态 |
+|---|---|---|
+| P0-1 | 换库用裸 `os.replace`，Windows 下库被占用（含同进程其它线程）即 `WinError 5`；残留陈旧 `-wal` 有脏读风险 | ✅ 统一 `dbutil.swap_db_file`（checkpoint → 清边车 → replace → 可操作报错） |
+| P0-2 | 备份/导出直接复制主库，漏掉未 checkpoint 的 WAL 写入 | ✅ 改走 SQLite 在线备份 API |
+| P0-3 | 全部连接未设 `timeout`，并发写易 `database is locked` | ✅ 统一 `busy_timeout=30s` |
+| P1-1 | `refetch-*-apply` 是写操作却走 GET，可能被预取重复触发 | ✅ 改 POST（GET 返 405） |
+| P1-2 | 3 处连接未 `close()` | ✅ 收敛到 `_ro()` / `_rw()` 上下文管理器 |
+| P2-1 | 驾驶员 SP 技能/能力（`skill_sp` / `ability_sp`）被整段丢弃，约 1800 行真实数据缺失，且自然键为 NULL 使唯一约束失效 | ✅ `_slot_variants` 展开主/SP 双来源、自然键兜底非 NULL；`scripts/migrate_character_sp.py` 已对本地库回填（技能 +208 / 能力 +1138） |
+| P2-2 | 7 张关卡/事件表冻结但 UI 无提示 | ✅ 保留并标注「已归档」（关卡页横幅 + tab title + 伤害计算来源下拉） |
+
+回归测试：`tests/test_dbutil.py` + `tests/test_character_sp.py`（15 项），全量 **107 tests OK**。
+细节见 [CODE_WIKI 11.6 / 11.7](CODE_WIKI.md)。
+
+---
+
 ## 附：当前基线快照（2026-09-10）
 
 - 代码 18,754 行：`app.js` 5357 / `webapp.py` 4638 / `style.css` 2153 / `pairing.py` 1976 / `cloud.py` 1334 / `db.py` 1271
