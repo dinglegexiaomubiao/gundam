@@ -5179,6 +5179,9 @@ const teamState = {
   teams: [],
 };
 const TEAM_LS_KEY = "gundam.teams.v1";
+// 标记「已把本地队伍迁移到后端」只做一次：否则「删光所有队伍」会被误判成
+// 「后端为空而本地有数据」，触发迁移把刚删掉的队伍又写回后端。
+const TEAM_MIGRATED_KEY = "gundam.teams.migrated.v1";
 let teamResults = {};
 
 function newTeamSlot() { return { unit: null, star: 3, weapon: null, pilot: null }; }
@@ -5248,13 +5251,28 @@ function loadTeamState() {
   fetchTeamFromServer();
 }
 
+function teamLsFlag(key) {
+  try { return localStorage.getItem(key) === "1"; } catch (_) { return false; }
+}
+function setTeamLsFlag(key) {
+  try { localStorage.setItem(key, "1"); } catch (_) {}
+}
+
 async function fetchTeamFromServer() {
   try {
     const r = await fetch("/api/team/list");
     const d = await r.json();
     if (!d || !d.ok) return;
-    if (d.teams && d.teams.length) {
-      teamState.teams = d.teams.map((t) => ({
+
+    const serverTeams = Array.isArray(d.teams) ? d.teams : [];
+    // 仅「首次使用」做一次本地→后端迁移：后端为空且本地有队伍且从未迁移过。
+    // 之后一律以服务端为准（含空数组），这样「删光所有队伍」才不会被还原。
+    if (!teamLsFlag(TEAM_MIGRATED_KEY) && serverTeams.length === 0 && teamState.teams.length) {
+      setTeamLsFlag(TEAM_MIGRATED_KEY);
+      saveTeamState();
+    } else {
+      setTeamLsFlag(TEAM_MIGRATED_KEY);
+      teamState.teams = serverTeams.map((t) => ({
         id: t.team_id,
         name: t.name || "",
         supporter: (t.payload && t.payload.supporter) || null,
@@ -5271,10 +5289,6 @@ async function fetchTeamFromServer() {
     if (d.config && d.config.payload) {
       teamState.bench = d.config.payload.bench || teamState.bench;
       teamState.customEnemy = d.config.payload.customEnemy || teamState.customEnemy;
-    }
-    // 后端为空但本地有数据 → 迁移一次（之后以云端为准）
-    if ((!d.teams || !d.teams.length) && teamState.teams.length) {
-      saveTeamState();
     }
   } catch (_) {}
 }
@@ -5452,10 +5466,24 @@ function onTeamListClick(e) {
   if (removeBtn) {
     const tid = removeBtn.dataset.team;
     if (confirm("删除这支队伍？")) {
-      teamState.teams = teamState.teams.filter((t) => t.id !== tid);
-      delete teamResults[tid];
-      saveTeamState();
-      renderTeam();
+      const btn = removeBtn;
+      btn.disabled = true;
+      // 必须先调用删除接口：saveTeamState() 只是 upsert（写入当前列表），
+      // 不会删除后端已有的行 —— 否则刷新时会被后端数据原样复原。
+      apiPost("/api/team/delete", { team_id: tid })
+        .then((res) => {
+          teamState.teams = teamState.teams.filter((t) => t.id !== tid);
+          delete teamResults[tid];
+          saveTeamState();          // 同步剩余队伍到本地缓存与后端
+          renderTeam();
+          if (res && res.synced === false) {
+            console.warn("队伍已从本地删除，但云端同步失败：", res.sync_message);
+          }
+        })
+        .catch((err) => {
+          btn.disabled = false;
+          alert(`删除失败：${err.message}\n本地服务可能未运行，请确认后重试。`);
+        });
     }
     return;
   }

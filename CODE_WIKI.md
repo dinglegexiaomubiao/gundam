@@ -724,7 +724,7 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 - `POST /api/refetch-unit-apply` — 把单机体「重新抓取」的结果覆盖到本地库（body：`{unit_id}`）。**写操作，故为 POST**；用 GET 调用会返回 405 并提示
 - `POST /api/refetch-char-apply` — 同上的驾驶员版（body：`{char_id}`）
 - `POST /api/team/save` — 保存/更新单支队伍（body: `{team_id, name, data:{supporter, breakStep, bench, customEnemy, slots:[{unit,star,weapon,pilot}×5]}}`），写本地库并自动单条上云（详见 [10.13](#1013-组队持久化与云端同步)）
-- `POST /api/team/delete` — 删除队伍（body: `{id}`），删本地库并同步删除云端行
+- `POST /api/team/delete` — 删除队伍（body: `{team_id}`），删本地库并同步删除云端行，返回 `{ok, synced, sync_message}`
 - `POST /api/team/config` — 保存全局配置（body: `{bench:"low"|"mid"|"high", customEnemy:{unit_defense,character_defense}}`），写本地库并自动单条上云
 
 ### 8.3 静态资源
@@ -1032,7 +1032,12 @@ SSP（Super SP）是部分机体在 SP 之上的最终形态，属性与技能�
 - **后端接口**（`src/webapp.py`）：
   - `GET /api/team/list` — 读取全部队伍与全局配置；
   - `POST /api/team/save` — 保存/更新单支队伍，写本地库后自动调用 `push_team_row()` 单条上云；
-  - `POST /api/team/delete` — 删除队伍，删本地库并同步删除云端行；
+  - `POST /api/team/delete` — 删除队伍，删本地库并同步删除云端行（body: `{team_id}`）；
+    **前端删除按钮必须调用它**：`saveTeamState()` 只是 upsert（写入当前列表），
+    不会删除后端已有的行，仅改内存+localStorage 会让队伍在刷新后被 `/api/team/list` 原样复原；
+  - **`fetchTeamFromServer` 的「首次迁移」用一次性标记 `gundam.teams.migrated.v1` 守卫**：
+    只有当「后端为空 + 本地有队伍 + 从未迁移过」三者同时成立时才把本地队伍推给后端。
+    否则「把队伍全删光」会被误判成迁移场景，刚删掉的队伍又被写回后端；
   - `POST /api/team/config` — 保存全局配置（旧接口，现仅作每队基准缺失时的兜底默认值），自动单条上云。
   断网或云端未配置时不阻塞本地编辑（降级为仅本地成功）。
 - **云端同步**（`src/cloud.py`）：`team` / `team_config` 已加入 `TABLE_ORDER`，

@@ -49,6 +49,7 @@ python scripts/pipeline.py serve --port 8765   # 启动本地 Web 查看器
 ```powershell
 python -m unittest discover -s tests -t . -p "test_*.py"   # 后端/数据层单测
 node tests/js/team_render_smoke.js                          # 组队页渲染冒烟（无需浏览器）
+node tests/js/team_delete_smoke.js                          # 组队页删除链路冒烟（无需浏览器）
 ```
 
 `tests/js/team_render_smoke.js` 用 DOM 桩在 Node 里真跑一遍 `web/app.js`，
