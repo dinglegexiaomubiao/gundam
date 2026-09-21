@@ -5388,6 +5388,18 @@ function tsDmgChips(ids, cls) {
   return arr.map((i) => `<span class="ts-chip ${cls || ""}">${TS_DMG_TYPES[i] || "#" + i}</span>`).join("");
 }
 
+const TS_SUP_NAMES = { attack: "支援攻击", defense: "支援防御", extra: "额外行动" };
+
+function tsSupportCounts(counts) {
+  const keys = Object.keys(counts || {});
+  if (!keys.length) return "";
+  return keys.map((k) => {
+    const c = counts[k] || {};
+    return `<span class="ts-chip sup">${TS_SUP_NAMES[k] || k} <b>${c.count}</b> 次${
+      c.conditional ? "（有条件）" : ""}</span>`;
+  }).join("");
+}
+
 function tsSection(kind, title, bodyHtml) {
   return `<div class="ts-sec ts-${kind}">
       <div class="ts-head"><span class="ts-dot"></span>${title}</div>
@@ -5427,25 +5439,49 @@ function renderTeamStatus(res) {
         <span class="muted">射程 ${e.range_max != null ? `${e.range_min}-${e.range_max}` : "—"}${e.weapon ? ` · ${esc(e.weapon)}` : ""}</span>
       </span>`).join("") || '<span class="muted">无可对敌生效的武器特效</span>';
 
+    // 支援次数（支援攻击 / 支援防御 / 额外行动）
+    const supCounts = tsSupportCounts(s.support_counts);
+    const supBits = [effs];
+    if (supCounts) {
+      supBits.push(`<span class="ts-kv ts-supcounts">支援次数 ${supCounts}</span>`);
+    } else if (!s.pilot) {
+      supBits.push('<span class="ts-kv muted">支援次数 未选驾驶员，无法判定</span>');
+    }
+    if ((s.pilot_mechanics || []).length) {
+      supBits.push('<span class="ts-kv ts-mechs">驾驶员机制 ' + s.pilot_mechanics.map((m) =>
+        `<span class="ts-chip mech">${esc(m.label)}</span>`).join("") + "</span>");
+    }
+
+    // 与攻击型最高伤害武器的类型匹配：逐项说明命中 / 未命中
     let matchHtml = "";
+    const atk = ins.attack;
     if (ins.match) {
       const m = ins.match;
       const cls = m.total === 0 ? "bad" : (m.hit_count === m.total ? "ok" : (m.hit_count ? "part" : "bad"));
-      const chips = [
+      const atkW = (atk && atk.best_weapon) || {};
+      const atkT = (m.attack_attrs || []).map((t) => TS_DMG_TYPES[t] || t).join(" · ") || "—";
+      const rows = [
         ...(m.covered || []).map((c) =>
-          `<span class="ts-chip ok" title="来源：${esc(c.by)}">命中 ${TS_DMG_TYPES[c.type] || c.type}</span>`),
+          `<span class="ts-mrow"><span class="ts-chip ok">命中 ${TS_DMG_TYPES[c.type] || c.type}</span>` +
+          `<span class="muted">← 支援「${esc(c.by)}」</span></span>`),
         ...(m.missed || []).map((c) =>
-          `<span class="ts-chip bad">未命中 ${TS_DMG_TYPES[c.type] || c.type}</span>`),
+          `<span class="ts-mrow"><span class="ts-chip bad">未命中 ${TS_DMG_TYPES[c.type] || c.type}</span>` +
+          `<span class="muted">支援未提供「${TS_DMG_TYPES[c.type] || c.type}损伤提升」</span></span>`),
       ].join("");
-      matchHtml = `<div class="ts-match ${cls}">与攻击型最高伤害武器匹配
-          <b>${m.hit_count}/${m.total}</b> ${chips}</div>`;
-    } else if (ins.attack && (ins.attack.best_weapon || {}).attrs &&
-               !(ins.attack.best_weapon.attrs || []).length) {
+      matchHtml = `<div class="ts-match ${cls}">
+          <span class="ts-mline">攻击型最高伤害武器 <b>${esc(atkW.name || "—")}</b>（${atkT}）</span>
+          <span class="ts-mline">支援提供 ${(s.dmg_up_types || []).map((t) => TS_DMG_TYPES[t] || t).join(" · ") || "—"}损伤提升
+            · 匹配 <b>${m.hit_count}/${m.total}</b></span>
+          <span class="ts-mrows">${rows}</span>
+        </div>`;
+    } else if (atk && (atk.best_weapon || {}).attrs && !(atk.best_weapon.attrs || []).length) {
       matchHtml = '<div class="ts-match bad">攻击型最高伤害武器没有伤害类型，无法匹配</div>';
+    } else if (!(s.dmg_up_types || []).length) {
+      matchHtml = '<div class="ts-match">支援未提供「损伤提升」类特效，不影响攻击型伤害类型</div>';
     }
 
     secs.push(tsSection("sup", `支援型 · ${esc((s.units || []).map((u) => u.name).join("、"))}`,
-      effs + matchHtml));
+      supBits.join("") + matchHtml));
   } else if (miss.support) {
     secs.push(`<div class="ts-sec ts-sup ts-empty">
         <div class="ts-head"><span class="ts-dot"></span>支援型</div>
@@ -5485,7 +5521,32 @@ function renderTeamStatus(res) {
   }
 
   if (!secs.length) return "";
-  return `<div class="team-status"><div class="ts-title">队伍状态</div>${secs.join("")}</div>`;
+  return `<div class="team-status"><div class="ts-title">队伍状态</div>${
+    secs.join("")}${tsSynergyBlock(ins)}</div>`;
+}
+
+/* 整队协同结论 + 及格线体检 */
+const TS_SYN_CLS = { full: "ok", partial: "part", none: "bad", neutral: "", unknown: "" };
+
+function tsSynergyBlock(ins) {
+  const sy = ins && ins.synergy;
+  if (!sy) return "";
+  const cls = TS_SYN_CLS[sy.level] || "";
+  const b = sy.baseline || {};
+  const items = (b.items || []).map((x) => {
+    const need = x.need != null ? `/${x.need}` : "";
+    const extra = x.counter_guard ? "（反击援防）" : "";
+    const cnt = x.key === "defense_support" && x.counter_guard && !x.actual ? "—" : x.actual;
+    return `<span class="ts-chip ${x.ok ? "ok" : "bad"}" title="${esc(x.unit || "")}${esc(extra)}">${
+      x.ok ? "✓" : "✗"} ${esc(x.label)} ${cnt}${need}</span>`;
+  }).join("");
+  return `<div class="ts-sec ts-syn">
+      <div class="ts-head"><span class="ts-dot"></span>整队协同 · ${esc(sy.title)}</div>
+      <div class="ts-body">
+        <span class="ts-kv ts-syn-detail ${cls}">${esc(sy.detail)}</span>
+        ${items ? `<span class="ts-kv ts-syn-base">及格线 <b>${b.passed}/${b.total}</b>${items}</span>` : ""}
+      </div>
+    </div>`;
 }
 
 function renderSupporterCard(team, sup) {

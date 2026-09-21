@@ -85,6 +85,9 @@ const FULL = {
   },
   support: {
     units: [{ id: 1001000400, name: '核心战机' }],
+    pilot: { id: 1009000100, name: '奥利佛·梅', rarity: 5 },
+    support_counts: { attack: { count: 2, conditional: false } },
+    pilot_mechanics: [{ label: '无条件支援攻击2次', kind: 'support' }],
     effects: [
       { label: '物理损伤提升（1回合）LV4', kind: 'dmg_up', types: [1], value: 25,
         weapon: '空对空导弹 SSP', range_min: 2, range_max: 5 },
@@ -134,7 +137,24 @@ const FULL = {
     total: 2,
   },
   missing: { attack: false, support: false, defense: false },
+  synergy: {
+    level: 'partial',
+    title: '部分匹配',
+    detail: '支援提供 物理损伤提升，攻击武器「洗牌同盟拳 EX」为 物理、特殊；命中 物理，未命中 特殊：1/2',
+    baseline: {
+      passed: 5, total: 6, ok: false,
+      items: [
+        { key: 'movement', label: '移动力', unit: '神高达 (EX)', need: 5, actual: 5, ok: true },
+        { key: 'movement', label: '移动力', unit: '核心战机', need: 5, actual: 4, ok: false },
+        { key: 'support_range', label: '支援型武器射程', unit: '核心战机', need: 5, actual: 5, ok: true },
+        { key: 'support_attack', label: '支援攻击次数', unit: '奥利佛·梅', need: 2, actual: 2, ok: true },
+        { key: 'defense_support', label: 'UR 防御型（支援防御 / 反击援防）', unit: '刹那·F·清英', need: 2, actual: 2, ok: true },
+      ],
+    },
+  },
 };
+
+const FULL_ALIAS = FULL;
 
 const MISSING = {
   attack: null, support: null, defense: null, match: null,
@@ -173,6 +193,17 @@ const checks = [
   ['驾驶员机制：支援防御次数', full.includes('驾驶员机制') && full.includes('无条件支援防御2次')],
   ['驾驶员机制：反击援防', full.includes('反击援防') && full.includes('ts-chip mech')],
   ['驾驶员协同：HP恢复标为已满足', /HP恢复7%\(1次\)<span class="ts-note">（条件已满足）/.test(full.replace('<\/span>', '</span>'))],
+  ['支援段显示支援次数', full.includes('支援次数') && full.includes('支援攻击 <b>2</b> 次')],
+  ['支援段显示支援机制胶囊', full.includes('无条件支援攻击2次')],
+  ['匹配说明攻击武器与其类型', full.includes('攻击型最高伤害武器') && full.includes('洗牌同盟拳 EX') && full.includes('物理 · 特殊')],
+  ['匹配说明支援提供了什么', full.includes('支援提供 物理损伤提升')],
+  ['匹配逐项：命中带来源', full.includes('命中 物理') && full.includes('← 支援「物理损伤提升（1回合）LV4」')],
+  ['匹配逐项：未命中带原因', full.includes('未命中 特殊') && full.includes('支援未提供「特殊损伤提升」')],
+  ['整队协同块存在', full.includes('ts-sec ts-syn') && full.includes('整队协同 · 部分匹配')],
+  ['整队协同含结论句', full.includes('1/2') && full.includes('支援提供 物理损伤提升，攻击武器')],
+  ['及格线显示通过数', full.includes('及格线 <b>5/6</b>')],
+  ['及格线逐项标记', full.includes('✓ 移动力 5/5') && full.includes('✗ 移动力 4/5')],
+  ['及格线含 UR 防御项', full.includes('UR 防御型（支援防御 / 反击援防） 2/2')],
   ['缺少 role 时提示缺少', missing.includes('本队缺少攻击型机体')
     && missing.includes('本队缺少支援型机体') && missing.includes('本队缺少耐久型机体')],
   ['无 insights 时不渲染（向后兼容）', ctx.__legacy === '' && ctx.__noRes === ''],

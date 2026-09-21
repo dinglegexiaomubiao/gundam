@@ -2284,6 +2284,17 @@ nav button.active::after {
 .ts-sec.ts-sup { border-left-color: var(--type-sup); }
 .ts-sec.ts-tank { border-left-color: var(--type-tank); }
 .ts-sec.ts-empty { background: transparent; border-left-style: dashed; }
+.ts-sec.ts-syn { border-left-color: var(--accent); }
+.ts-syn-detail { flex-basis: 100%; line-height: 1.75; }
+.ts-syn-detail.ok { color: #9fe8c8; }
+.ts-syn-detail.part { color: var(--accent2); }
+.ts-syn-detail.bad { color: #ffb4ae; }
+.ts-syn-base { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; }
+.ts-supcounts, .ts-mechs { gap: 6px; }
+.ts-chip.sup { border-color: #2f9e6e; color: #9fe8c8; background: #1d3d30; }
+.ts-match .ts-mline { flex-basis: 100%; }
+.ts-match .ts-mrows { flex-basis: 100%; display: grid; gap: 2px; }
+.ts-mrow { display: inline-flex; align-items: center; gap: 6px; }
 .ts-head {
   display: flex; align-items: center; gap: 6px;
   font-size: 12px; font-weight: 700; color: var(--text); margin-bottom: 3px;

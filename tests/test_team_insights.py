@@ -261,5 +261,118 @@ class TestSupportAndMatch(_TeamInsightBase):
             self.assertTrue(c.get("by"))
 
 
+class TestSynergyAndBaseline(_TeamInsightBase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        con = dbutil.connect_ro(config.DB_PATH)
+        try:
+            # 只提供「光束损伤提升」的支援型 → 与神高达的 物理+特殊 完全不匹配
+            row = con.execute(
+                "SELECT u.id, u.name FROM unit u JOIN unit_weapon w ON w.unit_id = u.id "
+                "WHERE u.role = 3 AND w.weapon_effects LIKE '%光束损伤提升%' "
+                "AND w.weapon_effects NOT LIKE '%物理损伤提升%' "
+                "AND w.weapon_effects NOT LIKE '%特殊损伤提升%' "
+                "AND IFNULL(w.map_weapon_range,'') IN ('','null','0') LIMIT 1"
+            ).fetchone()
+            cls.beam_only_support = row["id"] if row else None
+            # 有支援攻击 ≥2 的驾驶员
+            row = con.execute(
+                "SELECT id FROM character WHERE "
+                "CAST(json_extract(support_info,'$.attack.count') AS INTEGER) >= 2 LIMIT 1"
+            ).fetchone()
+            cls.attack_support_pilot = row["id"] if row else None
+        finally:
+            con.close()
+
+    def _team(self, support_id, support_pilot=0):
+        return [
+            {"unit_id": GUNDAM_EX, "star": 3,
+             "weapon_id": self.gundam_weapon_id, "pilot_id": DOMON},
+            {"unit_id": OO_EX, "star": 3, "weapon_id": 0, "pilot_id": SETSUNA_TANK},
+            {"unit_id": support_id, "star": 3, "weapon_id": 0, "pilot_id": support_pilot},
+        ]
+
+    def test_synergy_present_and_has_level(self):
+        ins = self._score(self._team(self.support_unit_id))["insights"]
+        sy = ins.get("synergy")
+        self.assertIsInstance(sy, dict)
+        self.assertIn(sy["level"], ("full", "partial", "none", "neutral", "unknown"))
+        self.assertTrue(sy["detail"], "协同结论应有可读的说明句")
+
+    def test_synergy_none_when_types_mismatch(self):
+        """支援只给光束、攻击武器是物理+特殊 → 无法匹配 0/2。"""
+        if not self.beam_only_support:
+            self.skipTest("库里没有仅提供光束损伤提升的支援型")
+        sy = self._score(self._team(self.beam_only_support))["insights"]["synergy"]
+        self.assertEqual(sy["level"], "none")
+        self.assertIn("无法匹配：0/2", sy["detail"])
+        self.assertIn("支援提供 光束损伤提升", sy["detail"])
+        self.assertIn("物理、特殊", sy["detail"], "说明里要点出攻击武器的实际类型")
+
+    def test_synergy_partial_mentions_hit_and_miss(self):
+        if not self.support_unit_id:
+            self.skipTest("库里没有带物理损伤提升的支援型")
+        sy = self._score(self._team(self.support_unit_id))["insights"]["synergy"]
+        if sy["level"] != "partial":
+            self.skipTest(f"该支援的匹配结果为 {sy['level']}，不适用部分匹配断言")
+        self.assertIn("命中", sy["detail"])
+        self.assertIn("未命中", sy["detail"])
+
+    def test_baseline_items_and_counts(self):
+        b = self._score(self._team(self.support_unit_id))["insights"]["baseline"]
+        keys = {x["key"] for x in b["items"]}
+        self.assertIn("movement", keys)
+        self.assertIn("support_range", keys)
+        self.assertIn("support_attack", keys)
+        self.assertIn("defense_support", keys)
+        self.assertEqual(b["passed"], sum(1 for x in b["items"] if x["ok"]))
+        self.assertEqual(b["total"], len(b["items"]))
+        # 移动力对全队逐一检查（3 台机体 → 至少 3 条）
+        self.assertGreaterEqual(len([x for x in b["items"] if x["key"] == "movement"]), 3)
+
+    def test_baseline_movement_threshold_is_5(self):
+        b = self._score(self._team(self.support_unit_id))["insights"]["baseline"]
+        for x in b["items"]:
+            if x["key"] == "movement":
+                self.assertEqual(x["need"], 5)
+                self.assertEqual(x["ok"], x["actual"] >= 5)
+
+    def test_baseline_ur_defense_support_defense(self):
+        """UR 防御型：刹那(支援防御2次) → 达标。"""
+        b = self._score(self._team(self.support_unit_id))["insights"]["baseline"]
+        dfn = [x for x in b["items"] if x["key"] == "defense_support"]
+        self.assertEqual(len(dfn), 1, "UR 防御型应产生一条检查")
+        self.assertTrue(dfn[0]["ok"], f"刹那应达标：{dfn[0]}")
+        self.assertEqual(dfn[0]["actual"], 2)
+
+    def test_baseline_support_attack_needs_pilot(self):
+        """支援槽没选驾驶员 → 支援攻击次数 0，判不达标并说明。"""
+        b = self._score(self._team(self.support_unit_id, 0))["insights"]["baseline"]
+        item = next(x for x in b["items"] if x["key"] == "support_attack")
+        self.assertEqual(item["actual"], 0)
+        self.assertFalse(item["ok"])
+        self.assertEqual(item["unit"], "未选驾驶员")
+
+        if not self.attack_support_pilot:
+            self.skipTest("库里没有支援攻击≥2 的驾驶员")
+        b2 = self._score(
+            self._team(self.support_unit_id, self.attack_support_pilot)
+        )["insights"]["baseline"]
+        item2 = next(x for x in b2["items"] if x["key"] == "support_attack")
+        self.assertTrue(item2["ok"])
+        self.assertGreaterEqual(item2["actual"], 2)
+
+    def test_support_counts_carried_in_insight(self):
+        if not self.attack_support_pilot:
+            self.skipTest("库里没有支援攻击≥2 的驾驶员")
+        ins = self._score(
+            self._team(self.support_unit_id, self.attack_support_pilot)
+        )["insights"]
+        counts = ins["support"]["support_counts"]
+        self.assertIn("attack", counts)
+        self.assertGreaterEqual(counts["attack"]["count"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
