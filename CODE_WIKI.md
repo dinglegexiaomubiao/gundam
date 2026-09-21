@@ -266,7 +266,12 @@ gundam/
 - 驾驶员属性：UR 用默认形态满级；非 UR 用 SP 形态满级（100 级）；
 - 支持「反击援防」「额外行动」「HP恢复」「叠层防御」等特殊机制识别；
 - `_apply_pair_filters` 支持驾驶员搜索筛选（名称/稀有度/类型/系列/标签/技能/支援）与多字段排序；
-- **组队评分** `team_score()`：一次评估多支队伍（详见 [10.9](#109-组队评分)）。
+- **组队评分** `team_score()`：一次评估多支队伍（详见 [10.9](#109-组队评分)）；
+- **队伍状态摘要**：`team_score()` 额外返回 `insights`（攻击 / 支援 / 防御 / 匹配 + missing，
+  详见 [10.9.2](#1092-队伍状态摘要insights)）；
+- **驾驶员缓存指纹**：`_build_pilots()` 缓存按「库路径 + character 行数 + 最大 id」做指纹，
+  库被重建 / 换库后自动失效（`reset_caches()` 可显式清空，webapp 在爬取结束、同步结束、
+  导入换库后各调用一次）。原先「一次构建永不失效」会让爬取后评分配不到驾驶员。
 
 ### 4.11 `src/webapp.py` — 本地 Web 查看器
 
@@ -292,6 +297,7 @@ gundam/
 | [migrate_ssp_fields.py](file:///e:/lzf/1_study/gundam/scripts/migrate_ssp_fields.py) | 回填 unit 表 `ssp_*` 属性 + 补 `ssp_terrain` 列（见 10.10） |
 | [migrate_drop_stage_map.py](file:///e:/lzf/1_study/gundam/scripts/migrate_drop_stage_map.py) | 丢弃 `stage.map` 列并 VACUUM（幂等，198MB→23.5MB，见 6.4） |
 | [migrate_conditional_bonuses.py](file:///e:/lzf/1_study/gundam/scripts/migrate_conditional_bonuses.py) | 重算机体/驾驶员的 `conditional_bonuses` 派生列（见 10.11） |
+| [migrate_weapon_attrs_v2.py](file:///e:/lzf/1_study/gundam/scripts/migrate_weapon_attrs_v2.py) | 按最新映射重算 `unit_weapon.weapon_attrs`（伤害类型集合），使既有库与「重新爬取重建」完全一致，含 `--dry-run`；执行前自动备份（见 10.1.1） |
 | [migrate_character_sp.py](file:///e:/lzf/1_study/gundam/scripts/migrate_character_sp.py) | 回填驾驶员的 SP 技能/能力（`skill_sp` / `ability_sp`）并重算派生列，含 `--dry-run`；执行前自动备份（见 10.4） |
 | [migrate_unit_pilot.py](file:///e:/lzf/1_study/gundam/scripts/migrate_unit_pilot.py) | 单独同步 `unit_pilot` 原作映射表到云端 / 拉回本地（默认上传，`--down` 反向） |
 | [build_unit_pilot.py](file:///e:/lzf/1_study/gundam/scripts/build_unit_pilot.py) | 机体 × 驾驶员组合数据构建 |
@@ -852,6 +858,13 @@ python scripts/damage_demo.py
 
 ### 10.1 类型与稀有度
 
+> **伤害类型映射（2026-09-21 修正）**：`weapon_attr` 单值 → `weapon_attrs` 集合的规则为
+> `1/2/3 → 单类型`、`4 → 光束+物理[1,2]`、`5 → 物理+特殊[1,3]`、`6 → 光束+特殊[2,3]`
+> （旧规则把 5/6 一律清空、4 记成 [3]，会让 4/5/6 类武器的多类型信息在重新爬取时丢失）。
+> 常量见 `src/db.py: WEAPON_ATTR_EXPAND`，与 `scripts/migrate_weapon_attack_attr.py` 的回填规则一致。
+> 展示名用 `labels.DAMAGE_TYPE_NAMES`（1=物理 —— 注意 `WEAPON_ATTR` 在伤害计算器里把 1 显示为
+> 「实弹」，两者是同一属性的不同语境措辞）。
+
 - **类型**（`role`）：1=攻击型、2=耐久型、3=支援型（依据属性分布推断）。
   UI 色彩身份：攻击型=红 `--type-atk`、耐久型=蓝 `--type-tank`、支援型=绿 `--type-sup`，
   敌方/未知=灰 `--type-unknown`（详见 [10.9](#109-组队评分)「类型视觉语言」）。
@@ -978,6 +991,59 @@ python scripts/damage_demo.py
 - 语义：`exclude` 为逗号分隔 id，非数字项忽略（`_exclude_ids()`），
   在 WHERE 中追加 `NOT IN`（`_not_in_clause()`），因此 `total` 与分页同步收缩——
   不会出现「某页被过滤成空」的错位。机体库与关卡敌人（`source=enemy`）两条来源都支持。
+
+### 10.9.2 队伍状态摘要（`insights`）
+
+`POST /api/team/score` 的返回值除 `pairs` 外，还带一块 `insights`，
+用于在队伍卡片底部渲染「这支队伍怎么打、支援有没有生效、能不能扛住」。
+数值口径与 `pairs` **同源**（共用 `_weapon_damage()`），不存在两套算法漂移。
+
+```
+insights = {
+  attack:  {unit, range:{max, max_nomap, map_count}, best_weapon:{…}},
+  support: {units:[…], effects:[…], dmg_up_types:[…]},
+  defense: {unit, pilot, movement, mitigations:[…], thresholds:[…],
+            boosts:[…], unit_skill, pilot_synergy:[…]},
+  match:   {attack_attrs, covered:[{type,by}], missed:[{type}], hit_count, total},
+  missing: {attack, support, defense},     # 该角色缺失时 true，前端显示「本队缺少 X 型机体」
+}
+```
+
+**攻击型（`role=1`）**
+- `range.max_nomap`：全部武器的 `range_max` 最大值，**排除 MAP 武器**
+  （判据 `IFNULL(map_weapon_range,'') NOT IN ('','null','0')`，与 webapp 的 `WFX_FILTERS` 一致）；
+- `best_weapon`：**理论最高伤害**的武器 —— 遍历该机全部武器逐把算伤害取最大，
+  `_weapon_power()` 已把武器特效里的「武装POWER提升（最高提升X%）」计入，
+  因此是「武器伤害 + 武器特效」的口径（**不是**队伍里选中那一把）。
+
+**支援型（`role=3`）**
+- 扫描该机**非 MAP** 武器的 `weapon_effects`，归类为 `dmg_up`（损伤提升，按 物理/光束/特殊
+  解析出 `types`）/ `def_down`（防御力减少），每条带来源武器与射程；
+- 多台支援型时特效合并，`units` 列出全部来源。
+
+**匹配判定（`match`）**
+- 攻击型最高伤害武器的伤害类型集合 × 支援提供的损伤提升类型集合；
+- `covered` / `missed` **逐类型**列出（含来源特效名），前端渲染为 `命中 物理` / `未命中 特殊`
+  胶囊 + `命中数/总数`。集合相交即算命中，因此双类型武器（如 洗牌同盟拳 EX = 物理+特殊）
+  只要支援覆盖其中之一就会命中。
+
+**防御型（`role=2`）**
+- `movement`：`unit.movement` / `max_movement` + 当前星级；
+- `mitigations` / `thresholds`：从 `unit_ability.traits` 解析，
+  **数值一律取自 `desc`**（实测 `trait_value` 与 `desc` 存在错位：GN力场 `trait_type=79` 的
+  `trait_value` 是 4500，而 desc 写的是“减轻20%”）；
+  `attrs` 从 desc 里的「物理/光束/特殊」字样解析，所以「物理、光束武装减伤 20%」能正确表达；
+- `unit_skill`：`unit_skill` 表（目前仅 EX 机体有）；
+- `pilot_synergy`：驾驶员条目中与生存相关的，分两个维度表达：
+  - `unit_ok` —— **机体侧条件**是否满足（搭乘单位的 id / 标签 / 系列 / 类型，静态可判定）；
+  - `status` —— `counted`（无条件，恒生效）/ `potential`（机体条件满足但触发时机取决于战斗，
+    如「自身 HP 为 0% 时」）/ `impossible`（本机不满足）。
+
+    例：刹那·F·清英(UR 耐久型) 搭乘 00强化模组(最后决战式样)(EX) 时，
+    「搭乘单位为…且自身 HP 为 0% 时，自身 HP 恢复 7%(1次)」→ `unit_ok=True` + `status=potential`。
+
+前端渲染见 `web/app.js` 的 `renderTeamStatus()`（`.team-status` / `.ts-*` 样式，
+复用 `--type-atk/tank/sup` 类型令牌）。
 
 ### 10.10 SSP 形态
 
