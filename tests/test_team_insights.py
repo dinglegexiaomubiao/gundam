@@ -378,10 +378,19 @@ class TestSynergyAndBaseline(_TeamInsightBase):
         self.assertIn("defense_mitigation", keys)
         dmg = next(x for x in b["bonuses"] if x["key"] == "defense_mitigation")
         self.assertIn("减伤", dmg["detail"])
-        # 「必须是能触发的」：条件类能力不能出现在可触发清单里
-        if "可触发能力" in dmg["detail"]:
-            seg = dmg["detail"].split("可触发能力：", 1)[1].split("；")[0]
-            self.assertNotIn("条件", seg)
+        # 「可触发能力」只收 cond_ok=True 的条目（不能按名称含不含「条件」来判 ——
+        # 实测「（常态＆战意条件）攻击力提升」有无条件与需战意两个变体）。
+        dfn = self._score(self._team(self.support_unit_id))["insights"]["defense"]
+        seg = (dmg["detail"].split("可触发能力：", 1)[1].split("；")[0]
+               if "可触发能力" in dmg["detail"] else "")
+        self.assertTrue(seg, "应列出可触发能力")
+        for x in dfn["boosts"]:
+            if x["cond_ok"] is False:
+                self.assertNotIn(x["label"], seg, "条件不满足的能力不该算可触发")
+        trig = [x["label"] for x in dfn["boosts"] if x["cond_ok"] is True]
+        if len(trig) <= 4:
+            for name in trig:
+                self.assertIn(name, seg)
         self.assertEqual(
             b["bonus_count"],
             len([x for x in b["items"] if x.get("bonus")]) + len(b["bonuses"]),
@@ -464,6 +473,95 @@ class TestSynergyAndBaseline(_TeamInsightBase):
         counts = ins["support"]["support_counts"]
         self.assertIn("attack", counts)
         self.assertGreaterEqual(counts["attack"]["count"], 2)
+
+
+class TestConditionalAbilityVerdict(_TeamInsightBase):
+    """机体能力条目的条件判定与展示（加分项要列出名称与条件）。"""
+
+    def _team(self, support_id):
+        return [
+            {"unit_id": GUNDAM_EX, "star": 3,
+             "weapon_id": self.gundam_weapon_id, "pilot_id": DOMON},
+            {"unit_id": OO_EX, "star": 3, "weapon_id": 0, "pilot_id": SETSUNA_TANK},
+            {"unit_id": support_id, "star": 3, "weapon_id": 0, "pilot_id": 0},
+        ]
+
+    def test_defense_boosts_carry_condition_verdict(self):
+        d = self._score(self._team(self.support_unit_id))["insights"]["defense"]
+        self.assertTrue(d["boosts"], "00强化模组应有增益条目")
+        for x in d["boosts"]:
+            self.assertIn("cond_ok", x)
+            self.assertIn(x["cond_ok"], (True, False, None))
+            self.assertIn("cond_text", x)
+            if x["conditional"]:
+                self.assertTrue(x["cond_text"], "带条件的条目必须给出条件子句")
+            else:
+                self.assertEqual(x["cond_ok"], True, "无条件条目应判为可触发")
+                self.assertEqual(x["cond_text"], "", "无条件条目不该编造条件")
+
+    def test_defense_bonus_names_conditional_abilities(self):
+        """加分项要列出条件能力的名称与条件，不再是「另有 N 条需条件的能力」。"""
+        ins = self._score(self._team(self.support_unit_id))["insights"]
+        dmg = next(x for x in ins["baseline"]["bonuses"] if x["key"] == "defense_mitigation")
+        self.assertNotIn("另有", dmg["detail"], "不应再出现笼统的「另有 N 条」描述")
+        cond = [x for x in ins["defense"]["boosts"] if x["cond_ok"] is not True]
+        if not cond:
+            self.skipTest("该机体没有需条件的增益条目")
+        self.assertTrue(
+            "条件能力（可达成）" in dmg["detail"] or "条件能力（未达成）" in dmg["detail"]
+        )
+        for x in cond[:4]:
+            self.assertIn(x["label"], dmg["detail"], "需列出条件能力的名称")
+            self.assertIn(x["cond_text"], dmg["detail"], "需列出它的触发条件")
+            if x["cond_ok"] is False:
+                self.assertIn("条件能力（未达成）", dmg["detail"])
+
+    def test_cond_clause_extracts_trigger(self):
+        self.assertEqual(
+            pairing._cond_clause("自身战意为“超一击”以上时，自身攻击力提升10%"),
+            "自身战意为“超一击”以上时",
+        )
+        self.assertEqual(
+            pairing._cond_clause("自身受到的损伤4500以下时，损伤无效"),
+            "自身受到的损伤4500以下时",
+        )
+
+    def test_unit_cond_verdict_branches(self):
+        """三种判定：机体侧条件不满足 → False；只依赖战况/敌方 → None；无条件 → True。"""
+        ctx = {"id": 123, "role": 1, "tag_ids": {1}, "series_ids": {1}}
+        self.assertIs(
+            pairing._unit_cond_verdict(
+                {"unit_tags": "999999", "target": "Owner"}, ctx, 123), False)
+        self.assertIs(
+            pairing._unit_cond_verdict(
+                {"unit_series": "999999", "target": "Owner"}, ctx, 123), False)
+        self.assertIs(
+            pairing._unit_cond_verdict(
+                {"unit_role": "2", "target": "Owner"}, ctx, 123), False)
+        self.assertIs(
+            pairing._unit_cond_verdict(
+                {"tension": "Supercharged", "target": "Owner"}, ctx, 123), None)
+        self.assertIsNone(
+            pairing._unit_cond_verdict(
+                {"weapon_attribute": "Beam", "target": "Enemy"}, ctx, 123))
+        self.assertIs(pairing._unit_cond_verdict(None, ctx, 123), True)
+
+    def test_conditional_boosts_not_marked_triggerable(self):
+        """带条件的增益条目不能被算作「无条件可触发」——它们必须落到条件区。
+
+        （实测机体能力的条件**全部**依赖战况/敌方，没有针对自身标签的，
+        所以「条件未达成」分支在现有数据里不会触发；若哪天出现，说明上游数据
+        或条件解析变了，本测试会提醒我们去看。）
+        """
+        if not hasattr(self, "support_unit_id") or not self.support_unit_id:
+            self.skipTest("缺少支援型样例")
+        d = self._score(self._team(self.support_unit_id))["insights"]["defense"]
+        for x in d["boosts"]:
+            if x["conditional"]:
+                self.assertIn(
+                    x["cond_ok"], (None, False),
+                    "带条件的条目不该被直接判成「无条件可触发」",
+                )
 
 
 if __name__ == "__main__":

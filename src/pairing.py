@@ -1623,12 +1623,54 @@ def _weapon_effects_classified(w: dict) -> list[dict]:
     return out
 
 
-def _unit_defense_insight(conn, unit_id: int) -> dict:
+def _cond_clause(desc: str) -> str:
+    """从能力描述里切出**条件子句**：「…时，效果…」→「…时」。
+
+    例：「自身战意为“超一击”以上时，自身攻击力提升10%」→「自身战意为“超一击”以上时」。
+    切不出「…时」时退回描述开头（截断），保证前端总有个可读的触发条件。
+    """
+    d = _one_line(desc)
+    m = re.search(r"^(.{2,60}?时)[，,]", d)
+    if m:
+        return m.group(1)
+    return d[:60]
+
+
+def _unit_cond_verdict(cond: dict | None, unit_ctx: dict, unit_id: int):
+    """判定机体能力条目的触发条件，返回 `True` / `False` / `None`。
+
+    - `True`  —— 无条件，或**机体侧**条件（搭乘单位的 id / 标签 / 系列 / 类型）已满足；
+    - `False` —— 机体侧条件明确不满足（这套搭配永远触发不了）；
+    - `None`  —— 只依赖战况（战意 / 特定行动 / HP·EN / 距离 / 回合 / 敌方武器属性），
+                 静态判不出来。**不能判成"未达成"** —— 例如「自身战意为超一击以上时」
+                 在战斗中是可以打出来的。
+    """
+    if not cond:
+        return True
+    parsed, _mech, _undet = _cond_parse(cond, "")
+    if parsed is None or parsed.get("side") == "enemy":
+        return None
+    r = _unit_cond_ok(parsed, unit_ctx, unit_id)
+    if r is False:
+        return False
+    if r is True:
+        return True
+    return None
+
+
+def _unit_defense_insight(conn, unit_id: int, unit_ctx: dict | None = None) -> dict:
     """机体侧：减伤 / 阈值无效 / 其它增益 / 单位技能。
 
     数值一律从 `desc` 解析 —— 实测 `trait_value` 与 `desc` 存在错位
     （如 GN力场：trait_type=79 的 trait_value 是 4500，而 desc 写的是减轻 20%）。
     """
+    if unit_ctx is None:
+        # `_unit_ctx` 依赖 `_TAG_ID`（由 `_build_pilots()` 填充）。图省事直接调
+        # `_unit_ctx` 会在缓存未建时抛 `TypeError: NoneType is not iterable`，
+        # 所以先确保缓存就绪（已建则是空操作）。
+        if _TAG_ID is None:
+            _build_pilots()
+        unit_ctx = _unit_ctx(conn, unit_id, None)
     mitigations: list[dict] = []
     thresholds: list[dict] = []
     boosts: list[dict] = []
@@ -1640,11 +1682,20 @@ def _unit_defense_insight(conn, unit_id: int) -> dict:
             desc = str(t.get("desc") or "").replace("\n", " ").strip()
             if not desc:
                 continue
+            # active_condition_set_id 是"这条带条件"的权威标志（0 = 无条件）。
+            # 注意：无条件条目也会带一个字段全空的 active_condition 对象，
+            # 所以不能用「active_condition 是否存在」来判断。
+            has_cond = bool(t.get("active_condition_set_id"))
             item = {
                 "label": r["name"],
                 "desc": desc,
                 "trait_type": t.get("trait_type"),
-                "conditional": bool(t.get("active_condition_set_id")),
+                "conditional": has_cond,
+                "cond_ok": _unit_cond_verdict(
+                    (t.get("active_condition") or {}) if has_cond else None,
+                    unit_ctx, unit_id,
+                ),
+                "cond_text": _cond_clause(desc) if has_cond else "",
                 "attrs": [i for i, word in _DMG_ATTR_WORDS if word in desc],
             }
             m = re.search(r"损伤(?:减轻|降低)\s*(\d+)%", desc)
@@ -1958,14 +2009,11 @@ def _baseline_report(collected: list[dict], attack=None, support=None,
             dbits.append("未提供按伤害类型的减伤")
         for x in defense.get("thresholds") or []:
             dbits.append(f"损伤 ≤{x.get('value')} 无效")
-        # 「必须是能触发的」：排除带 active_condition_set_id 的、
-        # 以及名字里就写明「条件」的（实测有条目 trait 无条件集但名字标了条件，
-        # 统一按"需条件"处理，避免把不能保证触发的能力当加分项）。
+        # 可触发能力 = 无条件（或机体侧条件已满足）；带条件的按判定结果**列出名称与条件**。
+        # 不再用「名称里有没有『条件』二字」这种启发式 —— 实测「（常态＆战意条件）攻击力提升」
+        # 里有一半条目其实是无条件（active_condition_set_id=0），会被一并误判成需条件。
         all_boosts = defense.get("boosts") or []
-        plain = [
-            x["label"] for x in all_boosts
-            if not x.get("conditional") and "条件" not in str(x.get("label") or "")
-        ]
+        plain = [x["label"] for x in all_boosts if x.get("cond_ok") is True]
         if defense.get("unit_skill"):
             plain.insert(0, defense["unit_skill"]["name"])
         plain = list(dict.fromkeys(plain))
@@ -1973,12 +2021,22 @@ def _baseline_report(collected: list[dict], attack=None, support=None,
             shown = plain[:4]
             tail = f" 等 {len(plain)} 项" if len(plain) > 4 else ""
             dbits.append("可触发能力：" + "、".join(shown) + tail)
-        cond_n = len(all_boosts) - len([
-            x for x in all_boosts
-            if not x.get("conditional") and "条件" not in str(x.get("label") or "")
-        ])
-        if cond_n > 0:
-            dbits.append(f"另有 {cond_n} 条需条件的能力")
+
+        cond_items = [x for x in all_boosts if x.get("cond_ok") is not True]
+        reachable = [x for x in cond_items if x.get("cond_ok") is not False]
+        blocked = [x for x in cond_items if x.get("cond_ok") is False]
+        if reachable:
+            # 用「名称 ｜ 条件」而不是给名称再套一层括号 —— 能力名本身常带
+            # 「（常态＆战意条件）」这类括号，再套会读成一串括号。
+            dbits.append("条件能力（可达成）：" + "、".join(
+                f"{x['label']} ｜ {x.get('cond_text') or '条件见说明'}"
+                for x in reachable[:4]
+            ))
+        if blocked:
+            dbits.append("条件能力（未达成）：" + "、".join(
+                f"{x['label']} ｜ 需 {x.get('cond_text') or '满足条件'}"
+                for x in blocked[:4]
+            ))
         bonuses.append({
             "key": "defense_mitigation", "label": "防御减伤 / 特殊能力",
             "unit": (defense.get("unit") or {}).get("name"), "detail": "；".join(dbits),
@@ -2373,7 +2431,7 @@ def team_score(pairs, supporter_id=None, break_step=3, bench="low",
                 effects.extend(_weapon_effects_classified(w))
             ins["support_effects"] = effects
         elif pair_role == 2:
-            d = _unit_defense_insight(conn, unit_id)
+            d = _unit_defense_insight(conn, unit_id, unit_ctx)
             d["movement"] = {
                 "base": unit_row.get("movement"),
                 "max": unit_row.get("max_movement"),

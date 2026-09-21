@@ -5514,9 +5514,9 @@ function renderTeamStatus(res) {
       } 减伤 <b>${x.value}%</b></span>`));
     (d.thresholds || []).forEach((x) => bits.push(
       `<span class="ts-kv">损伤 ≤<b>${fmtNum(x.value)}</b> 时无效</span>`));
-    // 特殊能力（只列能触发的：非条件类）
-    const boosts = (d.boosts || []).filter((x) =>
-      !x.conditional && !String(x.label || "").includes("条件"));
+    // 特殊能力：只列**可触发**的（`cond_ok` 由后端判定，前端不解析文案/名称）。
+    // 带条件但判不了的（依赖战况/敌方）由下方「加分项」逐条列出名称与条件。
+    const boosts = (d.boosts || []).filter((x) => x.cond_ok === true);
     if (boosts.length) {
       bits.push('<span class="ts-kv">可触发能力 ' + boosts.map((x) =>
         `<span class="ts-chip mech">${esc(x.label)}${x.value ? ` ${x.value}%` : ""}</span>`).join("") + "</span>");

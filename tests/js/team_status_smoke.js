@@ -105,8 +105,12 @@ const FULL = {
     ],
     thresholds: [{ label: 'GN力场 LV4', value: 4500, desc: '自身受到的损伤4500以下时，损伤无效' }],
     boosts: [
-      { label: '防御力提升 & EN恢复（单体）LV3', value: 15, conditional: false },
-      { label: '（常态＆战意条件）攻击力提升 LV2', value: 15, conditional: false },
+      { label: '防御力提升 & EN恢复（单体）LV3', value: 15, conditional: false,
+        cond_ok: true, cond_text: '' },
+      { label: '（常态＆战意条件）攻击力提升 LV2', value: 10, conditional: true,
+        cond_ok: null, cond_text: '自身战意为“超一击”以上时' },
+      { label: '（特定机体）真实之力 LV3', value: 20, conditional: true,
+        cond_ok: false, cond_text: '搭乘单位为“独角兽高达”时' },
     ],
     unit_skill: { name: '单位技能【00强化模组】', desc: '自身攻击力提升25%（1回合） 自身防御力提升15%（1回合） （每场战斗1次）' },
     pilot_mechanics: [
@@ -175,7 +179,9 @@ const FULL = {
           detail: '攻击型之外另有 1 条：防御力减少 LV3' },
         { key: 'defense_mitigation', label: '防御减伤 / 特殊能力',
           unit: '00强化模组 (最后决战式样) (EX)',
-          detail: '对 物理、光束 减伤 20%；损伤 ≤4500 无效；可触发能力：防御力提升 & EN恢复（单体）LV3' },
+          detail: '对 物理、光束 减伤 20%；损伤 ≤4500 无效；可触发能力：防御力提升 & EN恢复（单体）LV3'
+            + '；条件能力（可达成）：（常态＆战意条件）攻击力提升 LV2 ｜ 自身战意为“超一击”以上时'
+            + '；条件能力（未达成）：（特定机体）真实之力 LV3 ｜ 需 搭乘单位为“独角兽高达”时' },
       ],
     },
   },
@@ -228,9 +234,18 @@ const checks = [
   ['防御段渲染移动力', full.includes('ts-sec ts-tank') && full.includes('移动力')],
   ['防御段减伤覆盖写明伤害类型', full.includes('减伤覆盖') && full.includes('>物理</span>') && full.includes('>光束</span>')],
   ['防御段逐条写明对哪些类型减伤', full.includes('「GN力场 LV4」对 物理、光束 减伤')],
-  ['防御段列可触发能力（排除条件类）',
-    full.includes('可触发能力') && full.includes('防御力提升 &amp; EN恢复（单体）LV3')
-    && !/可触发能力[^<]*常态＆战意条件/.test(full)],
+  ['防御段可触发能力只列 cond_ok=true',
+    (() => {
+      // 只检查「可触发能力」胶囊本身（.ts-chip.mech），
+      // 不能用 /可触发能力[^<]*条件/ 这类正则 —— 加分项文案里
+      // 「可触发能力：…；条件能力（可达成）：（常态＆战意条件）…」会误命中。
+      const chips = full.match(/ts-chip mech">[^<]*/g) || [];
+      const joined = chips.join('');
+      return chips.length > 0
+        && joined.includes('防御力提升 &amp; EN恢复（单体）LV3')
+        && !joined.includes('常态＆战意条件')
+        && !joined.includes('真实之力');
+    })()],
   ['防御段阈值无效', full.includes('时无效') && full.includes('4,500')],
   ['防御段单位技能', full.includes('单位技能') && full.includes('攻击力提升25%')],
   ['驾驶员协同：括号改为「条件已满足」', full.includes('（条件已满足）') && !full.includes('触发时机待定')],
@@ -264,6 +279,12 @@ const checks = [
     !full.includes('ts-syn-detail') && !full.includes('ts-syn-def')],
   ['协同块列出加分项', full.includes('加分项 <b>2</b>') && full.includes('支援额外特效')
     && full.includes('防御减伤 / 特殊能力')],
+  ['条件能力列出名称与条件（可达成）',
+    full.includes('条件能力（可达成）：（常态＆战意条件）攻击力提升 LV2 ｜ 自身战意为“超一击”以上时')],
+  ['条件能力注明未达成',
+    full.includes('条件能力（未达成）：（特定机体）真实之力 LV3 ｜ 需 搭乘单位为“独角兽高达”时')],
+  ['不再出现「另有 N 条需条件的能力」这种笼统描述',
+    !/另有\s*\d+\s*条需条件的能力/.test(full)],
   ['缺少 role 时提示缺少', missing.includes('本队缺少攻击型机体')
     && missing.includes('本队缺少支援型机体') && missing.includes('本队缺少耐久型机体')],
   ['无 insights 时不渲染（向后兼容）', ctx.__legacy === '' && ctx.__noRes === ''],
