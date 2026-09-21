@@ -2319,6 +2319,12 @@ nav button.active::after {
   flex-basis: 100%; margin: 4px 0 0; padding-left: 16px;
   display: grid; gap: 2px;
 }
+.ts-mechs { gap: 6px; }
+.ts-chip.mech { border-color: #2b6cb0; color: #a8d4ff; background: #17324d; }
+.ts-note { margin-left: 4px; }
+.ts-syn.counted .ts-note { color: #9fe8c8; }
+.ts-syn.impossible .ts-note { color: var(--muted); }
+.ts-syn.potential .ts-note { color: var(--accent2); }
 .ts-syn.counted { color: #9fe8c8; }
 .ts-syn.potential { color: var(--text); }
 .ts-syn.impossible { color: var(--muted); opacity: .55; }

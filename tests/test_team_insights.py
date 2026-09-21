@@ -81,6 +81,10 @@ class TestInsightStructure(_TeamInsightBase):
         self.assertIsInstance(ins, dict, "team_score 应返回 insights")
         for key in ("attack", "support", "defense", "match", "missing"):
             self.assertIn(key, ins)
+        # 驾驶员协同条目必须带 verdict / note（前端据此渲染括号文案）
+        for item in ins["defense"]["pilot_synergy"]:
+            self.assertIn(item["verdict"], ("met", "unmet", "enemy", "always"))
+            self.assertIn("note", item)
 
     def test_missing_roles_are_flagged(self):
         """只有攻击型 → support / defense 应标记缺失。"""
@@ -172,20 +176,46 @@ class TestDefenseInsight(_TeamInsightBase):
         self.assertIn("攻击力提升25%", skill["desc"].replace(" ", ""))
         self.assertIn("防御力提升15%", skill["desc"].replace(" ", ""))
 
-    def test_pilot_synergy_splits_unit_ok_and_timing(self):
-        """刹那的 EX 能力：机体条件满足，但触发时机（HP 为 0%）待定。"""
+    def test_pilot_synergy_marks_met(self):
+        """机体侧条件满足的能力 → 文案「条件已满足」（不再说"时机待定"）。"""
         syn = self.d["pilot_synergy"]
         self.assertTrue(syn, "应有驾驶员协同条目")
         hp = [s for s in syn if "HP恢复7%" in s["desc"].replace(" ", "")]
         self.assertTrue(hp, f"应包含 HP恢复7% 条目，实际：{[s['desc'] for s in syn]}")
         self.assertIs(hp[0]["unit_ok"], True, "刹那 EX 能力限定 00强化模组，这里应判定为满足")
-        self.assertEqual(hp[0]["status"], "potential", "HP 为 0% 属时机条件，应标为待定")
+        self.assertEqual(hp[0]["verdict"], "met")
+        self.assertEqual(hp[0]["note"], "条件已满足")
 
-    def test_pilot_synergy_counts_unconditional(self):
+    def test_pilot_synergy_marks_met_for_mp_boost(self):
         syn = self.d["pilot_synergy"]
         mp = [s for s in syn if "MP提升5" in s["desc"].replace(" ", "")]
         self.assertTrue(mp)
-        self.assertEqual(mp[0]["status"], "counted", "机体条件满足且无时机条件 → 恒生效")
+        self.assertEqual(mp[0]["verdict"], "met")
+        self.assertEqual(mp[0]["note"], "条件已满足")
+
+    def test_pilot_mechanics_include_support_defense_count(self):
+        """「支援防御几次」要在耐久段展示出来。"""
+        mech = self.d["pilot_mechanics"]
+        labels = [m["label"] for m in mech]
+        self.assertTrue(
+            any("支援防御" in x for x in labels),
+            f"应展示支援防御次数，实际：{labels}",
+        )
+        # base_mech 里的主动技能列表不应混进机制区
+        self.assertFalse([m for m in mech if m.get("kind") == "skill"])
+
+    def test_pilot_synergy_marks_unmet_on_mismatch(self):
+        """换到非 00 系的耐久机 → 限定 00强化模组 的能力应显示「不能触发」。"""
+        r = self._score([
+            {"unit_id": 1200003900, "star": 3, "weapon_id": 0, "pilot_id": SETSUNA_TANK},
+        ])
+        syn = r["insights"]["defense"]["pilot_synergy"]
+        unmet = [s for s in syn if s["verdict"] == "unmet"]
+        self.assertTrue(unmet, f"应出现不能触发的条目，实际：{[(s['verdict'], s['desc'][:30]) for s in syn]}")
+        self.assertTrue(all(s["note"] == "不能触发" for s in unmet))
+        hp = [s for s in syn if "HP恢复7%" in s["desc"].replace(" ", "")]
+        self.assertTrue(hp)
+        self.assertEqual(hp[0]["verdict"], "unmet", "00 限定能力在非 00 机体上不能触发")
 
     def test_no_pilot_means_empty_synergy(self):
         d = self._score([

@@ -1692,13 +1692,14 @@ def _pilot_synergy(unit_ctx: dict, pilot: dict | None, unit_id: int = 0,
                    limit: int = 10) -> list[dict]:
     """驾驶员条目中与生存/耐久相关、且标注能否被本机体「点亮」。
 
-    两个维度分开表达，因为它们的确定性不同：
+    输出三个字段：
 
     · `unit_ok`  —— **机体侧条件**是否满足（搭乘单位的 id / 标签 / 系列 / 类型）。
                     这是静态可判定的，例如刹那的 EX 能力限定「搭乘单位为 00强化模组(最后决战式样)(EX)」。
-    · `status`   —— 整体判定：counted（无条件，恒生效）/ potential（机体条件满足、
-                    但触发时机取决于战斗，如「自身 HP 为 0% 时」）/ impossible（本机不满足）。
-    · `unknown`  —— potential 时说明卡在哪一步。
+    · `verdict`  —— 结论：`met`（条件已满足，本机体能触发）/ `unmet`（本机不满足 → 不能触发）
+                    / `enemy`（需视敌方配置而定）/ `always`（无条件，恒生效）。
+    · `note`     —— 直接给前端用的括号文案：条件已满足 / 不能触发 / 视敌方而定 / 空。
+    · `status`   —— 仅用于样式着色（counted / potential / impossible）。
     """
     if not pilot:
         return []
@@ -1714,31 +1715,32 @@ def _pilot_synergy(unit_ctx: dict, pilot: dict | None, unit_id: int = 0,
                     continue
                 cond = item.get("cond") or {}
                 unit_ok = _unit_cond_ok(cond, unit_ctx, unit_id)
-                # 时机类条件（战意 / 特定行动 / HP·EN·距离等）无法预先判定
-                timing = bool(
-                    cond.get("battle_action") or cond.get("tension")
-                    or item.get("mech")
-                )
-                if cond.get("side") == "enemy":
-                    status = "potential"
+                if cond is None:
+                    # 无条件：恒生效，不显示括号
+                    verdict, note, status = "always", "", "counted"
+                elif cond.get("side") == "enemy":
+                    # 是否生效取决于敌方配置，无法单方面断言
+                    verdict, note, status = "enemy", "视敌方而定", "potential"
                 elif unit_ok is False:
-                    status = "impossible"
-                elif timing:
-                    status = "potential"
+                    verdict, note, status = "unmet", "不能触发", "impossible"
                 else:
-                    status = "counted"
+                    # 机体侧条件已满足：本机体能触发（具体时机写在 desc 里，
+                    # 如「自身进行支援防御时」「自身战意为超一击时」）
+                    verdict, note, status = "met", "条件已满足", "counted"
                 out.append({
                     "source": source,
                     "ability": ab.get("name"),
                     "desc": desc,
                     "status": status,
+                    "verdict": verdict,
+                    "note": note,
                     "unit_ok": unit_ok,
                     "unknown": _one_line(item.get("mech")),
                 })
 
-    # 排序：机体条件已满足且能生效 > 条件待定（时机）> 无条件 > 本机不满足
-    rank = {"counted": 1, "potential": 0, "impossible": 2}
-    out.sort(key=lambda x: (rank.get(x["status"], 3), 0 if x["unit_ok"] else 1))
+    # 排序：无条件/条件已满足 > 视敌方而定 > 不能触发
+    rank = {"always": 0, "met": 0, "enemy": 1, "unmet": 2}
+    out.sort(key=lambda x: rank.get(x["verdict"], 3))
     return out[:limit]
 
 
@@ -1989,6 +1991,12 @@ def team_score(pairs, supporter_id=None, break_step=3, bench="low",
                 "max": unit_row.get("max_movement"),
                 "star": star,
             }
+            # 驾驶员的「基础机制」：支援防御/支援攻击次数、反击援防、额外行动等
+            # （base_mech 里也含主动技能列表，那部分另由技能区展示，这里剔除）
+            d["pilot_mechanics"] = [
+                m for m in ((pilot or {}).get("base_mech") or [])
+                if m.get("kind") != "skill"
+            ]
             d["pilot_synergy"] = _pilot_synergy(unit_ctx, pilot, unit_id)
             ins["defense"] = d
         ins_pairs.append(ins)

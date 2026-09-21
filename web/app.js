@@ -5464,12 +5464,15 @@ function renderTeamStatus(res) {
     if (d.unit_skill && d.unit_skill.desc) {
       bits.push(`<span class="ts-kv">单位技能 ${esc(d.unit_skill.desc)}</span>`);
     }
+    const mech = d.pilot_mechanics || [];
+    if (mech.length) {
+      bits.push('<span class="ts-kv ts-mechs">驾驶员机制 ' + mech.map((m) =>
+        `<span class="ts-chip mech">${esc(m.label)}</span>`).join("") + "</span>");
+    }
     const syn = (d.pilot_synergy || []).slice(0, 5);
     if (syn.length) {
       bits.push('<ul class="ts-syns">' + syn.map((p) => {
-        const tag = p.unit_ok === false
-          ? '<span class="muted">（本机不满足）</span>'
-          : (p.status === "potential" ? '<span class="muted">（触发时机待定）</span>' : "");
+        const tag = p.note ? `<span class="ts-note">（${esc(p.note)}）</span>` : "";
         return `<li class="ts-syn ${p.status}">${esc(p.desc)}${tag}</li>`;
       }).join("") + "</ul>");
     }
