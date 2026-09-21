@@ -5433,10 +5433,14 @@ function renderTeamStatus(res) {
   // ---- 支援型 ----
   if (ins.support) {
     const s = ins.support;
+    // 哪些特效对攻击型生效（在特效列表里标出来，说明"具体是哪几个特效"）
+    const usedLabels = new Set(((ins.match || {}).covered || []).map((c) => c.by));
+
     const effs = (s.effects || []).slice(0, 8).map((e) => `
       <span class="ts-eff">
         <span class="ts-chip ${e.kind === "dmg_up" ? "up" : "down"}">${esc(e.label)}${e.value ? ` ${e.value}%` : ""}</span>
         <span class="muted">射程 ${e.range_max != null ? `${e.range_min}-${e.range_max}` : "—"}${e.weapon ? ` · ${esc(e.weapon)}` : ""}</span>
+        ${usedLabels.has(e.label) ? '<span class="ts-tag used">对攻击型生效</span>' : ""}
       </span>`).join("") || '<span class="muted">无可对敌生效的武器特效</span>';
 
     // 支援次数（支援攻击 / 支援防御 / 额外行动）
@@ -5452,32 +5456,35 @@ function renderTeamStatus(res) {
         `<span class="ts-chip mech">${esc(m.label)}</span>`).join("") + "</span>");
     }
 
-    // 与攻击型最高伤害武器的类型匹配：逐项说明命中 / 未命中
+    // 伤害类型匹配：攻击型最高伤害武器的每种类型
+    //   × 支援能否加成（命中/未命中，命中要写清是哪个特效）
+    //   × 防御能否减伤（同一行右侧对照）
     let matchHtml = "";
     const atk = ins.attack;
-    if (ins.match) {
-      const m = ins.match;
+    const m = ins.match;
+    if (m) {
       const cls = m.total === 0 ? "bad" : (m.hit_count === m.total ? "ok" : (m.hit_count ? "part" : "bad"));
-      const atkW = (atk && atk.best_weapon) || {};
       const atkT = (m.attack_attrs || []).map((t) => TS_DMG_TYPES[t] || t).join(" · ") || "—";
-      const rows = [
-        ...(m.covered || []).map((c) =>
-          `<span class="ts-mrow"><span class="ts-chip ok">命中 ${TS_DMG_TYPES[c.type] || c.type}</span>` +
-          `<span class="muted">← 支援「${esc(c.by)}」</span></span>`),
-        ...(m.missed || []).map((c) =>
-          `<span class="ts-mrow"><span class="ts-chip bad">未命中 ${TS_DMG_TYPES[c.type] || c.type}</span>` +
-          `<span class="muted">支援未提供「${TS_DMG_TYPES[c.type] || c.type}损伤提升」</span></span>`),
-      ].join("");
+      const supT = (s.dmg_up_types || []).map((t) => TS_DMG_TYPES[t] || t).join(" · ") || "无";
+      const atkName = m.attack_weapon || ((atk && atk.best_weapon) || {}).name || "—";
+      const rows = (m.rows || []).map((r) => {
+        const name = TS_DMG_TYPES[r.type] || ("#" + r.type);
+        const supCell = r.support_hit
+          ? `<span class="ts-chip ok">支援命中</span><span class="muted">← ${esc((r.support_by || []).join("、"))}</span>`
+          : `<span class="ts-chip bad">支援未命中</span><span class="muted">缺少「${name}损伤提升」</span>`;
+        const dfnCell = r.defense_hit
+          ? `<span class="ts-chip dcut">防御减伤</span><span class="muted">← ${esc((r.defense_by || []).join("、"))}</span>`
+          : `<span class="ts-chip mut">防御未减伤</span>`;
+        return `<span class="ts-mrow"><b class="ts-mtype">${name}</b>${supCell}${dfnCell}</span>`;
+      }).join("");
       matchHtml = `<div class="ts-match ${cls}">
-          <span class="ts-mline">攻击型最高伤害武器 <b>${esc(atkW.name || "—")}</b>（${atkT}）</span>
-          <span class="ts-mline">支援提供 ${(s.dmg_up_types || []).map((t) => TS_DMG_TYPES[t] || t).join(" · ") || "—"}损伤提升
-            · 匹配 <b>${m.hit_count}/${m.total}</b></span>
+          <span class="ts-mline">伤害类型匹配 · 攻击型最高伤害武器 <b>${esc(atkName)}</b>（${atkT}）</span>
+          <span class="ts-mline">支援提供 ${supT}损伤提升 · 命中 <b>${m.support_hit_count}/${m.support_total}</b>
+            ｜ 防御减伤 <b>${m.defense_hit_count}/${m.defense_total}</b></span>
           <span class="ts-mrows">${rows}</span>
         </div>`;
     } else if (atk && (atk.best_weapon || {}).attrs && !(atk.best_weapon.attrs || []).length) {
       matchHtml = '<div class="ts-match bad">攻击型最高伤害武器没有伤害类型，无法匹配</div>';
-    } else if (!(s.dmg_up_types || []).length) {
-      matchHtml = '<div class="ts-match">支援未提供「损伤提升」类特效，不影响攻击型伤害类型</div>';
     }
 
     secs.push(tsSection("sup", `支援型 · ${esc((s.units || []).map((u) => u.name).join("、"))}`,
@@ -5492,11 +5499,28 @@ function renderTeamStatus(res) {
   if (ins.defense) {
     const d = ins.defense;
     const mv = d.movement || {};
+    const mits = d.mitigations || [];
+    const covTypes = [...new Set(mits.flatMap((x) => x.attrs || []))].sort((a, b) => a - b);
     const bits = [`<span class="ts-kv">移动力 <b>${mv.max ?? mv.base ?? "—"}</b></span>`];
-    (d.mitigations || []).forEach((x) => bits.push(
-      `<span class="ts-kv">${esc(x.label)} 减伤 <b>${x.value}%</b> ${tsDmgChips(x.attrs)}</span>`));
+    // 减伤覆盖：直接写明对哪些伤害类型有减伤
+    if (mits.length) {
+      bits.push(`<span class="ts-kv">减伤覆盖 ${covTypes.length
+        ? tsDmgChips(covTypes, "dcut")
+        : '<span class="muted">未指定伤害类型</span>'}</span>`);
+    }
+    mits.forEach((x) => bits.push(
+      `<span class="ts-kv muted">「${esc(x.label)}」对 ${
+        (x.attrs || []).map((t) => TS_DMG_TYPES[t] || t).join("、") || "—"
+      } 减伤 <b>${x.value}%</b></span>`));
     (d.thresholds || []).forEach((x) => bits.push(
       `<span class="ts-kv">损伤 ≤<b>${fmtNum(x.value)}</b> 时无效</span>`));
+    // 特殊能力（只列能触发的：非条件类）
+    const boosts = (d.boosts || []).filter((x) =>
+      !x.conditional && !String(x.label || "").includes("条件"));
+    if (boosts.length) {
+      bits.push('<span class="ts-kv">可触发能力 ' + boosts.map((x) =>
+        `<span class="ts-chip mech">${esc(x.label)}${x.value ? ` ${x.value}%` : ""}</span>`).join("") + "</span>");
+    }
     if (d.unit_skill && d.unit_skill.desc) {
       bits.push(`<span class="ts-kv">单位技能 ${esc(d.unit_skill.desc)}</span>`);
     }
@@ -5528,23 +5552,35 @@ function renderTeamStatus(res) {
 /* 整队协同结论 + 及格线体检 */
 const TS_SYN_CLS = { full: "ok", partial: "part", none: "bad", neutral: "", unknown: "" };
 
+/* 及格线条目：后端已给出可直接读的 detail（如「全队移动力均为 5，达到及格线」），
+   这里优先展示它，而不是干巴巴的 "5/5"。bonus 为加分项标记。 */
+function tsBaselineChip(x) {
+  const text = x.detail
+    ? `${x.label}：${x.detail}`
+    : `${x.label} ${x.actual ?? "—"}${x.need != null ? "/" + x.need : ""}`;
+  const title = (x.units || []).map((u) => `${u.name} ${u.value}`).join("｜") || (x.unit || "");
+  return `<span class="ts-chip ${x.ok ? "ok" : "bad"}${x.bonus ? " bonus" : ""}" title="${esc(title)}">${
+    x.ok ? "✓" : "✗"} ${esc(text)}</span>`;
+}
+
 function tsSynergyBlock(ins) {
   const sy = ins && ins.synergy;
   if (!sy) return "";
   const cls = TS_SYN_CLS[sy.level] || "";
   const b = sy.baseline || {};
-  const items = (b.items || []).map((x) => {
-    const need = x.need != null ? `/${x.need}` : "";
-    const extra = x.counter_guard ? "（反击援防）" : "";
-    const cnt = x.key === "defense_support" && x.counter_guard && !x.actual ? "—" : x.actual;
-    return `<span class="ts-chip ${x.ok ? "ok" : "bad"}" title="${esc(x.unit || "")}${esc(extra)}">${
-      x.ok ? "✓" : "✗"} ${esc(x.label)} ${cnt}${need}</span>`;
-  }).join("");
+  const items = (b.items || []).map(tsBaselineChip).join("");
+  const bonuses = (b.bonuses || []).map((x) =>
+    `<span class="ts-chip bonusall" title="${esc(x.unit || "")}">＋ ${esc(x.label)}：${
+      esc(x.detail || "")}</span>`).join("");
+  const dLine = sy.defense_detail
+    ? `<span class="ts-kv ts-syn-def">${esc(sy.defense_detail)}</span>` : "";
   return `<div class="ts-sec ts-syn">
       <div class="ts-head"><span class="ts-dot"></span>整队协同 · ${esc(sy.title)}</div>
       <div class="ts-body">
         <span class="ts-kv ts-syn-detail ${cls}">${esc(sy.detail)}</span>
+        ${dLine}
         ${items ? `<span class="ts-kv ts-syn-base">及格线 <b>${b.passed}/${b.total}</b>${items}</span>` : ""}
+        ${bonuses ? `<span class="ts-kv ts-syn-bonus">加分项 <b>${b.bonus_count || 0}</b>${bonuses}</span>` : ""}
       </div>
     </div>`;
 }

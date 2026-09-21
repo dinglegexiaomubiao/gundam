@@ -2285,6 +2285,20 @@ nav button.active::after {
 .ts-sec.ts-tank { border-left-color: var(--type-tank); }
 .ts-sec.ts-empty { background: transparent; border-left-style: dashed; }
 .ts-sec.ts-syn { border-left-color: var(--accent); }
+.ts-chip.bonus { border-color: #7a5c1f; color: var(--accent2); }
+.ts-chip.dcut { border-color: #2b6cb0; color: #a8d4ff; background: #17324d; }
+.ts-chip.mut { opacity: .6; }
+.ts-tag.used { margin-left: 4px; font-size: 11px; color: #9fe8c8; }
+.ts-mtype { min-width: 36px; color: var(--text); font-weight: 700; }
+.ts-syn-def { flex-basis: 100%; color: var(--muted); }
+.ts-syn-bonus {
+  flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 4px 8px; margin-top: 4px;
+}
+.ts-chip.bonusall {
+  max-width: 100%; white-space: normal; line-height: 1.6;
+  border-color: #7a5c1f; color: var(--accent2); background: #3a2c14;
+}
 .ts-syn-detail { flex-basis: 100%; line-height: 1.75; }
 .ts-syn-detail.ok { color: #9fe8c8; }
 .ts-syn-detail.part { color: var(--accent2); }

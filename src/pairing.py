@@ -1526,6 +1526,19 @@ def _weapon_attr_ids(w: dict) -> list[int]:
     return sorted(out)
 
 
+def _unit_attr_ids(conn, unit_id: int) -> list[int]:
+    """该机体全部**非 MAP** 武器的伤害类型并集（升序）。"""
+    out: set[int] = set()
+    for w in conn.execute(
+        "SELECT * FROM unit_weapon WHERE unit_id = ? ORDER BY sort", (unit_id,)
+    ):
+        w = dict(w)
+        if _has_map_range(w):
+            continue
+        out.update(_weapon_attr_ids(w))
+    return sorted(out)
+
+
 def _range_info(conn, unit_id: int) -> dict:
     """该机体的射程概览（含/不含 MAP 两个口径）。"""
     rows = [dict(r) for r in conn.execute(
@@ -1784,57 +1797,198 @@ def _has_counter_guard(mechanics) -> bool:
     return any(m.get("kind") == "counter_guard" for m in (mechanics or []))
 
 
-def _baseline_report(collected: list[dict]) -> dict:
-    """按及格线逐项体检。移动力对全队，其余按角色。"""
-    items: list[dict] = []
+def _effect_used_for(effects, want) -> tuple[list, list]:
+    """把支援特效切成「对攻击型生效」与「额外」两组。
 
+    按位置切分（不用 `in` 判断），避免列表里存在内容相同的特效时误判。
+    """
+    want = set(want or [])
+    used, extra = [], []
+    for e in effects or []:
+        is_up = e.get("kind") == "dmg_up"
+        if is_up and (set(e.get("types") or []) & want):
+            used.append(e)
+        else:
+            extra.append(e)
+    return used, extra
+
+
+def _eff_names(effects) -> str:
+    return "、".join(sorted({str(e.get("label") or "—") for e in (effects or [])}))
+
+
+def _baseline_report(collected: list[dict], attack=None, support=None,
+                     defense=None) -> dict:
+    """按及格线逐项体检，并给出加分项。
+
+    - **移动力**：全队合并为一条（逐台明细放 `units`）——原先每台一条，卡片上
+      会出现一排「移动力 5/5」，无从看出"全队都达标"这件事。
+    - **支援型特效射程**：只看**对攻击型生效**的那些特效的射程（没有则退回该机
+      全部损伤提升特效），而不是机体最大射程——射程再远但打不出对应伤害类型也没用。
+    - **加分项**（`bonuses`）：支援额外特效（含命中其它队友的）、防御减伤覆盖与
+      可触发的特殊能力。它们不参与及格线计数，只作加分/参考。
+    """
+    items: list[dict] = []
+    bonuses: list[dict] = []
+
+    want = ((attack or {}).get("best_weapon") or {}).get("attrs") or []
+    sup = next((c for c in collected if c["role"] == 3), None)
+    effs = (support or {}).get("effects") or []
+    used_effs, extra_effs = _effect_used_for(effs, want)
+
+    # ---------------- 移动力：全队一条 ----------------
+    mv_need = TEAM_BASELINE["movement"]
+    mv_units: list[dict] = []
     for c in collected:
         mv = (c.get("movement_max") if c.get("movement_max") is not None
               else c.get("movement_base"))
         if mv is None:
             continue
+        mv_units.append({"name": c["unit"]["name"], "value": int(mv)})
+    if mv_units:
+        vals = [u["value"] for u in mv_units]
+        worst, best = min(vals), max(vals)
+        fails = [u for u in mv_units if u["value"] < mv_need]
+        ok = not fails
+        if ok and len(set(vals)) == 1:
+            detail = f"全队移动力均为 {vals[0]}，达到及格线"
+        else:
+            detail = f"全队移动力 {worst}～{best}，" + ("达到及格线" if ok else "未达标")
+        if fails:
+            detail += "：" + "、".join(f"{u['name']} {u['value']}" for u in fails)
+        if best > mv_need:
+            detail += f"；最高 {best}（加分）"
         items.append({
-            "key": "movement", "label": "移动力",
-            "unit": c["unit"]["name"], "need": TEAM_BASELINE["movement"],
-            "actual": mv, "ok": mv >= TEAM_BASELINE["movement"],
+            "key": "movement", "label": "移动力", "unit": "全队",
+            "need": mv_need, "actual": worst, "best": best,
+            "units": mv_units, "ok": ok, "bonus": best > mv_need,
+            "detail": detail,
         })
 
-    sup = next((c for c in collected if c["role"] == 3), None)
+    # ---------------- 支援型 ----------------
     if sup is not None:
-        rng = (sup.get("range") or {}).get("max_nomap")
-        if rng is not None:
+        scope = used_effs or [e for e in effs if e.get("kind") == "dmg_up"] or effs
+        rngs = [e.get("range_max") for e in scope if e.get("range_max") is not None]
+        if rngs:
+            need = TEAM_BASELINE["support_range"]
+            rng = max(rngs)
+            ok = rng >= need
+            names = _eff_names(scope)
+            src = (f"对攻击型生效的特效「{names}」" if used_effs
+                   else f"支援特效「{names}」")
+            detail = f"{src}射程 {rng}，" + ("达到及格线" if ok else f"未达 {need}")
+            if rng > need:
+                detail += "（加分）"
             items.append({
-                "key": "support_range", "label": "支援型武器射程",
-                "unit": sup["unit"]["name"], "need": TEAM_BASELINE["support_range"],
-                "actual": rng, "ok": rng >= TEAM_BASELINE["support_range"],
+                "key": "support_range", "label": "支援型特效射程",
+                "unit": sup["unit"]["name"], "need": need, "actual": rng,
+                "ok": ok, "bonus": rng > need, "detail": detail,
             })
-        # 注意：这里的 collected 条目里 pilot 已精简为 {id,name,rarity}，
+        # 注意：collected 条目里的 pilot 已精简为 {id,name,rarity}，
         # 支援次数要用循环里预先算好的 support_counts，不能拿精简 pilot 重算。
-        cnt = ((sup.get("support_counts") or {}).get("attack") or {}).get("count", 0)
+        acnt = ((sup.get("support_counts") or {}).get("attack") or {}).get("count", 0)
+        aneed = TEAM_BASELINE["support_attack"]
+        aok = acnt >= aneed
+        adetail = f"支援攻击 {acnt} 次，" + ("达到及格线" if aok else f"未达 {aneed} 次")
+        if acnt > aneed:
+            adetail += "（加分）"
         items.append({
             "key": "support_attack", "label": "支援攻击次数",
             "unit": (sup.get("pilot") or {}).get("name") or "未选驾驶员",
-            "need": TEAM_BASELINE["support_attack"],
-            "actual": cnt, "ok": cnt >= TEAM_BASELINE["support_attack"],
+            "need": aneed, "actual": acnt, "ok": aok, "bonus": acnt > aneed,
+            "detail": adetail,
         })
 
+    # ---------------- UR 防御型 ----------------
     dfn = next((c for c in collected if c["role"] == 2), None)
     if dfn is not None and (dfn.get("unit") or {}).get("rarity") == 5:
         pilot = dfn.get("pilot")
-        cnt = ((dfn.get("support_counts") or {}).get("defense") or {}).get("count", 0)
+        dneed = TEAM_BASELINE["defense_support_defense"]
+        dcnt = ((dfn.get("support_counts") or {}).get("defense") or {}).get("count", 0)
         counter = _has_counter_guard(dfn.get("pilot_mechanics"))
-        need = TEAM_BASELINE["defense_support_defense"]
+        dok = dcnt >= dneed or counter
+        if counter and dcnt >= dneed:
+            ddetail = f"支援防御 {dcnt} 次且能反击援防，达到及格线（加分）"
+        elif counter:
+            ddetail = "能反击援防，达到及格线"
+        elif dok:
+            ddetail = f"支援防御 {dcnt} 次，达到及格线"
+        else:
+            ddetail = f"支援防御 {dcnt} 次且无反击援防，未达 {dneed} 次"
         items.append({
             "key": "defense_support", "label": "UR 防御型（支援防御 / 反击援防）",
             "unit": (pilot or {}).get("name") or "未选驾驶员",
-            "need": need, "actual": cnt, "counter_guard": counter,
-            "ok": cnt >= need or counter,
-            "note": "支援防御≥2 或 能反击援防",
+            "need": dneed, "actual": dcnt, "counter_guard": counter,
+            "ok": dok, "bonus": bool(counter and dcnt >= dneed),
+            "note": "支援防御≥2 或 能反击援防", "detail": ddetail,
+        })
+
+    # ---------------- 加分项 ----------------
+    if sup is not None and extra_effs:
+        bonuses.append({
+            "key": "support_extra", "label": "支援额外特效",
+            "unit": sup["unit"]["name"],
+            "detail": f"攻击型之外另有 {len(extra_effs)} 条：{_eff_names(extra_effs)}",
+        })
+        others = [c for c in collected if c.get("role") != 1]
+        hits: set[str] = set()
+        for e in extra_effs:
+            et = set(e.get("types") or [])
+            if not et:
+                continue
+            for c in others:
+                inter = et & set(c.get("unit_attrs") or [])
+                if inter:
+                    hits.add(f"「{e.get('label')}」→ {c['unit']['name']}（{_type_names(inter)}）")
+        if hits:
+            bonuses.append({
+                "key": "support_extra_match", "label": "额外特效命中队友",
+                "detail": "；".join(sorted(hits)),
+            })
+
+    if defense:
+        mits = defense.get("mitigations") or []
+        tset = sorted({t for m in mits for t in (m.get("attrs") or [])})
+        vals = sorted({m.get("value") for m in mits if m.get("value")})
+        dbits: list[str] = []
+        if tset:
+            v = "、".join(f"{x}%" for x in vals)
+            dbits.append(f"对 {_type_names(tset)} 减伤" + (f" {v}" if v else ""))
+        else:
+            dbits.append("未提供按伤害类型的减伤")
+        for x in defense.get("thresholds") or []:
+            dbits.append(f"损伤 ≤{x.get('value')} 无效")
+        # 「必须是能触发的」：排除带 active_condition_set_id 的、
+        # 以及名字里就写明「条件」的（实测有条目 trait 无条件集但名字标了条件，
+        # 统一按"需条件"处理，避免把不能保证触发的能力当加分项）。
+        all_boosts = defense.get("boosts") or []
+        plain = [
+            x["label"] for x in all_boosts
+            if not x.get("conditional") and "条件" not in str(x.get("label") or "")
+        ]
+        if defense.get("unit_skill"):
+            plain.insert(0, defense["unit_skill"]["name"])
+        plain = list(dict.fromkeys(plain))
+        if plain:
+            shown = plain[:4]
+            tail = f" 等 {len(plain)} 项" if len(plain) > 4 else ""
+            dbits.append("可触发能力：" + "、".join(shown) + tail)
+        cond_n = len(all_boosts) - len([
+            x for x in all_boosts
+            if not x.get("conditional") and "条件" not in str(x.get("label") or "")
+        ])
+        if cond_n > 0:
+            dbits.append(f"另有 {cond_n} 条需条件的能力")
+        bonuses.append({
+            "key": "defense_mitigation", "label": "防御减伤 / 特殊能力",
+            "unit": (defense.get("unit") or {}).get("name"), "detail": "；".join(dbits),
         })
 
     passed = sum(1 for x in items if x["ok"])
     return {
-        "items": items, "passed": passed, "total": len(items),
+        "items": items, "bonuses": bonuses,
+        "passed": passed, "total": len(items),
+        "bonus_count": len([x for x in items if x.get("bonus")]) + len(bonuses),
         "ok": bool(items) and passed == len(items),
     }
 
@@ -1845,51 +1999,82 @@ def _type_names(ids) -> str:
     return "、".join(DAMAGE_TYPE_NAMES.get(i, f"#{i}") for i in arr)
 
 
-def _synergy_verdict(attack, support, match) -> dict:
-    """整队协同结论：支援的损伤提升能否覆盖攻击型最高伤害武器的伤害类型。"""
+def _defense_match_detail(match) -> str:
+    """防御型对攻击武器各伤害类型的覆盖情况（供协同块单独一行展示）。"""
+    rows = (match or {}).get("rows") or []
+    if not rows:
+        return ""
+    hit = [r for r in rows if r.get("defense_hit")]
+    miss = [r for r in rows if not r.get("defense_hit")]
+    if not hit:
+        return f"防御型对 {_type_names([r['type'] for r in miss])} 均无减伤"
+    s = f"防御型对 {_type_names([r['type'] for r in hit])} 有减伤"
+    if miss:
+        s += f"，未覆盖 {_type_names([r['type'] for r in miss])}"
+    return s
+
+
+def _synergy_verdict(attack, support, match, defense=None) -> dict:
+    """整队协同结论。
+
+    把**攻击型的伤害类型**同时对上两侧：
+      · 支援型 —— 提供了哪些「损伤提升」，能不能加成出去；
+      · 防御型 —— 对哪些伤害类型有减伤，能不能扛住同类伤害。
+    支援的覆盖度决定 `level`，防御的覆盖度放在 `defense_detail`（性质不同，不混算）。
+    """
+    sy: dict = {}
     if attack is None and support is None:
-        return {"level": "unknown", "title": "无法判定",
-                "detail": "本队缺少攻击型与支援型机体，无法判定协同"}
-    if attack is None:
-        return {"level": "unknown", "title": "无法判定",
-                "detail": "本队缺少攻击型机体，无法判定支援是否命中"}
-    if support is None:
-        return {"level": "unknown", "title": "无支援型",
-                "detail": "本队缺少支援型机体，攻击型只能靠自身伤害类型"
+        sy = {"level": "unknown", "title": "无法判定",
+              "detail": "本队缺少攻击型与支援型机体，无法判定协同"}
+    elif attack is None:
+        sy = {"level": "unknown", "title": "无法判定",
+              "detail": "本队缺少攻击型机体，无法判定支援是否命中"}
+    elif support is None:
+        sy = {"level": "unknown", "title": "无支援型",
+              "detail": "本队缺少支援型机体，攻击型只能靠自身伤害类型"}
+    else:
+        atk_name = (attack.get("best_weapon") or {}).get("name") or "最高伤害武器"
+        atk_t = _type_names((attack.get("best_weapon") or {}).get("attrs"))
+        total = ((match or {}).get("total")
+                 or len((attack.get("best_weapon") or {}).get("attrs") or []))
 
-        }
-    if not support.get("dmg_up_types"):
-        return {"level": "neutral", "title": "支援无增伤特效",
-                "detail": "支援型未提供「损伤提升」类特效，不影响攻击型伤害类型"}
+        if not support.get("dmg_up_types"):
+            # 一条增伤特效都没有 —— 要点名缺的是哪几种损伤提升，而不是笼统说「无特效」
+            sy = {
+                "level": "neutral", "title": "支援无增伤特效",
+                "detail": (f"支援型未提供「损伤提升」类特效；攻击型最高伤害武器"
+                           f"「{atk_name}」为 {atk_t}，缺少 {atk_t} 损伤提升：0/{total}"),
+            }
+        elif match is None:
+            sy = {"level": "unknown", "title": "无法判定",
+                  "detail": f"攻击型最高伤害武器为 {atk_t}，但支援增益数据缺失"}
+        else:
+            hit, tot = match["hit_count"], match["total"]
+            hit_t = _type_names([c["type"] for c in match["covered"]])
+            miss_t = _type_names([c["type"] for c in match["missed"]])
+            sup_t = _type_names(support.get("dmg_up_types"))
+            if hit == 0:
+                sy = {
+                    "level": "none", "title": "支援未命中",
+                    "detail": (f"支援提供 {sup_t}损伤提升，但攻击型最高伤害武器"
+                               f"「{atk_name}」为 {atk_t}，无法匹配：0/{tot}"
+                               f"（缺少 {atk_t} 损伤提升）"),
+                }
+            elif hit < tot:
+                sy = {
+                    "level": "partial", "title": "部分匹配",
+                    "detail": (f"支援提供 {sup_t}损伤提升，攻击武器「{atk_name}」为 {atk_t}；"
+                               f"命中 {hit_t}，未命中 {miss_t}：{hit}/{tot}"),
+                }
+            else:
+                sy = {
+                    "level": "full", "title": "完全匹配",
+                    "detail": (f"支援提供 {sup_t}损伤提升，完全覆盖攻击武器"
+                               f"「{atk_name}」的 {atk_t}：{tot}/{tot}"),
+                }
 
-    atk_name = (attack.get("best_weapon") or {}).get("name") or "最高伤害武器"
-    atk_t = _type_names((attack.get("best_weapon") or {}).get("attrs"))
-    sup_t = _type_names(support.get("dmg_up_types"))
-    if match is None:
-        return {"level": "unknown", "title": "无法判定",
-                "detail": f"攻击型最高伤害武器为 {atk_t}，但支援增益数据缺失"}
-
-    hit, total = match["hit_count"], match["total"]
-    hit_t = _type_names([c["type"] for c in match["covered"]])
-    miss_t = _type_names([c["type"] for c in match["missed"]])
-
-    if hit == 0:
-        return {
-            "level": "none", "title": "支援未命中",
-            "detail": (f"支援提供 {sup_t}损伤提升，但攻击型最高伤害武器"
-                       f"「{atk_name}」为 {atk_t}，无法匹配：0/{total}"),
-        }
-    if hit < total:
-        return {
-            "level": "partial", "title": "部分匹配",
-            "detail": (f"支援提供 {sup_t}损伤提升，攻击武器「{atk_name}」为 {atk_t}；"
-                       f"命中 {hit_t}，未命中 {miss_t}：{hit}/{total}"),
-        }
-    return {
-        "level": "full", "title": "完全匹配",
-        "detail": (f"支援提供 {sup_t}损伤提升，完全覆盖攻击武器「{atk_name}」的"
-                   f"{atk_t}：{total}/{total}"),
-    }
+    sy["defense_detail"] = _defense_match_detail(match)
+    return sy
 
 
 def _build_team_insights(conn, collected: list[dict]) -> dict:
@@ -1936,27 +2121,47 @@ def _build_team_insights(conn, collected: list[dict]) -> dict:
             "pilot_mechanics": first.get("pilot_mechanics") or [],
         }
 
-    # ---- 匹配判定：支援提供的损伤提升类型 vs 攻击型最高伤害武器的伤害类型 ----
+    # ---- 匹配判定：攻击型最高伤害武器的伤害类型
+    #      × 支援型提供的损伤提升（能否加成）
+    #      × 防御型的减伤覆盖（能否扛住同类伤害）
     match = None
-    if attack and support and support["dmg_up_types"]:
-        want = attack["best_weapon"]["attrs"]
-        covered = []
-        for t in want:
-            by = [e for e in effects_all
-                  if e["kind"] == "dmg_up" and t in (e.get("types") or [])]
-            if by:
-                covered.append({"type": t, "by": by[0]["label"]})
-        hit = {c["type"] for c in covered}
-        match = {
-            "attack_attrs": want,
-            "covered": covered,
-            "missed": [{"type": t} for t in want if t not in hit],
-            "hit_count": len(covered),
-            "total": len(want),
-        }
+    if attack and support and attack.get("best_weapon"):
+        want = list(attack["best_weapon"].get("attrs") or [])
+        if want:
+            sup_up = [e for e in effects_all if e.get("kind") == "dmg_up"]
+            dfn_mits = (defense or {}).get("mitigations") or []
+            rows: list[dict] = []
+            for t in want:
+                s_by = [str(e.get("label") or "—") for e in sup_up
+                        if t in (e.get("types") or [])]
+                d_by = [
+                    str(m.get("label") or "—")
+                    + (f" 减伤 {m['value']}%" if m.get("value") else "")
+                    for m in dfn_mits if t in (m.get("attrs") or [])
+                ]
+                rows.append({
+                    "type": t,
+                    "support_hit": bool(s_by), "support_by": s_by,
+                    "defense_hit": bool(d_by), "defense_by": d_by,
+                })
+            hit = [r for r in rows if r["support_hit"]]
+            match = {
+                "attack_attrs": want,
+                "attack_weapon": attack["best_weapon"].get("name"),
+                "rows": rows,
+                "covered": [{"type": r["type"], "by": r["support_by"][0]} for r in hit],
+                "missed": [{"type": r["type"]} for r in rows if not r["support_hit"]],
+                "hit_count": len(hit), "total": len(want),
+                "support_hit_count": len(hit), "support_total": len(want),
+                "defense_hit_count": sum(1 for r in rows if r["defense_hit"]),
+                "defense_total": len(want),
+                "missing_types": [r["type"] for r in rows if not r["support_hit"]],
+            }
 
-    synergy = _synergy_verdict(attack, support, match)
-    synergy["baseline"] = _baseline_report(collected)
+    baseline = _baseline_report(collected, attack=attack, support=support,
+                                defense=defense)
+    synergy = _synergy_verdict(attack, support, match, defense)
+    synergy["baseline"] = baseline
 
     return {
         "attack": attack,
@@ -1964,7 +2169,7 @@ def _build_team_insights(conn, collected: list[dict]) -> dict:
         "defense": defense,
         "match": match,
         "synergy": synergy,
-        "baseline": synergy["baseline"],
+        "baseline": baseline,
         "missing": {
             "attack": attack is None,
             "support": support is None,
@@ -2127,6 +2332,9 @@ def team_score(pairs, supporter_id=None, break_step=3, bench="low",
             "movement_max": unit_row.get("max_movement"),
             "pilot_mechanics": _pilot_mechanics(pilot),
             "support_counts": _support_counts(pilot),
+            # 该机全部**非 MAP** 武器的伤害类型并集：用于判断支援/防御特效
+            # 能否作用到这支队伍里的其它机体（加分项判定）。
+            "unit_attrs": _unit_attr_ids(conn, unit_id),
         }
         if pair_role == 1 and pilot:
             best = None

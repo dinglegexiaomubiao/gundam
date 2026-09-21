@@ -259,6 +259,19 @@ class TestSupportAndMatch(_TeamInsightBase):
         # 命中项要能追溯到来源特效
         for c in m["covered"]:
             self.assertTrue(c.get("by"))
+        # 逐类型行：支援与防御各一列，都要有明确布尔值与来源
+        self.assertEqual(len(m["rows"]), m["total"])
+        for r in m["rows"]:
+            self.assertIn(r["type"], (1, 2, 3))
+            self.assertIn("support_hit", r)
+            self.assertIn("defense_hit", r)
+            self.assertEqual(r["support_hit"], bool(r["support_by"]))
+            self.assertEqual(r["defense_hit"], bool(r["defense_by"]))
+        self.assertEqual(m["support_hit_count"], m["hit_count"])
+        self.assertEqual(m["support_total"], m["total"])
+        self.assertEqual(m["defense_total"], m["total"])
+        self.assertEqual(m["missing_types"], [c["type"] for c in m["missed"]])
+        self.assertEqual(m["attack_weapon"], self.ins["attack"]["best_weapon"]["name"])
 
 
 class TestSynergyAndBaseline(_TeamInsightBase):
@@ -328,15 +341,86 @@ class TestSynergyAndBaseline(_TeamInsightBase):
         self.assertIn("defense_support", keys)
         self.assertEqual(b["passed"], sum(1 for x in b["items"] if x["ok"]))
         self.assertEqual(b["total"], len(b["items"]))
-        # 移动力对全队逐一检查（3 台机体 → 至少 3 条）
-        self.assertGreaterEqual(len([x for x in b["items"] if x["key"] == "movement"]), 3)
+        # 移动力合并为一条，逐台明细放 units
+        mv = [x for x in b["items"] if x["key"] == "movement"]
+        self.assertEqual(len(mv), 1, "移动力应聚合成一条（不再每台一条）")
+        self.assertGreaterEqual(len(mv[0]["units"]), 3, "应保留逐台明细")
+        self.assertEqual(mv[0]["unit"], "全队")
+        self.assertTrue(mv[0]["detail"], "应给出可直接展示的说明句")
 
     def test_baseline_movement_threshold_is_5(self):
         b = self._score(self._team(self.support_unit_id))["insights"]["baseline"]
-        for x in b["items"]:
-            if x["key"] == "movement":
-                self.assertEqual(x["need"], 5)
-                self.assertEqual(x["ok"], x["actual"] >= 5)
+        mv = next(x for x in b["items"] if x["key"] == "movement")
+        self.assertEqual(mv["need"], 5)
+        # actual = 全队最差值；ok 由「是否有人未达 5」决定
+        worst = min(u["value"] for u in mv["units"])
+        self.assertEqual(mv["actual"], worst)
+        self.assertEqual(mv["ok"], worst >= 5)
+        self.assertEqual(mv["ok"], all(u["value"] >= 5 for u in mv["units"]))
+        self.assertEqual(mv["bonus"], max(u["value"] for u in mv["units"]) > 5)
+        if mv["ok"]:
+            self.assertIn("达到及格线", mv["detail"])
+
+    def test_support_range_scoped_to_effects_useful_for_attack(self):
+        """支援射程取「对攻击型生效」的特效射程，而不是机体最大射程。"""
+        b = self._score(self._team(self.support_unit_id))["insights"]["baseline"]
+        item = next(x for x in b["items"] if x["key"] == "support_range")
+        self.assertEqual(item["need"], 5)
+        self.assertEqual(item["ok"], item["actual"] >= 5)
+        self.assertEqual(item["bonus"], item["actual"] > 5)
+        self.assertIn("射程", item["detail"])
+        self.assertIn("及格线", item["detail"])
+
+    def test_baseline_bonuses_present(self):
+        """加分项：防御减伤覆盖/可触发能力，以及在攻击型之外的额外特效。"""
+        b = self._score(self._team(self.support_unit_id))["insights"]["baseline"]
+        keys = {x["key"] for x in b["bonuses"]}
+        self.assertIn("defense_mitigation", keys)
+        dmg = next(x for x in b["bonuses"] if x["key"] == "defense_mitigation")
+        self.assertIn("减伤", dmg["detail"])
+        # 「必须是能触发的」：条件类能力不能出现在可触发清单里
+        if "可触发能力" in dmg["detail"]:
+            seg = dmg["detail"].split("可触发能力：", 1)[1].split("；")[0]
+            self.assertNotIn("条件", seg)
+        self.assertEqual(
+            b["bonus_count"],
+            len([x for x in b["items"] if x.get("bonus")]) + len(b["bonuses"]),
+        )
+
+    def test_synergy_carries_defense_detail(self):
+        """匹配要同时纳入防御型：给出防御覆盖/未覆盖的伤害类型。"""
+        sy = self._score(self._team(self.support_unit_id))["insights"]["synergy"]
+        self.assertIn("defense_detail", sy)
+        self.assertIn("防御型对", sy["defense_detail"])
+
+    def test_synergy_none_points_out_missing_type_boost(self):
+        """0/2 的结论里要写清缺的是哪几类损伤提升。"""
+        if not self.beam_only_support:
+            self.skipTest("库里没有仅提供光束损伤提升的支援型")
+        sy = self._score(self._team(self.beam_only_support))["insights"]["synergy"]
+        self.assertIn("缺少", sy["detail"])
+        self.assertIn("物理、特殊", sy["detail"])
+
+    def test_synergy_neutral_names_missing_boosts(self):
+        """支援完全没有损伤提升特效时，也要点名缺哪几类（而不是笼统说"无特效"）。"""
+        con = dbutil.connect_ro(config.DB_PATH)
+        try:
+            row = con.execute(
+                "SELECT u.id FROM unit u WHERE u.role = 3 AND NOT EXISTS ("
+                "  SELECT 1 FROM unit_weapon w WHERE w.unit_id = u.id"
+                "    AND IFNULL(w.map_weapon_range,'') IN ('','null','0')"
+                "    AND w.weapon_effects LIKE '%损伤提升%') LIMIT 1"
+            ).fetchone()
+        finally:
+            con.close()
+        if not row:
+            self.skipTest("库里没有「无任何损伤提升特效」的支援型")
+        sy = self._score(self._team(row["id"]))["insights"]["synergy"]
+        self.assertEqual(sy["level"], "neutral")
+        self.assertIn("未提供「损伤提升」类特效", sy["detail"])
+        self.assertIn("缺少", sy["detail"], "要点名缺哪几类损伤提升")
+        self.assertIn("物理、特殊", sy["detail"])
+        self.assertIn("0/", sy["detail"])
 
     def test_baseline_ur_defense_support_defense(self):
         """UR 防御型：刹那(支援防御2次) → 达标。"""
