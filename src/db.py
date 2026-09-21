@@ -253,6 +253,7 @@ CREATE TABLE IF NOT EXISTS supporter_skill (
   is_auto_usage INTEGER,
   traits TEXT,
   conditions TEXT,
+  UNIQUE(supporter_id, limit_break_step, skill_type),
   FOREIGN KEY (supporter_id) REFERENCES supporter(id)
 );
 
@@ -611,6 +612,11 @@ def ingest_one_unit(conn, u: dict, tag_map: dict[int, str], series_by_id: dict, 
 
     供单条覆盖爬取（refetch apply）使用，与 ingest_units 循环体逻辑保持一致。
     """
+    uid = _i(u["id"])
+    # 单条覆盖：先清该机体的子表，再重插，避免重复累积
+    conn.execute("DELETE FROM unit_weapon WHERE unit_id=?", (uid,))
+    conn.execute("DELETE FROM unit_ability WHERE unit_id=?", (uid,))
+    conn.execute("DELETE FROM unit_skill WHERE unit_id=?", (uid,))
     st = u.get("stats") or {}
     terrain = u.get("terrain") or {}
     ssp_overrides = _collect_ssp_overrides(u)
@@ -750,6 +756,10 @@ def ingest_one_unit(conn, u: dict, tag_map: dict[int, str], series_by_id: dict, 
 
 def ingest_units(conn, tag_map: dict[int, str]):
     n = 0
+    # 重建前清空机体子表：本地旧表可能缺少 UNIQUE 约束，若不先清会被反复累加导致重复
+    conn.execute("DELETE FROM unit_weapon")
+    conn.execute("DELETE FROM unit_ability")
+    conn.execute("DELETE FROM unit_skill")
     series_by_id = {
         r[0]: r[1] for r in conn.execute("SELECT id, name FROM series").fetchall()
     }
@@ -906,6 +916,9 @@ def ingest_one_character(conn, c: dict, tag_map: dict[int, str],
     support_info。
     """
     char_id = _i(c["id"])
+    # 单条覆盖：先清该驾驶员的子表，再重插，避免重复累积
+    conn.execute("DELETE FROM character_skill WHERE character_id=?", (char_id,))
+    conn.execute("DELETE FROM character_ability WHERE character_id=?", (char_id,))
     st = c.get("stats") or {}
     tags = [t.get("tag", {}).get("name") for t in c.get("tags") or [] if t.get("tag")]
     stat_bonuses: dict[str, int] = {}
@@ -1073,6 +1086,9 @@ def recompute_character_derived(conn, char_id: int) -> None:
 
 
 def ingest_supporters(conn, tag_map: dict[int, str]):
+    # 重建前清空支援角色子表：supporter_skill 无 UNIQUE 约束且为裸 INSERT，须先清
+    conn.execute("DELETE FROM supporter_skill")
+    conn.execute("DELETE FROM supporter_growth")
     supporters = _load_json(config.RAW_DIR / "supporter.json")
     series_by_id = {
         r[0]: r[1] for r in conn.execute("SELECT id, name FROM series").fetchall()
