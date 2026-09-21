@@ -2082,6 +2082,15 @@ nav button.active::after {
 .team-toolbar { flex-wrap: wrap; align-items: center; }
 .team-custom-field { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .team-custom-field input { width: 80px; }
+.team-custom-wrap { display: inline-flex; gap: 8px; align-items: center; }
+
+.team-bench-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-bottom: 12px; padding: 8px 10px;
+  background: var(--panel, #182030); border: 1px solid var(--border, #2a3344);
+  border-radius: 8px;
+}
+.team-bench-bar .muted { font-size: 12px; margin-right: 4px; }
 
 .team-row { margin-bottom: 16px; }
 .team-row-head {

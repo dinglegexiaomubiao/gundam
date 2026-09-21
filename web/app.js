@@ -5145,9 +5145,12 @@ function initPairing() {
 }
 
 /* ---------- 组队 ---------- */
+const TEAM_DEFAULT_BENCH = "low";
+const TEAM_DEFAULT_ENEMY = { unit_defense: 1060, character_defense: 109 };
+// teamState.bench / teamState.customEnemy 仅作旧数据兜底默认值，实际每支队伍自带 bench/customEnemy
 const teamState = {
-  bench: "low",
-  customEnemy: { unit_defense: 1060, character_defense: 109 },
+  bench: TEAM_DEFAULT_BENCH,
+  customEnemy: Object.assign({}, TEAM_DEFAULT_ENEMY),
   teams: [],
 };
 const TEAM_LS_KEY = "gundam.teams.v1";
@@ -5157,6 +5160,8 @@ function newTeamSlot() { return { unit: null, star: 3, weapon: null, pilot: null
 function newTeam() {
   return { id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
     supporter: null, breakStep: 3,
+    bench: TEAM_DEFAULT_BENCH,
+    customEnemy: Object.assign({}, TEAM_DEFAULT_ENEMY),
     slots: [newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot()] };
 }
 
@@ -5176,6 +5181,8 @@ function saveTeamState() {
         data: {
           supporter: t.supporter || null,
           breakStep: t.breakStep ?? 3,
+          bench: t.bench || TEAM_DEFAULT_BENCH,
+          customEnemy: t.customEnemy || Object.assign({}, TEAM_DEFAULT_ENEMY),
           slots: (t.slots || []).map((s) => ({
             unit: s.unit || null, star: s.star ?? 3,
             weapon: s.weapon || null, pilot: s.pilot || null,
@@ -5197,12 +5204,14 @@ function loadTeamState() {
     if (raw) {
       const d = JSON.parse(raw);
       if (d && Array.isArray(d.teams)) {
-        teamState.bench = d.bench || "low";
-        teamState.customEnemy = d.customEnemy || { unit_defense: 1060, character_defense: 109 };
+        teamState.bench = d.bench || TEAM_DEFAULT_BENCH;
+        teamState.customEnemy = d.customEnemy || Object.assign({}, TEAM_DEFAULT_ENEMY);
         teamState.teams = d.teams.map((t) => ({
           id: t.id || newTeam().id,
           supporter: t.supporter || null,
           breakStep: t.breakStep ?? 3,
+          bench: t.bench || teamState.bench || TEAM_DEFAULT_BENCH,
+          customEnemy: t.customEnemy || Object.assign({}, TEAM_DEFAULT_ENEMY),
           slots: (Array.isArray(t.slots) && t.slots.length === 5)
             ? t.slots.map((s) => ({ unit: s.unit || null, star: s.star ?? 3, weapon: s.weapon || null, pilot: s.pilot || null }))
             : [newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot(), newTeamSlot()],
@@ -5225,6 +5234,8 @@ async function fetchTeamFromServer() {
         name: t.name || "",
         supporter: (t.payload && t.payload.supporter) || null,
         breakStep: (t.payload && t.payload.breakStep) ?? 3,
+        bench: (t.payload && t.payload.bench) || teamState.bench || TEAM_DEFAULT_BENCH,
+        customEnemy: (t.payload && t.payload.customEnemy) || teamState.customEnemy || Object.assign({}, TEAM_DEFAULT_ENEMY),
         slots: ((t.payload && t.payload.slots) || []).map((s) => ({
           unit: s.unit || null, star: s.star ?? 3,
           weapon: s.weapon || null, pilot: s.pilot || null,
@@ -5235,7 +5246,6 @@ async function fetchTeamFromServer() {
     if (d.config && d.config.payload) {
       teamState.bench = d.config.payload.bench || teamState.bench;
       teamState.customEnemy = d.config.payload.customEnemy || teamState.customEnemy;
-      syncTeamBenchUI();
     }
     // 后端为空但本地有数据 → 迁移一次（之后以云端为准）
     if ((!d.teams || !d.teams.length) && teamState.teams.length) {
@@ -5244,17 +5254,19 @@ async function fetchTeamFromServer() {
   } catch (_) {}
 }
 
-function teamBenchConfig() {
-  if (teamState.bench === "custom") {
+function teamBenchConfig(team) {
+  const bench = team.bench || TEAM_DEFAULT_BENCH;
+  if (bench === "custom") {
+    const ce = team.customEnemy || Object.assign({}, TEAM_DEFAULT_ENEMY);
     return {
       bench: "custom",
       custom_enemy: {
-        unit_defense: Number($("#team-custom-udef").value) || 0,
-        character_defense: Number($("#team-custom-cdef").value) || 0,
+        unit_defense: Number(ce.unit_defense) || 0,
+        character_defense: Number(ce.character_defense) || 0,
       },
     };
   }
-  return { bench: teamState.bench };
+  return { bench };
 }
 
 function collectTeamPairs(team) {
@@ -5269,7 +5281,7 @@ function collectTeamPairs(team) {
 async function computeTeam(teamId) {
   const team = teamState.teams.find((t) => t.id === teamId);
   if (!team) return;
-  const body = Object.assign({}, teamBenchConfig(), {
+  const body = Object.assign({}, teamBenchConfig(team), {
     supporter_id: team.supporter ? team.supporter.id : null,
     break_step: team.breakStep,
     pairs: collectTeamPairs(team),
@@ -5306,6 +5318,16 @@ function renderTeamRow(team) {
         ${sup ? `<span class="muted">支援「${esc(sup.name)}」全能力 +${sup.leader_pct}% · 匹配机体 ${matched}/5</span>`
           : (team.supporter ? '<span class="muted">计算中…</span>' : '<span class="muted">未选择支援角色</span>')}
         <button class="cond-btn team-remove" data-team="${esc(team.id)}" title="删除本队">删除</button>
+      </div>
+      <div class="team-bench-bar">
+        <span class="muted">敌方基准</span>
+        <button class="cond-btn team-bench-btn ${team.bench === "low" ? "active" : ""}" data-team="${esc(team.id)}" data-bench="low">低防本</button>
+        <button class="cond-btn team-bench-btn ${team.bench === "mid" ? "active" : ""}" data-team="${esc(team.id)}" data-bench="mid">中防本</button>
+        <button class="cond-btn team-bench-btn ${team.bench === "custom" ? "active" : ""}" data-team="${esc(team.id)}" data-bench="custom">自定义</button>
+        <span class="team-custom-wrap ${team.bench === "custom" ? "" : "hidden"}" data-team="${esc(team.id)}">
+          <label class="team-custom-field">机体防御 <input class="team-custom-udef" data-team="${esc(team.id)}" type="number" value="${team.customEnemy.unit_defense}" min="0"></label>
+          <label class="team-custom-field">驾驶员防御 <input class="team-custom-cdef" data-team="${esc(team.id)}" type="number" value="${team.customEnemy.character_defense}" min="0"></label>
+        </span>
       </div>
       <div class="team-grid">
         ${renderSupporterCard(team, sup)}
@@ -5391,6 +5413,12 @@ function renderPilotCard(team, s, i, pr) {
 }
 
 function onTeamListClick(e) {
+  const benchBtn = e.target.closest(".team-bench-btn");
+  if (benchBtn) {
+    const team = teamState.teams.find((t) => t.id === benchBtn.dataset.team);
+    if (team) setTeamBench(team, benchBtn.dataset.bench);
+    return;
+  }
   const removeBtn = e.target.closest(".team-remove");
   if (removeBtn) {
     const tid = removeBtn.dataset.team;
@@ -5509,28 +5537,32 @@ async function openTeamWeaponPicker(team, slot) {
   }, "team", { id: team.slots[slot].unit.id });
 }
 
-function syncTeamBenchUI() {
-  $("#team-bench-low").classList.toggle("active", teamState.bench === "low");
-  $("#team-bench-mid").classList.toggle("active", teamState.bench === "mid");
-  $("#team-bench-custom").classList.toggle("active", teamState.bench === "custom");
-  $("#team-custom-wrap").classList.toggle("hidden", teamState.bench !== "custom");
-  $("#team-custom-udef").value = teamState.customEnemy.unit_defense;
-  $("#team-custom-cdef").value = teamState.customEnemy.character_defense;
-}
-
-function setTeamBench(b) {
-  teamState.bench = b;
-  syncTeamBenchUI();
+function setTeamBench(team, b) {
+  team.bench = b;
   saveTeamState();
-  teamState.teams.forEach((t) => computeTeam(t.id));
+  renderTeam();
+  computeTeam(team.id);
 }
 
-let teamRecomputeTimer = null;
-function scheduleTeamRecompute() {
-  clearTimeout(teamRecomputeTimer);
-  teamRecomputeTimer = setTimeout(() => {
-    teamState.teams.forEach((t) => computeTeam(t.id));
-  }, 300);
+let teamRecomputeTimers = {};
+function scheduleTeamRecompute(teamId) {
+  clearTimeout(teamRecomputeTimers[teamId]);
+  teamRecomputeTimers[teamId] = setTimeout(() => computeTeam(teamId), 300);
+}
+
+function onTeamListInput(e) {
+  const u = e.target.closest(".team-custom-udef");
+  const c = e.target.closest(".team-custom-cdef");
+  const el = u || c;
+  if (!el) return;
+  const team = teamState.teams.find((t) => t.id === el.dataset.team);
+  if (!team) return;
+  team.bench = "custom";
+  if (!team.customEnemy) team.customEnemy = Object.assign({}, TEAM_DEFAULT_ENEMY);
+  if (u) team.customEnemy.unit_defense = Number(el.value) || 0;
+  else team.customEnemy.character_defense = Number(el.value) || 0;
+  saveTeamState();
+  scheduleTeamRecompute(team.id);
 }
 
 function initTeam() {
@@ -5539,23 +5571,13 @@ function initTeam() {
     saveTeamState();
     renderTeam();
   });
-  $("#team-bench-low").addEventListener("click", () => setTeamBench("low"));
-  $("#team-bench-mid").addEventListener("click", () => setTeamBench("mid"));
-  $("#team-bench-custom").addEventListener("click", () => setTeamBench("custom"));
-  ["#team-custom-udef", "#team-custom-cdef"].forEach((id) =>
-    $(id).addEventListener("input", () => {
-      teamState.customEnemy.unit_defense = Number($("#team-custom-udef").value) || 0;
-      teamState.customEnemy.character_defense = Number($("#team-custom-cdef").value) || 0;
-      saveTeamState();
-      scheduleTeamRecompute();
-    }));
 
   const list = $("#team-list");
   list.addEventListener("click", onTeamListClick);
   list.addEventListener("change", onTeamListChange);
+  list.addEventListener("input", onTeamListInput);
 
   loadTeamState();
-  syncTeamBenchUI();
   renderTeam();
   teamState.teams.forEach((t) => computeTeam(t.id));
 }
