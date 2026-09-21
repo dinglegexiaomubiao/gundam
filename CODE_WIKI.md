@@ -1034,13 +1034,24 @@ insights = {
   `trait_value` 是 4500，而 desc 写的是“减轻20%”）；
   `attrs` 从 desc 里的「物理/光束/特殊」字样解析，所以「物理、光束武装减伤 20%」能正确表达；
 - `unit_skill`：`unit_skill` 表（目前仅 EX 机体有）；
-- `pilot_synergy`：驾驶员条目中与生存相关的，分两个维度表达：
+- `pilot_mechanics`：驾驶员的**基础机制**（取自 `_build_pilots` 的 `base_mech`，剔除主动技能），
+  即「能支援防御 / 支援攻击几次」「反击援防」「额外行动」等，如
+  `[{"label": "无条件支援防御2次", "kind": "support"}]`；
+- `pilot_synergy`：驾驶员条目中与生存相关的，给三个字段：
   - `unit_ok` —— **机体侧条件**是否满足（搭乘单位的 id / 标签 / 系列 / 类型，静态可判定）；
-  - `status` —— `counted`（无条件，恒生效）/ `potential`（机体条件满足但触发时机取决于战斗，
-    如「自身 HP 为 0% 时」）/ `impossible`（本机不满足）。
+  - `verdict` —— 结论：`met`（条件已满足，本机体能触发）/ `unmet`（本机不满足 → 不能触发）
+    / `enemy`（需视敌方配置而定）/ `always`（无条件，恒生效）；
+  - `note` —— 直接给前端用的括号文案：`条件已满足` / `不能触发` / `视敌方而定` / 空字符串。
+  - `status` 仅供样式着色（counted / potential / impossible）。
+
+    > **判定口径**：只看「机体侧条件」——也就是这套机体+驾驶员的搭配本身能不能触发。
+    > 战意、HP 百分比、特定行动等**时机类**条件不参与判定（它们写在条目正文里，
+    > 如「自身进行支援防御时」「自身战意为超一击时」），否则会把「本机能触发」
+    > 的能力误标成待定。
 
     例：刹那·F·清英(UR 耐久型) 搭乘 00强化模组(最后决战式样)(EX) 时，
-    「搭乘单位为…且自身 HP 为 0% 时，自身 HP 恢复 7%(1次)」→ `unit_ok=True` + `status=potential`。
+    「搭乘单位为…且自身 HP 为 0% 时，自身 HP 恢复 7%(1次)」→ `verdict="met"` + `note="条件已满足"`；
+    换成非 00 系的耐久机（如 神高达 R4）→ `verdict="unmet"` + `note="不能触发"`。
 
 前端渲染见 `web/app.js` 的 `renderTeamStatus()`（`.team-status` / `.ts-*` 样式，
 复用 `--type-atk/tank/sup` 类型令牌）。
