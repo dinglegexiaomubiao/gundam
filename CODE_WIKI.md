@@ -696,6 +696,10 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 - `GET /api/supporters?q=&tags=&tag_mode=&skills=&skill_mode=&sort=&order=&limit=&offset=&exclude=&facets=1`
   - `sort` / `order` 支持**逗号分隔的多级键**（主 -> 次），长度一一对应，如
     `sort=rarity,role&order=desc,asc`（稀有度降序、同级内类型升序）；单个键时即原有行为。
+  - **形态开关**（只切换列表显示与排序的数值，不筛选条目）：机体 `form=sp|ssp`、`fullcond=1`；
+    驾驶员 `form=sp`。SP/SSP 独立、同传以 SSP 为准；`fullcond` 叠加该机体全部条件加成（含 HP 条件）。
+    无该形态数据的按可用最高形态回退（UR 无 SP；无 SSP 数据回退 SP）。排序键（attack→`atk_f` 等）
+    自动跟随所选形态。
   - `facets=1` 时响应额外含 `facets`：`{维度: {选项值: 数量, "__all__": 清空该维度后的数量}}`。
     - **单选维度**（`rarity/acq/type/series/support`）＝应用**除该维度以外**的全部筛选（含 `q`）后该选项的命中数，便于切换。
     - **多选维度**（`tags/wfx/skills`）＝**当前结果里也符合该项的条数**，便于在已有选择上继续叠加（会随选择收窄）。

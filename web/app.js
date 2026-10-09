@@ -7,8 +7,8 @@ const fmtNum = (n, digits) => {
   catch (_) { return String(n); }
 };
 const state = {
-  units: { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", cond: null, sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
-  characters: { q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", skills: [], skill_mode: "any", support: "", sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
+  units: { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", cond: null, form: "", fullCond: false, sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
+  characters: { q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", skills: [], skill_mode: "any", support: "", form: "", sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
   supporters: { q: "", tags: [], tag_mode: "any", skills: [], skill_mode: "any", sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
   stages: { q: "", page: 0, size: 25 },
   search: { type: "skill", kind: "all", q: "", sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
@@ -1420,6 +1420,24 @@ function addTagChip(kind, name) {
   renderTagChips(kind);
 }
 
+/* ---------- 形态开关（切换列表显示与排序的数值口径，不筛选条目） ---------- */
+function unitFormToggle() {
+  if ($("#unit-form-ssp")?.checked) return "ssp";   // 与 SP 同勾时以 SSP 为准
+  if ($("#unit-form-sp")?.checked) return "sp";
+  return "";
+}
+function readUnitFormState() {
+  state.units.form = unitFormToggle();
+  state.units.fullCond = !!$("#unit-full-cond")?.checked;
+}
+function unitFormHint(s) {
+  const parts = [];
+  if (s.form === "ssp") parts.push("SSP 形态");
+  else if (s.form === "sp") parts.push("SP 形态");
+  if (s.fullCond) parts.push("完全达成条件");
+  return parts.length ? `（${parts.join(" + ")}数值）` : "";
+}
+
 async function loadUnits(page = state.units.page) {
   state.units.page = page;
   const s = state.units;
@@ -1429,11 +1447,12 @@ async function loadUnits(page = state.units.page) {
     match: s.match, wfx: s.wfx.join(","), wfx_mode: s.wfx_mode,
     cond: s.cond ? JSON.stringify(s.cond) : "",
     sort: sortParam(s), order: orderParam(s), facets: "1",
+    form: s.form || "", fullcond: s.fullCond ? "1" : "0",
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/units?" + q);
   applyFacets("units", d.facets);
-  $("#unit-count").textContent = `共 ${d.total} 条结果`;
+  $("#unit-count").textContent = `共 ${d.total} 条结果` + unitFormHint(s);
   announceLive(`搜索完成，共找到 ${d.total} 条机体结果`);
   $("#unit-list").innerHTML = d.items.length
     ? d.items.map((u) => `
@@ -2293,11 +2312,12 @@ async function loadCharacters(page = state.characters.page) {
     tags: s.tags.join(","), tag_mode: s.tag_mode,
     match: s.match, skills: s.skills.join(","), skill_mode: s.skill_mode,
     support: s.support, sort: sortParam(s), order: orderParam(s), facets: "1",
+    form: s.form || "",
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/characters?" + q);
   applyFacets("characters", d.facets);
-  $("#char-count").textContent = `共 ${d.total} 条结果`;
+  $("#char-count").textContent = `共 ${d.total} 条结果` + (s.form === "sp" ? "（SP 形态数值）" : "");
   announceLive(`搜索完成，共找到 ${d.total} 条驾驶员结果`);
   $("#char-list").innerHTML = d.items.length
     ? d.items.map((c) => `
@@ -4107,9 +4127,19 @@ $("#unit-search").addEventListener("click", () => {
   state.units.tag_mode = $("#unit-tag-mode").value;
   state.units.match = $("#unit-match").value;
   state.units.wfx_mode = $("#unit-wfx-mode").value;
+  readUnitFormState();
   loadUnits(0);
 });
 $("#unit-q").addEventListener("keydown", (e) => e.key === "Enter" && $("#unit-search").click());
+// 形态开关即时生效
+["#unit-form-sp", "#unit-form-ssp", "#unit-full-cond"].forEach((sel) => {
+  const el = $(sel);
+  if (el) el.addEventListener("change", () => { readUnitFormState(); loadUnits(0); });
+});
+$("#char-form-sp")?.addEventListener("change", () => {
+  state.characters.form = $("#char-form-sp").checked ? "sp" : "";
+  loadCharacters(0);
+});
 $("#char-search").addEventListener("click", () => {
   state.characters.q = $("#char-q").value;
   state.characters.rarity = $("#char-rarity").value;
@@ -4118,6 +4148,7 @@ $("#char-search").addEventListener("click", () => {
   state.characters.skill_mode = $("#char-skill-mode").value;
   state.characters.support = $("#char-support").value;
   state.characters.match = $("#char-match").value;
+  state.characters.form = $("#char-form-sp")?.checked ? "sp" : "";
   loadCharacters(0);
 });
 $("#char-q").addEventListener("keydown", (e) => e.key === "Enter" && $("#char-search").click());
@@ -4225,7 +4256,12 @@ function resetUnits() {
   Object.assign(state.units, {
     q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and",
     wfx: [], wfx_mode: "any", cond: null,
+    form: "", fullCond: false,
     sorts: [{ k: "rarity", o: "desc" }], page: 0,
+  });
+  ["#unit-form-sp", "#unit-form-ssp", "#unit-full-cond"].forEach((sel) => {
+    const el = $(sel);
+    if (el) el.checked = false;
   });
   $("#unit-q").value = "";
   $("#unit-rarity").value = "";
@@ -4244,8 +4280,10 @@ function resetCharacters() {
   Object.assign(state.characters, {
     q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and",
     skills: [], skill_mode: "any", support: "",
+    form: "",
     sorts: [{ k: "rarity", o: "desc" }], page: 0,
   });
+  if ($("#char-form-sp")) $("#char-form-sp").checked = false;
   $("#char-q").value = "";
   $("#char-rarity").value = "";
   $("#char-type").value = "";

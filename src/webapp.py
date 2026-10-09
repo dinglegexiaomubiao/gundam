@@ -2072,7 +2072,7 @@ def _unit_facets(conn, build) -> dict:
 def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
               tags: str, tag_mode: str, match: str, wfx: str, wfx_mode: str,
               cond: str, sort: str, order: str, limit: int, offset: int,
-              facets: bool = False) -> dict:
+              facets: bool = False, form: str = "", full_cond: bool = False) -> dict:
     def build(skip=()):
         where, args = [], []
         if q:
@@ -2110,7 +2110,12 @@ def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
         f"""SELECT u.id, u.rarity, u.name, u.role, u.series_id, s.name AS series_name,
                    u.attack, u.defense, u.mobility, u.movement,
                    u.max_attack, u.max_defense, u.max_mobility,
-                   u.max_hp, u.max_en, u.max_movement, u.stat_bonuses, u.tags
+                   u.max_hp, u.max_en, u.max_movement, u.stat_bonuses, u.tags,
+                   u.sp_max_attack, u.sp_max_defense, u.sp_max_mobility,
+                   u.sp_max_hp, u.sp_max_en, u.sp_max_movement,
+                   u.ssp_max_attack, u.ssp_max_defense, u.ssp_max_mobility,
+                   u.ssp_max_hp, u.ssp_max_en, u.ssp_max_movement,
+                   u.conditional_bonuses
             FROM unit u LEFT JOIN series s ON s.id = u.series_id
             {w} ORDER BY u.id""",
         args,
@@ -2120,14 +2125,36 @@ def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
     for r in rows:
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
         bonuses = _json_dict(r.get("stat_bonuses"))
+        cond_pct: dict = {}
+        if full_cond:
+            for item in _json_list(r.get("conditional_bonuses")):
+                key = item.get("stat")
+                if key:
+                    cond_pct[key] = cond_pct.get(key, 0) + int(item.get("pct") or 0)
         short = {"attack": "atk_f", "defense": "def_f", "mobility": "mob_f",
                  "hp": "hp_f", "en": "en_f"}
         star = 0 if ULTIMATE_TAG in _json_list(r.get("tags")) else 3
+        no_sp = (r.get("rarity") or 5) >= 5  # UR 无 SP
+        use = "default"
+        if not no_sp and form == "ssp":
+            has_ssp = any(
+                (r.get(f"ssp_max_{k}") or 0)
+                for k in ("attack", "defense", "mobility", "hp", "en")
+            )
+            use = "ssp" if has_ssp else "sp"
+        elif not no_sp and form == "sp":
+            use = "sp"
         for key, fname in short.items():
-            r[fname] = star_value(
-                r.get(f"max_{key}") or 0, bonuses.get(key, 0), star
-            )[0]
-        r["mov"] = r.get("max_movement") or 0
+            base = r.get(f"max_{key}") or 0
+            if use == "sp":
+                base = r.get(f"sp_max_{key}") or 0
+            elif use == "ssp":
+                base = (r.get(f"sp_max_{key}") or 0) + (r.get(f"ssp_max_{key}") or 0)
+            pct = bonuses.get(key, 0) + cond_pct.get(key, 0)
+            r[fname] = star_value(base, pct, star)[0]
+        mov_pref = {"default": "max_", "sp": "sp_max_", "ssp": "ssp_max_"}[use]
+        r["mov"] = (r.get(mov_pref + "movement") or 0) or (r.get("max_movement") or 0)
+        r["form_used"] = use
     _apply_sort(
         rows,
         _multi_sort_specs(sort, order, UNIT_SORT_KEYS),
@@ -3271,7 +3298,8 @@ def _char_facets(conn, build, support: str, counter_guard: set) -> dict:
 def api_characters(q: str, rarity: str, series: str, type_: str,
                    tags: str, tag_mode: str, match: str, skills: str, skill_mode: str,
                    support: str, sort: str, order: str,
-                   limit: int, offset: int, facets: bool = False) -> dict:
+                   limit: int, offset: int, facets: bool = False,
+                   form: str = "") -> dict:
     def build(skip=()):
         where, args = [], []
         if q:
@@ -3300,6 +3328,7 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
         f"""SELECT c.id, c.rarity, c.name, s.name AS series_name,
                    c.role, c.ranged, c.melee, c.defense, c.reaction, c.awaken,
                    max_ranged, max_melee, max_defense, max_reaction, max_awaken,
+                   sp_max_ranged, sp_max_melee, sp_max_defense, sp_max_reaction, sp_max_awaken,
                    c.stat_bonuses, c.support_info
             FROM character c LEFT JOIN series s ON s.id = c.series_id
             {w} ORDER BY c.id""",
@@ -3311,10 +3340,11 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
         r["support_label"] = support_label(_json_dict(r.get("support_info")))
         bonuses = _json_dict(r.get("stat_bonuses"))
+        use_sp = form == "sp" and (r.get("rarity") or 5) < 5  # UR 无 SP
         for key in ("ranged", "melee", "defense", "reaction", "awaken"):
-            r[f"{key}_f"] = star_value(
-                r.get(f"max_{key}") or 0, bonuses.get(key, 0), 0
-            )[0]
+            base = (r.get(f"sp_max_{key}") if use_sp else r.get(f"max_{key}")) or 0
+            r[f"{key}_f"] = star_value(base, bonuses.get(key, 0), 0)[0]
+        r["form_used"] = "sp" if use_sp else "default"
     if support:
         if support == "反击援防":
             rows = [r for r in rows if r["id"] in counter_guard]
@@ -4683,7 +4713,8 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("match", ["and"])[0], q.get("wfx", [""])[0],
                 q.get("wfx_mode", ["any"])[0], q.get("cond", [""])[0],
                 q.get("sort", [""])[0], q.get("order", ["desc"])[0],
-                limit, offset, q.get("facets", ["0"])[0] == "1"))
+                limit, offset, q.get("facets", ["0"])[0] == "1",
+                q.get("form", [""])[0], q.get("fullcond", ["0"])[0] == "1"))
         if path == "/api/characters":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)
@@ -4695,7 +4726,7 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("support", [""])[0],
                 q.get("sort", [""])[0],
                 q.get("order", ["desc"])[0], limit, offset,
-                q.get("facets", ["0"])[0] == "1"))
+                q.get("facets", ["0"])[0] == "1", q.get("form", [""])[0]))
         if path == "/api/supporters":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)

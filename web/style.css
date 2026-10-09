@@ -384,6 +384,14 @@ textarea.edit-input { width: 240px; min-height: 40px; resize: vertical; font-fam
 .sbox-list .sbox-item:hover .opt-count { color: inherit; }
 .toolbar .reset-btn { background: var(--panel2); border-color: var(--line); color: var(--muted); }
 .toolbar .reset-btn:hover { border-color: var(--accent); color: var(--text); }
+.form-toggle {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
+  color: var(--muted); cursor: pointer; user-select: none;
+  padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2);
+}
+.form-toggle:hover { border-color: var(--accent); color: var(--text); }
+.form-toggle input { margin: 0; accent-color: var(--accent); }
+.form-toggle:has(input:checked) { border-color: var(--accent); color: var(--accent2); }
 .cond-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .desc { color: var(--muted); font-size: 13px; line-height: 1.7; white-space: pre-line; }
 .hidden { display: none !important; }
