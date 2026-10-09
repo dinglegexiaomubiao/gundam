@@ -6,8 +6,8 @@
 
 | 频率 | 做什么 | 命令 |
 |---|---|---|
-| 每周（或版本更新后） | 增量更新：抓新增机体/驾驶员/关卡 + 重建库 + 变更报告 | `python scripts/pipeline.py update` |
-| 每月一次 | 全量刷新：重抓所有详情，覆盖已有条目的数值改动 | `python scripts/pipeline.py update --full` |
+| 每周（或版本更新后） | 增量更新：抓新增 + 自动重抓属性/标签有变的机体 + 重建库 + 变更报告 | `python scripts/pipeline.py update` |
+| 每月一次 | 全量刷新：重抓所有详情，覆盖武器/能力/技能/SSP 等子表改动 | `python scripts/pipeline.py update --full` |
 | **动过算法/正则后** | **跑回归测试**（伤害公式、文案解析、配对排名） | `python -m unittest discover -s tests -t .` |
 | 每月一次 | 把最新数据库传到项目资产（tdrive）| 对布丁说"把 gundam.db 传到项目资产" |
 | 随时 | 手动快照当前库 | `python scripts/pipeline.py backup` |
@@ -19,7 +19,7 @@ npm 别名：`npm run update` / `npm run update:full` / `npm run backup`。
 
 ```
 快照当前库 -> data/backup/gundam_YYYYmmdd_HHMMSS.db（滚动保留最近 3 份）
-  -> fetch（增量：已存在的详情跳过；--full 则全部重抓）
+  -> fetch（增量：已存在的详情跳过，但属性/标签有变的机体自动重抓；--full 则全部重抓）
   -> build（INSERT OR REPLACE，手工编辑 unit_edit_log 不受影响）
   -> verify（数量与抽样校验）
   -> 变更报告（各表行数增减 / 新增机体名单 / 机体·驾驶员数值变更条目）
@@ -52,10 +52,15 @@ python -m unittest discover -s tests -t .
 给每条正则做体检——某条正则一个都匹配不到时直接失败，防止改正则时把一整类
 效果悄悄漏掉。
 
-## 为什么每月要跑一次 --full
+## 为什么每月还要跑一次 --full
 
-增量模式只抓**新增**条目；游戏平衡性调整会改动**已有**机体的数值，
-这些改动只有全量重抓才会进库。每月一次 `update --full` 兜底即可。
+增量模式默认跳过已存在的详情文件，但每次都会重新下载 `/unit/min` 列表。`fetch` 现在会
+拿这份列表与本地详情逐台比对 **stats 与 tags**，发现数值/标签有变的机体就**自动重抓**
+（`src/fetch.py` 的 `_stale_unit_ids`），所以游戏对已有机体做的平衡性调整、新增标签都能
+在增量更新时进库。
+
+但 `min.json` 只含机体主表字段，**武器 / 能力 / 技能 / SSP / 变形**等子表内容不在其中。
+这些字段的改动增量模式抓不到，仍需每月 `update --full` 全量重抓兜底。
 
 ## 备份约定
 

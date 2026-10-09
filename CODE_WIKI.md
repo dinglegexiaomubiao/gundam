@@ -684,9 +684,13 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 - `GET /api/supporter-panel` — 支援角色面板
 
 #### 列表查询
-- `GET /api/units?q=&rarity=&acq=&series=&type=&tags=&tag_mode=&match=&wfx=&wfx_mode=&cond=&sort=&order=&limit=&offset=`
-- `GET /api/characters?q=&rarity=&series=&type=&tags=&tag_mode=&match=&skills=&skill_mode=&support=&sort=&order=&limit=&offset=`
-- `GET /api/supporters?q=&tags=&tag_mode=&skills=&skill_mode=&sort=&order=&limit=&offset=&exclude=`
+- `GET /api/units?q=&rarity=&acq=&series=&type=&tags=&tag_mode=&match=&wfx=&wfx_mode=&cond=&sort=&order=&limit=&offset=&facets=1`
+- `GET /api/characters?q=&rarity=&series=&type=&tags=&tag_mode=&match=&skills=&skill_mode=&support=&sort=&order=&limit=&offset=&facets=1`
+- `GET /api/supporters?q=&tags=&tag_mode=&skills=&skill_mode=&sort=&order=&limit=&offset=&exclude=&facets=1`
+  - `facets=1` 时响应额外含 `facets`：`{维度: {选项值: 数量, "__all__": 清空该维度后的数量}}`。
+    某维度 D 的选项数量＝应用**除 D 以外**的全部筛选（含 `q`）后叠加该选项的命中数（标准分面）。
+    机体维度：`rarity/acq/type/series/tags/wfx`；驾驶员：`rarity/type/series/tags/skills/support`；
+    支援角色：`tags/skills`。未传 `facets` 时不计算、不返回（选择器/配对页据此保持轻量）。
 - `GET /api/stages?q=&limit=&offset=`
 - `GET /api/search?type=&q=&kind=&sort=&order=&limit=&offset=` — 技能/能力/效果搜索
 - `GET /api/picker/units?q=&source=library|enemy&rarity=&type=&series=&tags=&sort=&order=&limit=&offset=&exclude=` — 伤害计算器/组队机体选择器（`exclude` 见 [10.9.1](#1091-选择器屏蔽参数-exclude)）

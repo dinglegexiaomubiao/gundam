@@ -1,9 +1,12 @@
 """定期维护：数据库快照备份、变更报告、一键更新（update）。
 
 维护流程（手动触发）：
-- 日常更新：python scripts/pipeline.py update          （增量：只抓新增条目）
-- 每月全量：python scripts/pipeline.py update --full   （重抓全部详情，刷新数值改动）
+- 日常更新：python scripts/pipeline.py update          （增量：抓新增条目 + 自动刷新属性/标签有变的已有机体）
+- 每月全量：python scripts/pipeline.py update --full   （重抓全部详情，刷新 min.json 未覆盖的内容）
 - 手动备份：python scripts/pipeline.py backup
+
+增量模式的变更检测见 fetch._stale_unit_ids：用每次重新下载的 /unit/min 与本地详情
+比对 stats/tags，命中者强制重抓；武器/能力/技能/SSP 等 min.json 未包含的内容仍需 --full。
 
 update 步骤：快照当前库 -> fetch -> build -> verify -> 新旧库对比报告；
 build 阶段抛异常时自动用快照回滚。

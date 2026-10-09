@@ -30,7 +30,8 @@ scripts/pipeline.py    命令行入口
 
 ```powershell
 python scripts/pipeline.py update           # 一键更新：快照+增量抓取+构建+校验+变更报告（日常用这个）
-python scripts/pipeline.py update --full    # 每月一次：全量重抓，刷新已有条目的数值改动
+                                            # 增量会自动重抓属性/标签有变的机体（见 src/fetch.py _stale_unit_ids）
+python scripts/pipeline.py update --full    # 每月一次：全量重抓，刷新武器/能力/技能/SSP 等子表改动
 python scripts/pipeline.py fetch            # 仅抓取（增量，断点续传）
 python scripts/pipeline.py fetch --refresh  # 仅抓取（全量重抓已有详情）
 python scripts/pipeline.py fetch --limit 10 # 冒烟测试：每类详情只抓 10 条

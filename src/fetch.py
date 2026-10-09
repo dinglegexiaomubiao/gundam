@@ -20,10 +20,12 @@ def _load(rel: str):
 
 
 def _fetch_many(kind: str, ids: list, path_prefix: str, refresh: bool = False,
+                force_ids: "set[int] | None" = None,
                 on_progress=None) -> list[tuple[int, str]]:
     """分批并发抓取某类详情，已存在则跳过；批次间长暂停；限流时整体终止。
 
     refresh=True 时已存在的文件也重新抓取（用于周期性全量刷新旧数据）。
+    force_ids 内的条目即使详情文件已存在也重新抓取（用于增量模式下刷新变更项）。
     on_progress(kind, done, total) 用于上报当前类别的抓取进度（done 为累计完成数）。
     """
     failures: list[tuple[int, str]] = []
@@ -38,10 +40,11 @@ def _fetch_many(kind: str, ids: list, path_prefix: str, refresh: bool = False,
               f"({len(batch)} 条)，已累计 {total_done}/{total}")
         done = 0
         aborted = False
+        force = force_ids or ()
 
         def one(item_id: int):
             rel = Path(kind) / f"{item_id}.json"
-            if not refresh and (config.RAW_DIR / rel).exists():
+            if not refresh and item_id not in force and (config.RAW_DIR / rel).exists():
                 return "skip", item_id
             data = api.http_get_json(f"{path_prefix}/{item_id}")
             _save(rel, data)
@@ -92,14 +95,66 @@ def fetch_dictionaries():
     return series, faction
 
 
+# unit/min.json 与机体详情文件在 stats 中共同包含的字段（用于变更检测）
+_UNIT_STAT_FIELDS = (
+    "hp", "en", "attack", "defense", "mobility", "movement",
+    "max_hp", "max_en", "max_attack", "max_defense", "max_mobility", "max_movement",
+    "sp_hp", "sp_en", "sp_attack", "sp_defense", "sp_mobility", "sp_movement",
+    "sp_max_hp", "sp_max_en", "sp_max_attack", "sp_max_defense",
+    "sp_max_mobility", "sp_max_movement",
+)
+
+
+def _unit_tag_names(u: dict) -> set:
+    return {t["tag"]["name"] for t in u.get("tags") or [] if t.get("tag")}
+
+
+def _stale_unit_ids(units_min: list) -> set:
+    """对比新下载的 /unit/min 与本地详情文件，找出属性或标签发生变化的机体 id。
+
+    build_db 只读详情文件（unit/{id}.json），而增量模式会跳过已存在的详情文件，
+    导致游戏对旧机体的数值/标签改动永远抓不到。min.json 每次爬取都会重新下载，
+    且其 stats/tags 与同一时刻的详情文件严格一致，用它做变更检测：命中者强制重抓。
+    详情文件缺失的机体也视为需抓取（与既有「新机体」逻辑一致）。
+    """
+    stale: set = set()
+    for m in units_min:
+        uid = m.get("id")
+        if uid is None:
+            continue
+        path = config.RAW_DIR / "unit" / f"{uid}.json"
+        if not path.exists():
+            stale.add(uid)
+            continue
+        try:
+            u = _load(f"unit/{uid}.json")
+        except (OSError, ValueError):
+            stale.add(uid)
+            continue
+        ms = m.get("stats") or {}
+        us = u.get("stats") or {}
+        if any(ms[f] != us.get(f) for f in _UNIT_STAT_FIELDS if f in ms):
+            stale.add(uid)
+            continue
+        if _unit_tag_names(m) != _unit_tag_names(u):
+            stale.add(uid)
+    return stale
+
+
 def fetch_units(limit: int | None = None, refresh: bool = False, on_progress=None):
     units_min = api.http_get_json("/unit/min", {"order_by": "rarity:desc"})
     _save("unit/min.json", units_min)
+    force_ids: set = set()
+    if not refresh:
+        force_ids = _stale_unit_ids(units_min)
+        if force_ids:
+            print(f"检测到 {len(force_ids)} 台机体属性/标签有变更，将在本次增量中一并刷新")
     ids = [u["id"] for u in units_min]
     print(f"机体列表 {len(ids)} 台")
     if limit:
         ids = ids[:limit]
-    failed = _fetch_many("unit", ids, "/unit", refresh=refresh, on_progress=on_progress)
+    failed = _fetch_many("unit", ids, "/unit", refresh=refresh,
+                         force_ids=force_ids, on_progress=on_progress)
     return failed
 
 

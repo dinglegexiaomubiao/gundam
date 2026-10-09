@@ -1131,12 +1131,16 @@ function initCombobox(boxId, options, getVal, onPick, clearable) {
     const c = cur();
     const kw = c.input.value.trim().toLowerCase();
     const opts = c.options.filter((o) => !kw || o.label.toLowerCase().includes(kw));
-    c.list.innerHTML = opts.slice(0, 60).map((o) =>
-      `<button class="sbox-item" data-v="${esc(String(o.value))}">${esc(o.label)}</button>`).join("")
-      || '<div class="empty">无匹配</div>';
+    c.list.innerHTML = opts.slice(0, 60).map((o) => {
+      const n = c.counts
+        ? (o.value === "" ? c.counts.__all__ : (c.counts[String(o.value)] ?? 0))
+        : undefined;
+      const tail = n == null ? "" : ` <span class="opt-count">(${n})</span>`;
+      return `<button class="sbox-item" data-v="${esc(String(o.value))}" data-label="${esc(o.label)}">${esc(o.label)}${tail}</button>`;
+    }).join("") || '<div class="empty">无匹配</div>';
     c.list.querySelectorAll(".sbox-item").forEach((b) =>
       b.addEventListener("click", () => {
-        c.onPick(b.dataset.v, b.textContent);
+        c.onPick(b.dataset.v, b.dataset.label);
         if (!c.clearable) c.input.value = "";
         syncCombobox(boxId);
         c.list.classList.add("hidden");
@@ -1222,6 +1226,48 @@ async function initFilterControls() {
     (v) => { if (v) { pairUnitState.tags.push(v); renderPairTagChips(); ppLoad(0); } }, false);
   initCombobox("#pp-wfx-box", WFX_OPTIONS, () => "",
     (v) => { pairUnitState.wfx.push(v); renderPairWfxChips(); ppLoad(0); }, false);
+}
+
+/* ---------- 筛选选项数量（facet counts） ---------- */
+
+// 静态 <select>：原始文案缓存在 data-base，再追加 “(数量)”；“全部” 选项用 __all__。
+function applyOptionCounts(selId, counts) {
+  const el = $(selId);
+  if (!el || !counts) return;
+  el.querySelectorAll("option").forEach((o) => {
+    if (o.dataset.base === undefined) o.dataset.base = o.textContent;
+    const n = o.value === "" ? counts.__all__ : (counts[o.value] ?? 0);
+    o.textContent = (n == null) ? o.dataset.base : `${o.dataset.base} (${n})`;
+  });
+}
+
+// sbox 组合框：把数量挂到 combobox 配置上，展开时由 render() 追加。
+function setComboCounts(boxId, counts) {
+  const c = comboboxes[boxId];
+  if (c) c.counts = counts || null;
+}
+
+// 按 Tab 把接口返回的 facets 分发到各筛选控件（缺失的维度不动）。
+function applyFacets(tab, facets) {
+  if (!facets) return;
+  if (tab === "units") {
+    applyOptionCounts("#unit-rarity", facets.rarity);
+    applyOptionCounts("#unit-acq", facets.acq);
+    applyOptionCounts("#unit-type", facets.type);
+    setComboCounts("#unit-series-box", facets.series);
+    setComboCounts("#unit-tag-box", facets.tags);
+    setComboCounts("#unit-wfx-box", facets.wfx);
+  } else if (tab === "characters") {
+    applyOptionCounts("#char-rarity", facets.rarity);
+    applyOptionCounts("#char-type", facets.type);
+    applyOptionCounts("#char-support", facets.support);
+    setComboCounts("#char-series-box", facets.series);
+    setComboCounts("#char-tag-box", facets.tags);
+    setComboCounts("#char-skill-box", facets.skills);
+  } else if (tab === "supporters") {
+    setComboCounts("#sup-tag-box", facets.tags);
+    setComboCounts("#sup-skill-box", facets.skills);
+  }
 }
 
 function wfxLabel(v) {
@@ -1346,10 +1392,11 @@ async function loadUnits(page = state.units.page) {
     tags: s.tags.join(","), tag_mode: s.tag_mode,
     match: s.match, wfx: s.wfx.join(","), wfx_mode: s.wfx_mode,
     cond: s.cond ? JSON.stringify(s.cond) : "",
-    sort: s.sort, order: s.order,
+    sort: s.sort, order: s.order, facets: "1",
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/units?" + q);
+  applyFacets("units", d.facets);
   $("#unit-count").textContent = `共 ${d.total} 条结果`;
   announceLive(`搜索完成，共找到 ${d.total} 条机体结果`);
   $("#unit-list").innerHTML = d.items.length
@@ -2209,10 +2256,11 @@ async function loadCharacters(page = state.characters.page) {
     q: s.q, rarity: s.rarity, series: s.series, type: s.type,
     tags: s.tags.join(","), tag_mode: s.tag_mode,
     match: s.match, skills: s.skills.join(","), skill_mode: s.skill_mode,
-    support: s.support, sort: s.sort, order: s.order,
+    support: s.support, sort: s.sort, order: s.order, facets: "1",
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/characters?" + q);
+  applyFacets("characters", d.facets);
   $("#char-count").textContent = `共 ${d.total} 条结果`;
   announceLive(`搜索完成，共找到 ${d.total} 条驾驶员结果`);
   $("#char-list").innerHTML = d.items.length
@@ -2856,10 +2904,11 @@ async function loadSupporters(page = state.supporters.page) {
   const q = new URLSearchParams({
     q: s.q, tags: s.tags.join(","), tag_mode: s.tag_mode,
     skills: s.skills.join(","), skill_mode: s.skill_mode,
-    sort: s.sort, order: s.order,
+    sort: s.sort, order: s.order, facets: "1",
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/supporters?" + q);
+  applyFacets("supporters", d.facets);
   $("#sup-count").textContent = `共 ${d.total} 条结果`;
   announceLive(`搜索完成，共找到 ${d.total} 条支援角色结果`);
   const route = { 1: "扭蛋", 2: "活动", 3: "商店", 4: "其他" };

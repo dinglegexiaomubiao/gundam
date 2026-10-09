@@ -1843,26 +1843,32 @@ def _tag_where(alias: str, tags: str, tag_mode: str):
     )
 
 
-def _filter_predicates(alias: str, series: str, type_: str, tags: str, tag_mode: str):
-    """系列 / 类型 / 标签 三个筛选维度的条件谓词（供交集或并集组合）。"""
+def _filter_predicates(alias: str, series: str, type_: str, tags: str, tag_mode: str,
+                       skip=()):
+    """系列 / 类型 / 标签 三个筛选维度的条件谓词（供交集或并集组合）。
+
+    skip 内的维度（"series"/"type"/"tags"）不生成谓词，供分面计数“剔除自身维度”使用。
+    """
     preds: list[str] = []
     args: list = []
-    series_list = [s for s in (series or "").split(",") if s]
-    if series_list:
-        ph = ",".join("?" for _ in series_list)
-        preds.append(
-            f"EXISTS (SELECT 1 FROM json_each({alias}.series_ids) je "
-            f"WHERE je.value IN ({ph}))"
-        )
-        args += [int(s) for s in series_list]
-    if type_:
+    if "series" not in skip:
+        series_list = [s for s in (series or "").split(",") if s]
+        if series_list:
+            ph = ",".join("?" for _ in series_list)
+            preds.append(
+                f"EXISTS (SELECT 1 FROM json_each({alias}.series_ids) je "
+                f"WHERE je.value IN ({ph}))"
+            )
+            args += [int(s) for s in series_list]
+    if type_ and "type" not in skip:
         preds.append(f"{alias}.role = ?")
         args.append(int(type_))
-    tag_list = [t for t in (tags or "").split(",") if t]
-    if tag_list:
-        t_sql, t_args = _tag_where(alias, tags, tag_mode)
-        preds.append(t_sql)
-        args += t_args
+    if "tags" not in skip:
+        tag_list = [t for t in (tags or "").split(",") if t]
+        if tag_list:
+            t_sql, t_args = _tag_where(alias, tags, tag_mode)
+            preds.append(t_sql)
+            args += t_args
     return preds, args
 
 
@@ -1967,36 +1973,90 @@ def _wfx_where(wfx: str, wfx_mode: str):
     return "(" + join.join(preds) + ")", []
 
 
+def _facet_all(conn, table: str, alias: str, w: str, args: list) -> int:
+    """分面里某维度“全部”选项的数量：清空该维度后剩余筛选的命中数。"""
+    return conn.execute(
+        f"SELECT COUNT(*) FROM {table} {alias} {w}", args
+    ).fetchone()[0]
+
+
+def _unit_facets(conn, build) -> dict:
+    """机体各筛选维度在当前筛选下的选项数量（剔除该维度自身的选择）。
+
+    键为字符串（与前端 option value 一致）；__all__ 为“清空该维度”后的总数。
+    """
+    facets: dict = {}
+    for dim in ("rarity", "acq", "type"):
+        w, args = build({dim})
+        col = {"rarity": "u.rarity", "acq": "u.acquisition", "type": "u.role"}[dim]
+        counts: dict = {}
+        for v, n in conn.execute(
+            f"SELECT {col} v, COUNT(*) n FROM unit u {w} GROUP BY {col}", args
+        ):
+            if v is None:
+                continue
+            key = "1" if (dim == "acq" and v == 1) else ("other" if dim == "acq" else str(v))
+            counts[key] = counts.get(key, 0) + n
+        counts["__all__"] = _facet_all(conn, "unit", "u", w, args)
+        facets[dim] = counts
+    for dim, col in (("series", "u.series_ids"), ("tags", "u.tags")):
+        w, args = build({dim})
+        counts = {}
+        for v, n in conn.execute(
+            f"SELECT CAST(je.value AS TEXT) v, COUNT(DISTINCT u.id) n "
+            f"FROM unit u, json_each({col}) je {w} GROUP BY je.value", args
+        ):
+            counts[str(v)] = n
+        counts["__all__"] = _facet_all(conn, "unit", "u", w, args)
+        facets[dim] = counts
+    # 武器特效：14 个 key 一次 SUM(CASE) 算完
+    w, args = build({"wfx"})
+    keys = list(WFX_FILTERS)
+    sums = ", ".join(
+        f"SUM(CASE WHEN ({WFX_FILTERS[k]}) THEN 1 ELSE 0 END)" for k in keys
+    )
+    row = conn.execute(f"SELECT {sums} FROM unit u {w}", args).fetchone()
+    counts = {k: (row[i] or 0) for i, k in enumerate(keys)}
+    counts["__all__"] = _facet_all(conn, "unit", "u", w, args)
+    facets["wfx"] = counts
+    return facets
+
+
 def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
               tags: str, tag_mode: str, match: str, wfx: str, wfx_mode: str,
-              cond: str, sort: str, order: str, limit: int, offset: int) -> dict:
-    where, args = [], []
-    if q:
-        where.append("(u.name LIKE ? OR u.short_name LIKE ?)")
-        args += [f"%{q}%", f"%{q}%"]
-    if rarity:
-        where.append("rarity = ?")
-        args.append(int(rarity))
-    if acq:
-        if acq == "other":
-            where.append("u.acquisition != 1")
-        else:
-            where.append("u.acquisition = ?")
-            args.append(int(acq))
-    wfx_sql, wfx_args = _wfx_where(wfx, wfx_mode)
-    if wfx_sql:
-        where.append(wfx_sql)
-        args += wfx_args
-    cond_sql, cond_args = _cond_where("u", cond)
-    if cond_sql:
-        where.append(cond_sql)
-        args += cond_args
-    preds, f_args = _filter_predicates("u", series, type_, tags, tag_mode)
-    if preds:
-        join = " OR " if match == "or" else " AND "
-        where.append("(" + join.join(preds) + ")")
-        args += f_args
-    w = ("WHERE " + " AND ".join(where)) if where else ""
+              cond: str, sort: str, order: str, limit: int, offset: int,
+              facets: bool = False) -> dict:
+    def build(skip=()):
+        where, args = [], []
+        if q:
+            where.append("(u.name LIKE ? OR u.short_name LIKE ?)")
+            args += [f"%{q}%", f"%{q}%"]
+        if rarity and "rarity" not in skip:
+            where.append("u.rarity = ?")
+            args.append(int(rarity))
+        if acq and "acq" not in skip:
+            if acq == "other":
+                where.append("u.acquisition != 1")
+            else:
+                where.append("u.acquisition = ?")
+                args.append(int(acq))
+        if wfx and "wfx" not in skip:
+            wfx_sql, wfx_args = _wfx_where(wfx, wfx_mode)
+            if wfx_sql:
+                where.append(wfx_sql)
+                args += wfx_args
+        cond_sql, cond_args = _cond_where("u", cond)
+        if cond_sql:
+            where.append(cond_sql)
+            args += cond_args
+        preds, f_args = _filter_predicates("u", series, type_, tags, tag_mode, skip)
+        if preds:
+            join = " OR " if match == "or" else " AND "
+            where.append("(" + join.join(preds) + ")")
+            args += f_args
+        return (("WHERE " + " AND ".join(where)) if where else ""), args
+
+    w, args = build()
     conn = _conn()
     rows = _all(
         conn,
@@ -2008,6 +2068,7 @@ def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
             {w} ORDER BY u.id""",
         args,
     )
+    facets_data = _unit_facets(conn, build) if facets else None
     conn.close()
     for r in rows:
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
@@ -2029,7 +2090,10 @@ def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
     else:
         rows.sort(key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0))
     total = len(rows)
-    return {"total": total, "items": rows[offset:offset + limit]}
+    result = {"total": total, "items": rows[offset:offset + limit]}
+    if facets_data is not None:
+        result["facets"] = facets_data
+    return result
 
 
 def api_unit_detail(unit_id: int) -> dict | None:
@@ -3089,27 +3153,97 @@ def api_character_edit(payload: dict, preview: bool = True) -> dict:
     return {"ok": True, "diff": diff, "message": "已保存到本地"}
 
 
+def _char_facets(conn, build, support: str, counter_guard: set) -> dict:
+    """驾驶员各筛选维度选项数量（剔除该维度自身）。
+
+    support 是 SQL 之后的 Python 过滤（支援次数标签），无法用 GROUP BY，故逐维度
+    取候选行后在 Python 里套用同一过滤再计数（skills 维度再按候选 id 关联技能名）。
+    """
+    facets: dict = {}
+    for dim in ("rarity", "type", "series", "tags", "skills", "support"):
+        w, args = build({dim})
+        rows = _all(
+            conn,
+            f"SELECT c.id, c.rarity, c.role, c.series_ids, c.tags, c.support_info "
+            f"FROM character c {w}",
+            args,
+        )
+        if support and dim != "support":
+            if support == "反击援防":
+                rows = [r for r in rows if r["id"] in counter_guard]
+            else:
+                rows = [r for r in rows
+                        if support_label(_json_dict(r.get("support_info"))) == support]
+        counts: dict = {}
+        if dim == "rarity":
+            for r in rows:
+                if r.get("rarity") is not None:
+                    k = str(r["rarity"])
+                    counts[k] = counts.get(k, 0) + 1
+        elif dim == "type":
+            for r in rows:
+                if r.get("role") is not None:
+                    k = str(r["role"])
+                    counts[k] = counts.get(k, 0) + 1
+        elif dim == "series":
+            for r in rows:
+                for sid in _json_list(r.get("series_ids")):
+                    k = str(sid)
+                    counts[k] = counts.get(k, 0) + 1
+        elif dim == "tags":
+            for r in rows:
+                for t in _json_list(r.get("tags")):
+                    k = str(t)
+                    counts[k] = counts.get(k, 0) + 1
+        elif dim == "support":
+            for r in rows:
+                lbl = support_label(_json_dict(r.get("support_info")))
+                if lbl:
+                    counts[lbl] = counts.get(lbl, 0) + 1
+            cg = sum(1 for r in rows if r["id"] in counter_guard)
+            if cg:
+                counts["反击援防"] = cg
+        else:  # skills：按候选 id 关联技能名计数
+            ids = [r["id"] for r in rows]
+            if ids:
+                ph = ",".join("?" for _ in ids)
+                for name, n in conn.execute(
+                    f"SELECT cs.name, COUNT(DISTINCT cs.character_id) FROM character_skill cs "
+                    f"WHERE cs.character_id IN ({ph}) GROUP BY cs.name",
+                    ids,
+                ):
+                    if name:
+                        counts[name] = n
+        counts["__all__"] = len(rows)
+        facets[dim] = counts
+    return facets
+
+
 def api_characters(q: str, rarity: str, series: str, type_: str,
                    tags: str, tag_mode: str, match: str, skills: str, skill_mode: str,
                    support: str, sort: str, order: str,
-                   limit: int, offset: int) -> dict:
-    where, args = [], []
-    if q:
-        where.append("c.name LIKE ?")
-        args.append(f"%{q}%")
-    if rarity:
-        where.append("c.rarity = ?")
-        args.append(int(rarity))
-    preds, f_args = _filter_predicates("c", series, type_, tags, tag_mode)
-    if preds:
-        join = " OR " if match == "or" else " AND "
-        where.append("(" + join.join(preds) + ")")
-        args += f_args
-    skill_sql, skill_args = _skill_where(skills, skill_mode)
-    if skill_sql:
-        where.append(skill_sql)
-        args += skill_args
-    w = ("WHERE " + " AND ".join(where)) if where else ""
+                   limit: int, offset: int, facets: bool = False) -> dict:
+    def build(skip=()):
+        where, args = [], []
+        if q:
+            where.append("c.name LIKE ?")
+            args.append(f"%{q}%")
+        if rarity and "rarity" not in skip:
+            where.append("c.rarity = ?")
+            args.append(int(rarity))
+        preds, f_args = _filter_predicates("c", series, type_, tags, tag_mode, skip)
+        if preds:
+            join = " OR " if match == "or" else " AND "
+            where.append("(" + join.join(preds) + ")")
+            args += f_args
+        if skills and "skills" not in skip:
+            skill_sql, skill_args = _skill_where(skills, skill_mode)
+            if skill_sql:
+                where.append(skill_sql)
+                args += skill_args
+        return (("WHERE " + " AND ".join(where)) if where else ""), args
+
+    w, args = build()
     conn = _conn()
     counter_guard = _counter_guard_ids(conn)
     rows = _all(
@@ -3122,6 +3256,7 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
             {w} ORDER BY c.id""",
         args,
     )
+    facets_data = _char_facets(conn, build, support, counter_guard) if facets else None
     conn.close()
     for r in rows:
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
@@ -3145,7 +3280,10 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
     else:
         rows.sort(key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0))
     total = len(rows)
-    return {"total": total, "items": rows[offset:offset + limit]}
+    result = {"total": total, "items": rows[offset:offset + limit]}
+    if facets_data is not None:
+        result["facets"] = facets_data
+    return result
 
 
 def api_character_detail(char_id: int) -> dict | None:
@@ -3312,29 +3450,61 @@ SUPPORTER_SORT_KEYS = {
 }
 
 
+def _supporter_facets(conn, build) -> dict:
+    """支援角色分面：词条标签 / 主动技 候选项数量（剔除该维度自身）。"""
+    facets: dict = {}
+    w, args = build({"tags"})
+    counts: dict = {}
+    for v, n in conn.execute(
+        f"SELECT CAST(je.value AS TEXT) v, COUNT(DISTINCT s.id) n "
+        f"FROM supporter s, json_each(s.tags) je {w} GROUP BY je.value", args
+    ):
+        counts[str(v)] = n
+    counts["__all__"] = _facet_all(conn, "supporter", "s", w, args)
+    facets["tags"] = counts
+    w, args = build({"skills"})
+    counts = {}
+    for name, n in conn.execute(
+        f"SELECT ss.name, COUNT(DISTINCT s.id) FROM supporter s "
+        f"JOIN supporter_skill ss ON ss.supporter_id = s.id AND ss.skill_type = 'active' "
+        f"{w} GROUP BY ss.name", args
+    ):
+        if name:
+            counts[name] = n
+    counts["__all__"] = _facet_all(conn, "supporter", "s", w, args)
+    facets["skills"] = counts
+    return facets
+
+
 def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: str,
                    sort: str, order: str, limit: int, offset: int,
-                   affected_tags: str = "", exclude: str = "") -> dict:
+                   affected_tags: str = "", exclude: str = "",
+                   facets: bool = False) -> dict:
+    def build(skip=()):
+        where, args = [], []
+        if q:
+            where.append("(s.name LIKE ? OR s.tags LIKE ?)")
+            args += [f"%{q}%", f"%{q}%"]
+        ex_ids = _exclude_ids(exclude)
+        if ex_ids:
+            where.append(_not_in_clause("s.id", ex_ids))
+            args += ex_ids
+        if "tags" not in skip:
+            tag_sql, tag_args = _tag_where("s", tags, tag_mode)
+            if tag_sql:
+                where.append(tag_sql)
+                args += tag_args
+        if "skills" not in skip:
+            skill_sql, skill_args = _supporter_active_skill_where("s", skills, skill_mode)
+            if skill_sql:
+                where.append(skill_sql)
+                args += skill_args
+        return (("WHERE " + " AND ".join(where)) if where else ""), args
+
+    w, args = build()
     conn = _conn()
     tag_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
     series_by_id = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")}
-    where, args = [], []
-    if q:
-        where.append("(s.name LIKE ? OR s.tags LIKE ?)")
-        args += [f"%{q}%", f"%{q}%"]
-    ex_ids = _exclude_ids(exclude)
-    if ex_ids:
-        where.append(_not_in_clause("s.id", ex_ids))
-        args += ex_ids
-    tag_sql, tag_args = _tag_where("s", tags, tag_mode)
-    if tag_sql:
-        where.append(tag_sql)
-        args += tag_args
-    skill_sql, skill_args = _supporter_active_skill_where("s", skills, skill_mode)
-    if skill_sql:
-        where.append(skill_sql)
-        args += skill_args
-    w = ("WHERE " + " AND ".join(where)) if where else ""
     rows = _all(
         conn,
         f"""SELECT s.id, s.rarity, s.name, s.tags,
@@ -3343,6 +3513,7 @@ def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: st
            FROM supporter s {w} ORDER BY s.id""",
         args,
     )
+    facets_data = _supporter_facets(conn, build) if facets else None
     for r in rows:
         try:
             r["tags"] = json.loads(r.get("tags") or "[]")
@@ -3429,7 +3600,10 @@ def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: st
     else:
         rows.sort(key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0))
     total = len(rows)
-    return {"total": total, "items": rows[offset:offset + limit]}
+    result = {"total": total, "items": rows[offset:offset + limit]}
+    if facets_data is not None:
+        result["facets"] = facets_data
+    return result
 
 
 def api_supporter_detail(sup_id: int) -> dict | None:
@@ -4462,7 +4636,7 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("match", ["and"])[0], q.get("wfx", [""])[0],
                 q.get("wfx_mode", ["any"])[0], q.get("cond", [""])[0],
                 q.get("sort", [""])[0], q.get("order", ["desc"])[0],
-                limit, offset))
+                limit, offset, q.get("facets", ["0"])[0] == "1"))
         if path == "/api/characters":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)
@@ -4473,7 +4647,8 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("skills", [""])[0], q.get("skill_mode", ["any"])[0],
                 q.get("support", [""])[0],
                 q.get("sort", [""])[0],
-                q.get("order", ["desc"])[0], limit, offset))
+                q.get("order", ["desc"])[0], limit, offset,
+                q.get("facets", ["0"])[0] == "1"))
         if path == "/api/supporters":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)
@@ -4483,7 +4658,7 @@ class Handler(BaseHTTPRequestHandler):
                 q.get("skills", [""])[0], q.get("skill_mode", ["any"])[0],
                 q.get("sort", [""])[0], q.get("order", ["desc"])[0],
                 limit, offset, q.get("affected_tags", [""])[0],
-                q.get("exclude", [""])[0]))
+                q.get("exclude", [""])[0], q.get("facets", ["0"])[0] == "1"))
         if path == "/api/search":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)
