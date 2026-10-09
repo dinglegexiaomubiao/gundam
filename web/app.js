@@ -2328,12 +2328,6 @@ async function openCharacter(id) {
   charView.c = c;
   charView.formKey = "default";
   charView.on.clear();
-  const skills = c.skills.map((sk) => `
-    <tr><td><button class="link-name" data-type="skill" data-name="${esc(sk.name)}">${esc(sk.name)}</button></td>
-      <td>${sk.sp ?? "—"}</td><td>${sk.duration ?? "—"}</td><td class="desc">${effectHtml(sk.effects, sk.desc, sk.cond_entities)}</td></tr>`).join("");
-  const abilities = c.abilities.map((a) => `
-    <tr><td><button class="link-name" data-type="ability" data-name="${esc(a.name)}">${esc(a.name)}</button></td>
-      <td class="desc">${effectHtml(a.effects, a.desc, a.cond_entities)}</td></tr>`).join("");
   const seriesHtml = (c.series_names || []).length
     ? `<div class="tags" style="margin-bottom:10px">${c.series_names.map((s) => `<button class="chip series-chip" data-series-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : "";
   const tagsHtml = (c.tags || []).length
@@ -2353,10 +2347,10 @@ async function openCharacter(id) {
     <div id="char-attr"></div>
     ${noteHtml}`;
   const contentHtml = `
-    <h3>技能（${c.skills.length}）</h3>
-    <table><tr><th>名称</th><th>SP</th><th>持续</th><th>效果</th></tr>${skills || '<tr><td colspan="4" class="empty">无</td></tr>'}</table>
-    <h3>能力（${c.abilities.length}）</h3>
-    <table><tr><th>名称</th><th>效果</th></tr>${abilities || '<tr><td colspan="2" class="empty">无</td></tr>'}</table>`;
+    <h3>技能（<span id="char-skill-count">0</span>）</h3>
+    <table id="char-skill-table"></table>
+    <h3>能力（<span id="char-ability-count">0</span>）</h3>
+    <table id="char-ability-table"></table>`;
   showModal(`${esc(c.name)}<span class="char-edit-btns">
        <button id="char-edit-btn" class="cond-btn" title="进入编辑模式">修改驾驶员数据</button>
        <button id="char-save-btn" class="cond-btn" title="保存修改到本地">保存修改到本地</button>
@@ -2368,9 +2362,8 @@ async function openCharacter(id) {
   if (box) box.classList.add("modal-detail");
   renderCharAttr();
   bindCharAttr();
+  renderCharTables();
   bindTagChips();
-  bindSearchLinks();
-  bindEffectChips();
   bindCharInfoChips();
   bindCharacterEditButtons(c);
 }
@@ -2380,6 +2373,43 @@ const charView = { c: null, formKey: "default", on: new Set() };
 
 function charForm() {
   return charView.c.forms[charView.formKey] || charView.c.forms.default;
+}
+
+// 技能/能力表按当前形态（默认 / SP）取数：同一槽位的 SP 版本是默认版本的升级（覆盖）；
+// 该槽位 SP 后未改动（与默认同一条）时，SP 形态沿用默认那一条。
+function charRowsForForm(rows) {
+  const list = rows || [];
+  if (charView.formKey !== "sp") return list.filter((r) => !r.is_sp);
+  const bySlot = new Map();
+  for (const r of list) {
+    const s = r.sort ?? 0;
+    const cur = bySlot.get(s);
+    if (!cur || (r.is_sp && !cur.is_sp)) bySlot.set(s, r);
+  }
+  return [...bySlot.values()].sort((a, b) => ((a.sort ?? 0) - (b.sort ?? 0)));
+}
+
+function renderCharTables() {
+  const c = charView.c;
+  if (!c) return;
+  const skills = charRowsForForm(c.skills);
+  const abilities = charRowsForForm(c.abilities);
+  const skRows = skills.map((sk) => `
+    <tr><td><button class="link-name" data-type="skill" data-name="${esc(sk.name)}">${esc(sk.name)}</button></td>
+      <td>${sk.sp ?? "—"}</td><td>${sk.duration ?? "—"}</td><td class="desc">${effectHtml(sk.effects, sk.desc, sk.cond_entities)}</td></tr>`).join("");
+  const abRows = abilities.map((a) => `
+    <tr><td><button class="link-name" data-type="ability" data-name="${esc(a.name)}">${esc(a.name)}</button></td>
+      <td class="desc">${effectHtml(a.effects, a.desc, a.cond_entities)}</td></tr>`).join("");
+  const $cnt = (sel, n) => { const el = $(sel); if (el) el.textContent = n; };
+  const $html = (sel, h) => { const el = $(sel); if (el) el.innerHTML = h; };
+  $cnt("#char-skill-count", skills.length);
+  $cnt("#char-ability-count", abilities.length);
+  $html("#char-skill-table", `<tr><th>名称</th><th>SP</th><th>持续</th><th>效果</th></tr>`
+    + (skRows || '<tr><td colspan="4" class="empty">无</td></tr>'));
+  $html("#char-ability-table", `<tr><th>名称</th><th>效果</th></tr>`
+    + (abRows || '<tr><td colspan="2" class="empty">无</td></tr>'));
+  bindSearchLinks();
+  bindEffectChips();
 }
 
 /* 当前形态下可用的条件加成行（角色的条件加成按 values 区分形态） */
@@ -2496,6 +2526,7 @@ function charSetForm(fk) {
   charView.formKey = fk;
   charPruneCond();
   renderCharAttr();
+  renderCharTables();
 }
 
 function charToggleCond(name) {
@@ -2516,8 +2547,8 @@ const CHAR_ROLE_OPTS = [[1, "攻击型"], [2, "耐久型"], [3, "支援型"]];
 const CHAR_RARITY_OPTS = [[5, "UR"], [4, "SSR"], [3, "SR"], [2, "R"], [1, "N"]];
 const CHAR_STAT_KEYS = ["ranged", "melee", "defense", "reaction", "awaken"];
 const CHAR_STAT_LABELS = { ranged: "射击", melee: "格斗", defense: "防御", reaction: "反应", awaken: "觉醒" };
-const CHAR_SKILL_FIELDS = ["character_skill_id", "level", "name", "desc", "sp", "duration", "is_auto_usage", "auto_usage_priority", "traits"];
-const CHAR_ABILITY_FIELDS = ["ability_id", "level", "name", "desc", "ability_type", "traits"];
+const CHAR_SKILL_FIELDS = ["character_skill_id", "level", "name", "desc", "sp", "duration", "is_auto_usage", "auto_usage_priority", "traits", "is_sp"];
+const CHAR_ABILITY_FIELDS = ["ability_id", "level", "name", "desc", "ability_type", "traits", "is_sp"];
 const _pickKeys = (o, ks) => { const r = {}; for (const k of ks) if (o[k] !== undefined) r[k] = o[k]; return r; };
 
 function bindCharacterEditButtons(c) {

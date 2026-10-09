@@ -197,6 +197,7 @@ CREATE TABLE IF NOT EXISTS character_skill (
   is_auto_usage INTEGER,
   auto_usage_priority INTEGER,
   traits TEXT,
+  is_sp INTEGER DEFAULT 0,
   UNIQUE(character_id, character_skill_id),
   FOREIGN KEY (character_id) REFERENCES character(id)
 );
@@ -212,6 +213,7 @@ CREATE TABLE IF NOT EXISTS character_ability (
   desc TEXT,
   ability_type INTEGER,
   traits TEXT,
+  is_sp INTEGER DEFAULT 0,
   UNIQUE(character_id, ability_id),
   FOREIGN KEY (character_id) REFERENCES character(id)
 );
@@ -488,6 +490,28 @@ def _slot_variants(slot: dict, primary: str, sp_key: str,
     return out
 
 
+def _char_slot_variants(slot: dict, primary: str, sp_key: str,
+                        id_key: str, sp_id_key: str) -> list:
+    """角色技能/能力槽位：默认实体与 SP 实体分开返回 [(id, obj, is_sp)]。
+
+    同一槽位的 SP 实体是默认实体的升级（是覆盖，不是叠加），两者各自入库并打
+    is_sp 标记；若二者 id 相同（该槽位 SP 后未改动）则只留默认一条。
+    """
+    out: list = []
+    seen: set = set()
+    for key, is_sp in ((primary, 0), (sp_key, 1)):
+        obj = slot.get(key) or {}
+        sid = _i(obj.get("id"))
+        if sid is not None and sid not in seen:
+            seen.add(sid)
+            out.append((sid, obj, is_sp))
+    if not out:
+        fallback = (_i(slot.get(sp_id_key)) or _i(slot.get(id_key))
+                    or -(_i(slot.get("sort")) or 0))
+        out.append((fallback, {}, 0))
+    return out
+
+
 def _clear_character_children(conn, char_id: int) -> None:
     """清空某驾驶员的技能/能力子表（重建前调用，避免重复累积）。"""
     conn.execute("DELETE FROM character_skill WHERE character_id=?", (char_id,))
@@ -504,33 +528,34 @@ def ingest_character_children(conn, c: dict) -> None:
     """
     char_id = _i(c["id"])
     for sk in c.get("skills") or []:
-        for skill_id, skill in _slot_variants(
+        for skill_id, skill, is_sp in _char_slot_variants(
                 sk, "skill", "skill_sp", "character_skill_id", "sp_character_skill_id"):
             traits = [t.get("trait") or t for t in skill.get("trait_set") or []]
             conn.execute(
                 """INSERT OR IGNORE INTO character_skill
                    (character_id, character_skill_id, sort, level, name, desc, sp,
-                    duration, is_auto_usage, auto_usage_priority, traits)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    duration, is_auto_usage, auto_usage_priority, traits, is_sp)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (char_id, skill_id, _i(sk.get("sort")),
                  _i(sk.get("level")), skill.get("name"), skill.get("desc"),
                  _i(skill.get("sp")), _i(skill.get("duration")),
                  _b(skill.get("is_auto_usage")), _i(skill.get("auto_usage_priority")),
-                 json.dumps(traits, ensure_ascii=False)),
+                 json.dumps(traits, ensure_ascii=False), is_sp),
             )
     for ab in c.get("abilities") or []:
-        for ability_id, ability in _slot_variants(
+        for ability_id, ability, is_sp in _char_slot_variants(
                 ab, "ability", "ability_sp", "ability_id", "sp_ability_id"):
             detail = ability.get("detail") or {}
             traits = [t.get("trait") or t for t in ability.get("traits") or []]
             conn.execute(
                 """INSERT OR IGNORE INTO character_ability
-                   (character_id, ability_id, sort, level, name, desc, ability_type, traits)
-                   VALUES (?,?,?,?,?,?,?,?)""",
+                   (character_id, ability_id, sort, level, name, desc, ability_type,
+                    traits, is_sp)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 (char_id, ability_id, _i(ab.get("sort")),
                  _i(ab.get("level")), detail.get("name") or ability.get("name"),
                  detail.get("desc"), _i(ability.get("ability_type")),
-                 json.dumps(traits, ensure_ascii=False)),
+                 json.dumps(traits, ensure_ascii=False), is_sp),
             )
 
 
@@ -569,10 +594,12 @@ def _support_info(abilities, skills) -> dict:
                         info[kind]["uncond_count"] += n
 
     for ab in abilities or []:
-        # 主能力与 SP 能力都要统计；互为镜像时 _slot_variants 已按 id 去重，
-        # 不会重复计数。
-        for _aid, obj in _slot_variants(ab, "ability", "ability_sp",
-                                        "ability_id", "sp_ability_id"):
+        # 每个槽位只按「默认形态」计一次：SP 版本是默认版本的升级（覆盖而非叠加），
+        # 两者相加会把次数算重（如 LV2 与 LV3 各 +1 被误算成 2 次）。
+        for _aid, obj, is_sp in _char_slot_variants(
+                ab, "ability", "ability_sp", "ability_id", "sp_ability_id"):
+            if is_sp:
+                continue
             scan([t.get("trait") or t for t in obj.get("traits") or []])
     return info
 
@@ -1098,11 +1125,12 @@ def recompute_character_derived(conn, char_id: int) -> None:
     （trait 描述解析百分比加成，能力不计技能）。
     """
     rows = conn.execute(
-        "SELECT name, traits FROM character_ability WHERE character_id = ?",
+        "SELECT name, traits, COALESCE(is_sp, 0) FROM character_ability "
+        "WHERE character_id = ?",
         (char_id,),
     ).fetchall()
     # 按位置取值，避免隐式依赖连接的 row_factory（Row / tuple 均可用）
-    rows = [{"name": r[0], "traits": r[1]} for r in rows]
+    rows = [{"name": r[0], "traits": r[1], "is_sp": r[2]} for r in rows]
     tag_map = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM tag")}
     series_by_id = {
         r[0]: r[1] for r in conn.execute("SELECT id, name FROM series")
@@ -1133,6 +1161,8 @@ def recompute_character_derived(conn, char_id: int) -> None:
             for item in cb:
                 item["name"] = ab_name
                 conditional_bonuses.append(item)
+            if row.get("is_sp"):
+                continue  # 支援次数只按默认形态计一次（SP 是升级覆盖，不叠加）
             ac = t.get("active_condition") or {}
             has_cond = any(
                 v not in (None, "", 0, False, [])
@@ -1335,9 +1365,23 @@ def ingest_events(conn):
     print(f"剧情事件 {len(story)} 个（Boss {boss_total} 个），塔楼事件 {len(tower)} 个")
 
 
+def _ensure_columns(conn) -> None:
+    """给既有库补加后来新增的列（CREATE TABLE IF NOT EXISTS 不会改动已存在的表）。"""
+    wanted = {
+        "character_skill": [("is_sp", "INTEGER DEFAULT 0")],
+        "character_ability": [("is_sp", "INTEGER DEFAULT 0")],
+    }
+    for table, cols in wanted.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def build_db(on_progress=None) -> None:
     conn = _conn()
     conn.executescript(SCHEMA)
+    _ensure_columns(conn)
     if on_progress:
         on_progress("构建：系列与阵营", 0, 5)
     print("构建 tag_id -> tag_name 映射…")

@@ -3163,22 +3163,25 @@ def api_character_edit(payload: dict, preview: bool = True) -> dict:
             conn.execute(
                 "INSERT INTO character_skill (character_id, character_skill_id, "
                 "sort, level, name, desc, sp, duration, is_auto_usage, "
-                "auto_usage_priority, traits) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "auto_usage_priority, traits, is_sp) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (char_id, _opt_int(sk.get("character_skill_id")), i + 1,
                  _opt_int(sk.get("level")), sk.get("name") or "",
                  sk.get("desc") or "", _opt_int(sk.get("sp")),
                  _opt_int(sk.get("duration")), _opt_bool(sk.get("is_auto_usage")),
-                 _opt_int(sk.get("auto_usage_priority")), sk.get("traits") or "[]"),
+                 _opt_int(sk.get("auto_usage_priority")), sk.get("traits") or "[]",
+                 _opt_int(sk.get("is_sp")) if sk.get("is_sp") is not None else 0),
             )
         conn.execute("DELETE FROM character_ability WHERE character_id = ?", (char_id,))
         for i, ab in enumerate(new_abilities):
             conn.execute(
                 "INSERT INTO character_ability (character_id, ability_id, sort, "
-                "level, name, desc, ability_type, traits) VALUES (?,?,?,?,?,?,?,?)",
+                "level, name, desc, ability_type, traits, is_sp) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (char_id, _opt_int(ab.get("ability_id")), i + 1,
                  _opt_int(ab.get("level")), ab.get("name") or "",
                  ab.get("desc") or "", _opt_int(ab.get("ability_type")),
-                 ab.get("traits") or "[]"),
+                 ab.get("traits") or "[]",
+                 _opt_int(ab.get("is_sp")) if ab.get("is_sp") is not None else 0),
             )
         recompute_character_derived(conn, char_id)
         now = time.strftime("%Y-%m-%d %H:%M:%S")

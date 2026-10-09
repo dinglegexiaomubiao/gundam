@@ -432,6 +432,11 @@ baseDamage         = roundUp((四者之和) × 武器威力)
 每个 kind 记录 `count` 与拆分 `uncond_count` / `cond_count`，备注（`support_label`）据此把
 「无条件 / 有条件」两部分分别展示并用 `+` 连接（旧数据缺拆分字段时退化为单一标签）。
 
+技能/能力槽位用 `_char_slot_variants` 拆出**默认实体与 SP 实体**（`is_sp` 0/1）：
+同一槽位的 SP 版本是默认版本的升级（覆盖，不是叠加），两者各自入库并打标记；SP 后未改动
+（两者 id 相同）时只留默认一条。支援备注只按默认形态计一次，避免 LV2+LV3 各 +1 被算成 2 次。
+驾驶员详情页的技能/能力表跟随「默认 / SP 形态」切换取数（`charRowsForForm`）。
+
 #### `ingest_supporters(conn, tag_map)`
 解析支援角色，使用 `parse_supporter_conditions` 解析队长技条件。
 
@@ -578,8 +583,8 @@ HTTP 请求处理器，实现：
 | `unit_weapon` | `unit_id → unit` | 机体武器（含 `power_lv5` / `power_lv9`、`weapon_effects`、`map_weapon_*`） |
 | `unit_ability` | `unit_id → unit` | 机体能力 |
 | `unit_skill` | `unit_id → unit` | 机体技能 |
-| `character_skill` | `character_id → character` | 驾驶员技能 |
-| `character_ability` | `character_id → character` | 驾驶员能力 |
+| `character_skill` | `character_id → character` | 驾驶员技能（`is_sp` 标记默认/SP 形态） |
+| `character_ability` | `character_id → character` | 驾驶员能力（`is_sp` 标记默认/SP 形态） |
 | `supporter_growth` | — | 支援角色成长表 |
 | `supporter_skill` | `supporter_id → supporter` | 支援角色技能（`leader` / `active`，含 `conditions`） |
 
