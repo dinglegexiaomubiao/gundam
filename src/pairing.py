@@ -552,6 +552,52 @@ def _effective_stat(pilot: dict, key: str, cond_pct) -> int:
     return base * (100 + uncond + int(cond_pct or 0)) // 100
 
 
+def _apply_unit_form_row(row: dict, form: str, full_cond: bool) -> dict:
+    """按「形态开关」改写机体行的 max_* 与 stat_bonuses（仅内存，不落库）。
+
+    下游 _unit_attack / 评分 / 展示区都读 unit_row，故无需改动评分函数。
+    form: "" | "sp" | "ssp"（UR 无 SP；ssp 无数据时回退 sp）；full_cond 叠加全部条件加成。
+    """
+    if not form and not full_cond:
+        return row
+    out = dict(row)
+    rarity = row.get("rarity") or 5
+    if form in ("sp", "ssp") and rarity < 5:
+        use_ssp = form == "ssp" and any(
+            row.get(f"ssp_max_{k}")
+            for k in ("attack", "defense", "mobility", "hp", "en")
+        )
+        for k in ("attack", "defense", "mobility", "hp", "en", "movement"):
+            base = row.get(f"sp_max_{k}") or 0
+            if use_ssp:
+                base += row.get(f"ssp_max_{k}") or 0
+            out[f"max_{k}"] = base
+    if full_cond:
+        bonuses = dict(_json_dict(row.get("stat_bonuses")))
+        for item in _json_list(row.get("conditional_bonuses")):
+            key = item.get("stat")
+            if key:
+                bonuses[key] = bonuses.get(key, 0) + int(item.get("pct") or 0)
+        out["stat_bonuses"] = json.dumps(bonuses, ensure_ascii=False)
+    return out
+
+
+def _pilot_with_form(p: dict, want_sp: bool) -> dict:
+    """按形态取驾驶员的属性（默认形态为基线；want_sp 且该驾驶员有 SP 时用 SP）。"""
+    src = p.get("stats_sp") if (want_sp and p.get("stats_sp")) else p.get("stats_default")
+    bases = (
+        p.get("stat_bases_sp") if (want_sp and p.get("stats_sp"))
+        else p.get("stat_bases_default")
+    )
+    if not src:
+        return p
+    out = dict(p)
+    out["stats"] = src
+    if bases:
+        out["stat_bases"] = bases
+    return out
+
+
 def _counter_guard_ids(conn) -> set[int]:
     ids: set[int] = set()
     for cid, name, traits in conn.execute(
@@ -639,9 +685,21 @@ def _build_pilots() -> list:
             prefix = "sp_" if form == "sp" else ""
             bonuses = _json_dict(row.get("stat_bonuses"))
             stats = {k: _full_stat(row, bonuses, k, form) for k in STAT_KEYS}
-            stat_bases = {
-                k: row.get(prefix + "max_" + k) or 0 for k in STAT_KEYS
+            stats_default = {
+                k: _full_stat(row, bonuses, k, "default") for k in STAT_KEYS
             }
+            stats_sp = (
+                {k: _full_stat(row, bonuses, k, "sp") for k in STAT_KEYS}
+                if rarity < 5 else None
+            )
+            stat_bases_default = {
+                k: row.get("max_" + k) or 0 for k in STAT_KEYS
+            }
+            stat_bases_sp = (
+                {k: row.get("sp_max_" + k) or 0 for k in STAT_KEYS}
+                if rarity < 5 else None
+            )
+            stat_bases = stat_bases_sp if form == "sp" else stat_bases_default
             abilities = [
                 _parse_ability(
                     a["name"], a["traits"], _TAG_NAME, _SERIES_NAME
@@ -703,7 +761,11 @@ def _build_pilots() -> list:
                 "tags": set(_json_list(row.get("tags"))),
                 "support_label": lbl,
                 "stats": stats,
+                "stats_default": stats_default,
+                "stats_sp": stats_sp,
                 "stat_bases": stat_bases,
+                "stat_bases_default": stat_bases_default,
+                "stat_bases_sp": stat_bases_sp,
                 "stat_bonus_pct": dict(bonuses),
                 "abilities": abilities,
                 "skills": skills,
@@ -1164,6 +1226,11 @@ def match_pilot(
     if not unit_row:
         conn.close()
         return {"error": "机体不存在", "ok": False}
+    _f = filters or {}
+    unit_row = _apply_unit_form_row(
+        unit_row, str(_f.get("uform") or ""),
+        str(_f.get("ufullcond") or "") in ("1", "true", "on", "yes"),
+    )
     weapon_row = None
     if action == "attack":
         wq = conn.execute(
@@ -1265,14 +1332,18 @@ def match_pilot(
             "crit_ov": str(enemy.get("crit_ov") or "").strip(),
             "critdmg_ov": str(enemy.get("critdmg_ov") or "").strip(),
         }
-        candidates = _apply_pilot_constraints(_pilots, filters)
+        want_sp = str(_f.get("pform") or "") == "sp"
+        candidates = [_pilot_with_form(p, want_sp)
+                      for p in _apply_pilot_constraints(_pilots, filters)]
         for p in candidates:
             rows.append(_score_attack(
                 p, unit_ctx, weapon_row, bench_cfg, unit_row, unit_tot, cfg
             ))
         rows.sort(key=lambda x: x["score"], reverse=True)
     else:
-        candidates = _apply_pilot_constraints(_pilots, filters)
+        want_sp = str(_f.get("pform") or "") == "sp"
+        candidates = [_pilot_with_form(p, want_sp)
+                      for p in _apply_pilot_constraints(_pilots, filters)]
         for p in candidates:
             rows.append(_score_defense(
                 p, unit_ctx, unit_row, enemy_cfg, unit_abilities, ext
@@ -2848,25 +2919,40 @@ def _apply_pilot_constraints(pilots: list, f: dict | None) -> list:
     return [p for p in pilots if _pair_pred(p, f)]
 
 
+_PAIR_SORT_FIELDS = (
+    "score", "damage", "crit_damage", "crit_rate", "dep_value",
+    "survive", "survive_crit", "first_damage", "defense", "dmg_down",
+)
+
+
+def _pair_sort_key(r: dict, sort: str):
+    if sort == "name":
+        return (r.get("name") or "").lower()
+    if sort == "rarity":
+        return r.get("rarity") or 0
+    if sort == "role":
+        return r.get("role") or 0
+    if sort in _PAIR_SORT_FIELDS:
+        return r.get(sort) or 0
+    return r.get("score") or 0
+
+
+def _pair_sort_specs(f: dict) -> list:
+    """解析多键排序：filters 里 sort/order 可为列表或逗号串（主 -> 次）。"""
+    raw = f.get("sort") or ""
+    keys = raw if isinstance(raw, list) else [k for k in str(raw).split(",") if k]
+    raw_o = f.get("order") or ""
+    orders = (raw_o if isinstance(raw_o, list)
+              else [o for o in str(raw_o).split(",") if o])
+    return [(k, orders[i] if i < len(orders) and orders[i] else "desc")
+            for i, k in enumerate(keys)]
+
+
 def _apply_pair_filters(rows: list, f: dict, action: str) -> list:
-    """对匹配结果应用驾驶员搜索筛选与排序。"""
+    """对匹配结果应用驾驶员搜索筛选与排序（支持多级键）。"""
     rows = _apply_pilot_constraints(rows, f)
-    sort = f.get("sort") or "score"
-    order_desc = (f.get("order") or "desc") != "asc"
-
-    def key(r):
-        if sort == "name":
-            return (r.get("name") or "").lower()
-        if sort == "rarity":
-            return r.get("rarity") or 0
-        if sort == "role":
-            return r.get("role") or 0
-        if sort in (
-            "score", "damage", "crit_damage", "crit_rate", "dep_value",
-            "survive", "survive_crit", "first_damage", "defense", "dmg_down",
-        ):
-            return r.get(sort) or 0
-        return r.get("score") or 0
-
-    rows.sort(key=key, reverse=order_desc)
+    specs = _pair_sort_specs(f) or [("score", "desc")]
+    rows.sort(key=lambda r: r.get("id") or 0)  # 稳定兜底
+    for k, o in reversed(specs):
+        rows.sort(key=lambda r, kk=k: _pair_sort_key(r, kk), reverse=(o != "asc"))
     return rows

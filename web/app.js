@@ -468,6 +468,26 @@ function clearUnitCond() {
   renderUnitCondBar();
 }
 
+// 选择器弹窗的词条对象芯片条（与机体页一致；分支由外部设置）
+function renderPickerCondBar() {
+  const bar = $("#picker-cond-bar");
+  if (!bar) return;
+  const branches = pickerState.cond || [];
+  if (!branches.length) {
+    bar.innerHTML = "";
+    return;
+  }
+  bar.innerHTML = `<span class="chip cond">词条对象筛选（${branches.length > 1
+    ? `${branches.length} 个分支的并集`
+    : "单分支"}）<button class="chip-x" aria-label="清除词条对象筛选" id="picker-cond-clear" title="清除词条对象筛选">×</button></span>`;
+  const btn = $("#picker-cond-clear");
+  if (btn) btn.addEventListener("click", () => {
+    pickerState.cond = null;
+    renderPickerCondBar();
+    loadPicker(0);
+  });
+}
+
 function searchUnitsByCond(branches) {
   $("#modal").classList.add("hidden");
   state.units.q = "";
@@ -3222,7 +3242,7 @@ const calcSel = {
   abInit: { atkU: false, atkP: false, defU: false, defP: false },
 };
 const calcSeq = { n: 0 };
-const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", tag_mode: "any", acq: "", wfx: "", wfx_mode: "any", skills: "", skill_mode: "any", support: "", affectedTags: "", sort: "rarity", order: "desc", page: 0, size: 20, onPick: null, exclude: "", validate: null };
+const pickerState = { kind: "", side: "", q: "", source: "library", rarity: "", type: "", series: "", tags: "", tag_mode: "any", acq: "", wfx: "", wfx_mode: "any", skills: "", skill_mode: "any", support: "", affectedTags: "", match: "and", cond: null, form: "", fullCond: false, sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 20, onPick: null, exclude: "", validate: null };
 
 async function initPickerTagBox(kind) {
   if (kind !== "unit" && kind !== "pilot" && kind !== "supporter") return;
@@ -3248,9 +3268,12 @@ function togglePickerFilters() {
     $(sel).classList.toggle("hidden", !show);
   });
   // 机体/驾驶员专属
-  ["#picker-type", "#picker-series-box"].forEach((sel) => $(sel).classList.toggle("hidden", !isUnit && !isPilot));
-  ["#picker-acq", "#picker-wfx-box"].forEach((sel) => $(sel).classList.toggle("hidden", !isUnit));
-  ["#picker-skill-box", "#picker-support"].forEach((sel) => $(sel).classList.toggle("hidden", !isPilot));
+  ["#picker-type", "#picker-series-box", "#picker-match"].forEach((sel) => $(sel).classList.toggle("hidden", !isUnit && !isPilot));
+  ["#picker-acq", "#picker-wfx-box", "#picker-cond-bar",
+   "#picker-form-sp", "#picker-form-ssp", "#picker-full-cond"].forEach(
+    (sel) => $(sel).classList.toggle("hidden", !isUnit));
+  ["#picker-skill-box", "#picker-support", "#picker-pilot-sp"].forEach(
+    (sel) => $(sel).classList.toggle("hidden", !isPilot));
   // 支援角色不显示类型/系列（无意义）
   if (isSupporter) {
     ["#picker-type", "#picker-series-box"].forEach((sel) => $(sel).classList.add("hidden"));
@@ -3264,7 +3287,8 @@ async function openPicker(kind, onPick, side, weaponUnit, opts) {
     rarity: "", type: "", series: "", tags: "",
     tag_mode: "any", acq: "", wfx: "", wfx_mode: "any",
     skills: "", skill_mode: "any", support: "", affectedTags: "",
-    sort: "rarity", order: "desc", page: 0, onPick,
+    match: "and", cond: null, form: "", fullCond: false,
+    sorts: [{ k: "rarity", o: "desc" }], page: 0, onPick,
     weaponUnit: weaponUnit || null,
     // exclude: 逗号分隔 id——组队页用来屏蔽已被占用的机体/驾驶员/支援角色
     exclude: opts.exclude && opts.exclude.length ? opts.exclude.join(",") : "",
@@ -3276,6 +3300,8 @@ async function openPicker(kind, onPick, side, weaponUnit, opts) {
     pickerState.tags = opts.defaultTags.join(",");
     pickerState.tag_mode = opts.tag_mode || "any";
   }
+  // 可传入词条对象（cond 分支数组），与机体页的词条对象筛选一致
+  if (kind === "unit" && opts.cond) pickerState.cond = opts.cond;
   $("#picker-title").textContent =
     kind === "unit" ? "选择机体" : kind === "pilot" ? "选择驾驶员"
     : kind === "weapon" ? "选择武器"
@@ -3292,6 +3318,12 @@ async function openPicker(kind, onPick, side, weaponUnit, opts) {
   $("#picker-tag-mode").value = pickerState.tag_mode;
   $("#picker-acq").value = "";
   $("#picker-support").value = "";
+  $("#picker-match").value = "and";
+  $("#picker-form-sp").checked = false;
+  $("#picker-form-ssp").checked = false;
+  $("#picker-full-cond").checked = false;
+  $("#picker-pilot-sp").checked = false;
+  renderPickerCondBar();
   syncCombobox("#picker-series-box");
   $("#picker-modal").classList.remove("hidden");
   await initPickerTagBox(kind);
@@ -3442,18 +3474,23 @@ async function loadPicker(page = pickerState.page) {
     params.set("series", s.series);
     params.set("tags", s.tags);
     params.set("tag_mode", s.tag_mode);
+    params.set("match", s.match);
     if (s.kind === "unit") {
       params.set("acq", s.acq);
       params.set("wfx", s.wfx);
       params.set("wfx_mode", s.wfx_mode);
+      if (s.cond) params.set("cond", JSON.stringify(s.cond));
+      if (s.form) params.set("form", s.form);
+      if (s.fullCond) params.set("fullcond", "1");
     } else {
       params.set("skills", s.skills);
       params.set("skill_mode", s.skill_mode);
       params.set("support", s.support);
+      if (s.form) params.set("form", s.form);
     }
   }
-  params.set("sort", s.sort);
-  params.set("order", s.order);
+  params.set("sort", sortParam(s));
+  params.set("order", orderParam(s));
   const d = await api(`/api/${ep}?` + params);
   const isEntity = s.kind === "unit" || s.kind === "pilot";
   const isSupporter = s.kind === "supporter";
@@ -3503,7 +3540,7 @@ async function loadPicker(page = pickerState.page) {
         ["name", "名称"], ["rarity", "稀有度"], ["type", "类型"], ["tags", "标签"],
         ["series", "系列"], ["attack", "攻击力"], ["defense", "防御力"],
       ].map(([k, label]) =>
-        `<span><button class="sort-th picker-sort" data-sort="${k}">${label}${pickerState.sort === k ? (pickerState.order === "asc" ? " ▲" : " ▼") : ""}</button></span>`).join("") + '</div>'
+        `<span><button class="sort-th picker-sort" data-kind="picker" data-sort="${k}">${label}</button></span>`).join("") + '</div>'
     : "";
   const hiddenN = (s.exclude ? s.exclude.split(",").filter(Boolean).length : 0);
   const hint = hiddenN
@@ -3516,16 +3553,12 @@ async function loadPicker(page = pickerState.page) {
   $("#picker-list").innerHTML = d.items.length
     ? hint + head + body
     : hint + '<div class="empty">无结果</div>';
-  $("#picker-list").querySelectorAll(".picker-sort").forEach((b) =>
-    b.addEventListener("click", () => {
-      if (pickerState.sort === b.dataset.sort) {
-        pickerState.order = pickerState.order === "asc" ? "desc" : "asc";
-      } else {
-        pickerState.sort = b.dataset.sort;
-        pickerState.order = "desc";
-      }
-      loadPicker(0);
-    }));
+  // 表头是动态生成的：渲染后注入「+」并绑定排序点击（幂等）
+  if (isEntity) {
+    injectSortAdd($("#picker-list"));
+    bindSortTh($("#picker-list"));
+    updateSortArrows("picker");
+  }
   $("#picker-list").querySelectorAll(".picker-row").forEach((r) =>
     r.addEventListener("click", () => {
       const it = d.items.find((x) => String(x.id) === r.dataset.i);
@@ -3938,6 +3971,20 @@ function applySupportPanel(side) {
   $(`#${side}-support-hp`).value = Math.floor(hp * SUPPORT_STAR_MULT[star] / 1.4);
 }
 
+function readPickerFormState() {
+  pickerState.match = $("#picker-match").value || "and";
+  if (pickerState.kind === "unit") {
+    pickerState.form = $("#picker-form-ssp").checked ? "ssp"
+      : ($("#picker-form-sp").checked ? "sp" : "");
+    pickerState.fullCond = $("#picker-full-cond").checked;
+  } else if (pickerState.kind === "pilot") {
+    pickerState.form = $("#picker-pilot-sp").checked ? "sp" : "";
+    pickerState.fullCond = false;
+  } else {
+    pickerState.form = "";
+    pickerState.fullCond = false;
+  }
+}
 $("#picker-search").addEventListener("click", () => {
   pickerState.q = $("#picker-q").value;
   pickerState.source = $("#picker-source").value;
@@ -3946,13 +3993,20 @@ $("#picker-search").addEventListener("click", () => {
   pickerState.tag_mode = $("#picker-tag-mode").value;
   pickerState.acq = $("#picker-acq").value;
   pickerState.support = $("#picker-support").value;
+  readPickerFormState();
   loadPicker(0);
+});
+// 形态开关即时生效
+["#picker-form-sp", "#picker-form-ssp", "#picker-full-cond", "#picker-pilot-sp"].forEach((sel) => {
+  const el = $(sel);
+  if (el) el.addEventListener("change", () => { readPickerFormState(); loadPicker(0); });
 });
 $("#picker-reset").addEventListener("click", () => {
   Object.assign(pickerState, {
     q: "", rarity: "", type: "", series: "", tags: "", tag_mode: "any",
     acq: "", wfx: "", wfx_mode: "any", skills: "", skill_mode: "any", support: "",
-    sort: "rarity", order: "desc", page: 0,
+    match: "and", cond: null, form: "", fullCond: false,
+    sorts: [{ k: "rarity", o: "desc" }], page: 0,
   });
   $("#picker-q").value = "";
   $("#picker-rarity").value = "";
@@ -3960,6 +4014,12 @@ $("#picker-reset").addEventListener("click", () => {
   $("#picker-tag-mode").value = "any";
   $("#picker-acq").value = "";
   $("#picker-support").value = "";
+  $("#picker-match").value = "and";
+  $("#picker-form-sp").checked = false;
+  $("#picker-form-ssp").checked = false;
+  $("#picker-full-cond").checked = false;
+  $("#picker-pilot-sp").checked = false;
+  renderPickerCondBar();
   syncCombobox("#picker-series-box");
   syncCombobox("#picker-tag-box");
   syncCombobox("#picker-wfx-box");
@@ -4162,6 +4222,9 @@ function sortStateByKind(kind) {
     characters: state.characters,
     supporters: state.supporters,
     search: state.search,
+    picker: pickerState,
+    pp: pairUnitState,
+    pr: pairFilterState,
   }[kind];
 }
 
@@ -4169,6 +4232,8 @@ function loadersByKind() {
   return {
     units: loadUnits, characters: loadCharacters,
     supporters: loadSupporters, search: loadSearch,
+    picker: loadPicker, pp: ppLoad,
+    pr: () => refreshPairResult(),
   };
 }
 
@@ -4197,46 +4262,59 @@ function updateSortArrows(kind) {
   });
 }
 
-// 每列生成一个小「+」按钮：点一下把该列加为下一级排序，再点从排序中移除
-document.querySelectorAll(".sort-th[data-kind]").forEach((b) => {
-  const plus = document.createElement("button");
-  plus.type = "button";
-  plus.className = "sort-add";
-  plus.dataset.kind = b.dataset.kind;
-  plus.dataset.sort = b.dataset.sort;
-  plus.textContent = "+";
-  plus.title = "加为下一级排序";
-  b.parentNode.insertBefore(plus, b.nextSibling);
-  plus.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const s = sortStateByKind(plus.dataset.kind);
-    if (!s || !s.sorts) return;
-    const k = plus.dataset.sort;
-    const i = s.sorts.findIndex((x) => x.k === k);
-    if (i >= 0) s.sorts.splice(i, 1);
-    else s.sorts.push({ k, o: "desc" });
-    if (!s.sorts.length) s.sorts = [{ k: "rarity", o: "desc" }];
-    s.page = 0;
-    loadersByKind()[plus.dataset.kind](0);
+// 每列生成一个小「+」按钮：点一下把该列加为下一级排序，再点从排序中移除。
+// 幂等：静态表头加载时调用一次，动态表头（选择器/配对）渲染后再次调用。
+function injectSortAdd(root) {
+  (root || document).querySelectorAll(".sort-th[data-kind]").forEach((b) => {
+    if (b._sortAddDone) return;
+    b._sortAddDone = true;
+    const plus = document.createElement("button");
+    plus.type = "button";
+    plus.className = "sort-add";
+    plus.dataset.kind = b.dataset.kind;
+    plus.dataset.sort = b.dataset.sort;
+    plus.textContent = "+";
+    plus.title = "加为下一级排序";
+    b.parentNode.insertBefore(plus, b.nextSibling);
+    plus.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const s = sortStateByKind(plus.dataset.kind);
+      if (!s || !s.sorts) return;
+      const k = plus.dataset.sort;
+      const i = s.sorts.findIndex((x) => x.k === k);
+      if (i >= 0) s.sorts.splice(i, 1);
+      else s.sorts.push({ k, o: "desc" });
+      if (!s.sorts.length) s.sorts = [{ k: "rarity", o: "desc" }];
+      s.page = 0;
+      loadersByKind()[plus.dataset.kind](0);
+    });
   });
-});
+}
 
-// 点列名：未参与排序 -> 设为唯一主键（降序）；已参与 -> 切换该级的升降序
-document.querySelectorAll(".sort-th").forEach((b) =>
-  b.addEventListener("click", () => {
-    const kind = b.dataset.kind;
-    const s = sortStateByKind(kind);
-    if (!s || !s.sorts) return;
-    const k = b.dataset.sort;
-    const i = s.sorts.findIndex((x) => x.k === k);
-    if (i >= 0) {
-      s.sorts[i].o = s.sorts[i].o === "asc" ? "desc" : "asc";
-    } else {
-      s.sorts = [{ k, o: "desc" }];
-    }
-    s.page = 0;
-    loadersByKind()[kind](0);
-  }));
+// 点列名：未参与排序 -> 设为唯一主键（降序）；已参与 -> 切换该级的升降序（幂等绑定）
+function bindSortTh(root) {
+  (root || document).querySelectorAll(".sort-th").forEach((b) => {
+    if (b._sortThDone) return;
+    b._sortThDone = true;
+    b.addEventListener("click", () => {
+      const kind = b.dataset.kind;
+      const s = sortStateByKind(kind);
+      if (!s || !s.sorts) return;
+      const k = b.dataset.sort;
+      const i = s.sorts.findIndex((x) => x.k === k);
+      if (i >= 0) {
+        s.sorts[i].o = s.sorts[i].o === "asc" ? "desc" : "asc";
+      } else {
+        s.sorts = [{ k, o: "desc" }];
+      }
+      s.page = 0;
+      loadersByKind()[kind](0);
+    });
+  });
+}
+
+injectSortAdd(document);
+bindSortTh(document);
 
 $("#sup-search").addEventListener("click", () => {
   state.supporters.q = $("#sup-q").value;
@@ -4395,14 +4473,14 @@ document.addEventListener("click", (e) => {
 });
 
 /* ---------- 配对 ---------- */
-const pairFilterState = { q:"", rarity:"", acq:"", series:"", type:"", tags: [], tag_mode: "all", skills: [], skill_mode: "any", support: "", match: "and", sort: "score", order: "desc" };
+const pairFilterState = { q:"", rarity:"", acq:"", series:"", type:"", tags: [], tag_mode: "all", skills: [], skill_mode: "any", support: "", match: "and", form: "", sorts: [{ k: "score", o: "desc" }] };
 let pairFilterData = null;
 let pairLastQuery = "";
 const pairState = {
   unit: null, unitDetail: null, action: "attack", weapon: null, bench: "low",
   enemyTags: [], enemySeries: [], atkUs: [],
 };
-const pairUnitState = { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", page: 0, size: 25 };
+const pairUnitState = { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", form: "", fullCond: false, sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 };
 
 function renderPairTagChips() {
   const box = $("#pp-tag-chips");
@@ -4441,16 +4519,20 @@ function ppLoad(page = pairUnitState.page) {
   pairUnitState.tag_mode = $("#pp-tag-mode").value;
   pairUnitState.match = $("#pp-match").value;
   pairUnitState.wfx_mode = $("#pp-wfx-mode").value;
+  pairUnitState.form = $("#pp-form-ssp").checked ? "ssp"
+    : ($("#pp-form-sp").checked ? "sp" : "");
+  pairUnitState.fullCond = $("#pp-full-cond").checked;
   const s = pairUnitState;
   const q = new URLSearchParams({
     q: s.q, rarity: s.rarity, acq: s.acq, series: s.series, type: s.type,
     tags: s.tags.join(","), tag_mode: s.tag_mode,
     match: s.match, wfx: s.wfx.join(","), wfx_mode: s.wfx_mode,
-    sort: "rarity", order: "desc",
+    form: s.form, fullcond: s.fullCond ? "1" : "0",
+    sort: sortParam(s), order: orderParam(s),
     limit: s.size, offset: s.page * s.size,
   });
   api("/api/units?" + q).then((d) => {
-    $("#pp-count").textContent = `共 ${d.total} 条结果`;
+    $("#pp-count").textContent = `共 ${d.total} 条结果` + unitFormHint(s);
     $("#pp-list").innerHTML = d.items.length
       ? d.items.map((u) => `
         <div class="list-row units" data-id="${u.id}">
@@ -4476,6 +4558,8 @@ async function confirmPickUnit(id, item) {
   pairState.unit = {
     id, name: detail.name, rarity: detail.rarity,
     role: detail.role, role_label: detail.role_label, tags: detail.tags || [],
+    // 选定时的形态开关：带入配对计算（伤害/生存/评分）
+    form: pairUnitState.form, fullCond: pairUnitState.fullCond,
   };
   pairState.unitDetail = detail;
   pairState.weapon = null;
@@ -4763,8 +4847,10 @@ async function runPairMatch() {
     q.set("hp_fixed", $("#pair-ext-hpf").value);
   }
   collectPairFilterInputs();
-  pairFilterState.sort = "score";
-  pairFilterState.order = "desc";
+  pairFilterState.sorts = [{ k: "score", o: "desc" }];
+  // 选定机体的形态开关带入计算
+  q.set("uform", u.form || "");
+  q.set("ufullcond", u.fullCond ? "1" : "0");
   appendPairFilterParams(q);
   pairLastQuery = q.toString();
   msg.textContent = "正在匹配…";
@@ -4884,9 +4970,7 @@ function renderPairResult(res) {
 }
 
 function sortTh(sort, label) {
-  const active = pairFilterState.sort === sort;
-  const arrow = active ? (pairFilterState.order === "asc" ? " ▲" : " ▼") : "";
-  return `<th><button class="sort-th" data-sort="${sort}">${label}${arrow}</button></th>`;
+  return `<th><button class="sort-th" data-kind="pr" data-sort="${sort}">${label}</button></th>`;
 }
 
 function buildPairHead(isAtk) {
@@ -4897,17 +4981,12 @@ function buildPairHead(isAtk) {
 }
 
 function bindPairResultSort() {
-  document.querySelectorAll(".pair-result-panel .sort-th").forEach((b) =>
-    b.addEventListener("click", () => {
-      const sort = b.dataset.sort;
-      if (pairFilterState.sort === sort) {
-        pairFilterState.order = pairFilterState.order === "asc" ? "desc" : "asc";
-      } else {
-        pairFilterState.sort = sort;
-        pairFilterState.order = "desc";
-      }
-      if (pairLastQuery) refreshPairResult();
-    }));
+  // 结果表头走通用多级排序（data-kind="pr"）：补「+」按钮、绑定点击、刷新箭头
+  const panel = document.querySelector(".pair-result-panel");
+  if (!panel) return;
+  injectSortAdd(panel);
+  bindSortTh(panel);
+  updateSortArrows("pr");
 }
 
 function renderPairFilterChips() {
@@ -4941,6 +5020,7 @@ function collectPairFilterInputs() {
   pairFilterState.skill_mode = $("#pr-skill-mode").value;
   pairFilterState.support = $("#pr-support").value;
   pairFilterState.match = $("#pr-match").value;
+  pairFilterState.form = $("#pr-form-sp")?.checked ? "sp" : "";
 }
 
 function appendPairFilterParams(q) {
@@ -4955,8 +5035,9 @@ function appendPairFilterParams(q) {
   q.set("pskill_mode", pairFilterState.skill_mode);
   q.set("psupport", pairFilterState.support);
   q.set("pmatch", pairFilterState.match);
-  q.set("sort", pairFilterState.sort);
-  q.set("order", pairFilterState.order);
+  q.set("pform", pairFilterState.form || "");
+  q.set("sort", sortParam(pairFilterState));
+  q.set("order", orderParam(pairFilterState));
 }
 
 function bindPairFilterRow() {
@@ -4983,6 +5064,11 @@ function bindPairFilterRow() {
   $("#pr-q").addEventListener("keydown", (e) => { if (e.key === "Enter") runPairMatch(); });
   $("#pr-search").addEventListener("click", runPairMatch);
   $("#pr-reset").addEventListener("click", resetPairFilter);
+  // SP 形态开关：即时重算（配对评分随之变化）
+  $("#pr-form-sp").addEventListener("change", () => {
+    pairFilterState.form = $("#pr-form-sp").checked ? "sp" : "";
+    if (pairLastQuery) refreshPairResult();
+  });
   renderPairFilterChips();
 }
 
@@ -4991,11 +5077,12 @@ function resetPairFilter() {
   pairFilterState.series = ""; pairFilterState.type = "";
   pairFilterState.tags = []; pairFilterState.tag_mode = "all";
   pairFilterState.skills = []; pairFilterState.skill_mode = "any";
-  pairFilterState.support = ""; pairFilterState.match = "and";
-  pairFilterState.sort = "score"; pairFilterState.order = "desc";
+  pairFilterState.support = ""; pairFilterState.match = "and"; pairFilterState.form = "";
+  pairFilterState.sorts = [{ k: "score", o: "desc" }];
   $("#pr-q").value = ""; $("#pr-rarity").value = ""; $("#pr-acq").value = "";
   $("#pr-type").value = ""; $("#pr-tag-mode").value = "all";
   $("#pr-skill-mode").value = "any"; $("#pr-support").value = ""; $("#pr-match").value = "and";
+  if ($("#pr-form-sp")) $("#pr-form-sp").checked = false;
   syncCombobox("#pr-series-box");
   renderPairFilterChips();
 }
@@ -5356,15 +5443,20 @@ function initPairing() {
     pairUnitState.series = ""; pairUnitState.type = ""; pairUnitState.tags = [];
     pairUnitState.tag_mode = "all"; pairUnitState.match = "and";
     pairUnitState.wfx = []; pairUnitState.wfx_mode = "any"; pairUnitState.page = 0;
+    pairUnitState.form = ""; pairUnitState.fullCond = false;
+    pairUnitState.sorts = [{ k: "rarity", o: "desc" }];
     $("#pp-q").value = ""; $("#pp-rarity").value = ""; $("#pp-acq").value = "";
     $("#pp-type").value = ""; $("#pp-tag-mode").value = "all"; $("#pp-match").value = "and";
     $("#pp-wfx-mode").value = "any";
+    $("#pp-form-sp").checked = false; $("#pp-form-ssp").checked = false;
+    $("#pp-full-cond").checked = false;
     syncCombobox("#pp-series-box");
     renderPairTagChips();
     renderPairWfxChips();
     ppLoad(0);
   });
-  ["#pp-rarity", "#pp-acq", "#pp-type", "#pp-tag-mode", "#pp-match", "#pp-wfx-mode"]
+  ["#pp-rarity", "#pp-acq", "#pp-type", "#pp-tag-mode", "#pp-match", "#pp-wfx-mode",
+   "#pp-form-sp", "#pp-form-ssp", "#pp-full-cond"]
     .forEach((sel) => $(sel).addEventListener("change", () => ppLoad(0)));
 }
 

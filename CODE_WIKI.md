@@ -707,8 +707,10 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
     支援角色：`tags/skills`。未传 `facets` 时不计算、不返回（选择器/配对页据此保持轻量）。
 - `GET /api/stages?q=&limit=&offset=`
 - `GET /api/search?type=&q=&kind=&sort=&order=&limit=&offset=` — 技能/能力/效果搜索
-- `GET /api/picker/units?q=&source=library|enemy&rarity=&type=&series=&tags=&sort=&order=&limit=&offset=&exclude=` — 伤害计算器/组队机体选择器（`exclude` 见 [10.9.1](#1091-选择器屏蔽参数-exclude)）
-- `GET /api/picker/pilots?...&exclude=` — 驾驶员选择器
+- `GET /api/picker/units?q=&source=library|enemy&rarity=&type=&series=&tags=&sort=&order=&limit=&offset=&exclude=&match=&cond=&form=&fullcond=1` — 伤害计算器/组队机体选择器（`exclude` 见 [10.9.1](#1091-选择器屏蔽参数-exclude)）
+- `GET /api/picker/pilots?...&exclude=&match=&form=` — 驾驶员选择器
+  - 与 `/api/units`、`/api/characters` 对齐：`sort`/`order` 支持逗号多级键；`match=and|or` 组合系列/类型/标签；
+    机体另有 `cond`（词条对象 JSON）与形态开关 `form=sp|ssp`、`fullcond=1`，驾驶员有 `form=sp`（UR 无 SP）。
 
 #### 详情
 - `GET /api/units/{id}` — 机体详情
@@ -720,6 +722,9 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 - `GET /api/pairing/match?unit_id=&action=attack|defense&weapon_id=&bench=low|mid&...` — 配对推荐
   - `action=attack` **必须带该机体的 `weapon_id`**，否则返回 `{"error": "请选择该机体的武器", "ok": false}`（设计如此，前端也已前置校验）；
   - `action=defense` 的敌方参数（`eua`/`epa`/`ewp`…）中 `ewp`（武器威力）必须 > 0，否则返回可操作错误而不是排名（见 5.2）。
+  - **形态开关**（影响配对计算）：`uform=sp|ssp` + `ufullcond=1` 按形态改写机体数值与条件加成；
+    `pform=sp` 让驾驶员按 SP 形态参与评分（基线为默认形态）。
+  - 驾驶员筛选参数（`pq`/`prarity`/…/`pmatch`）与结果排序 `sort`/`order`（支持逗号多级键）同 `/api/characters`。
 - `GET /api/pairing/default-enemy` — 默认敌方
 - `POST /api/team/score` — 组队评分，body：`{pairs:[{unit_id,star,pilot_id,weapon_id}], supporter_id, break_step, bench, custom_enemy}`（详见 [10.9](#109-组队评分)）
 - `GET /api/team/list` — 读取全部队伍与全局配置（返回 `{teams:[...], config:{bench,customEnemy}}`），组队 Tab 打开时优先拉取（详见 [10.13](#1013-组队持久化与云端同步)）

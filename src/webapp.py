@@ -1571,7 +1571,9 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                limit: int, offset: int,
                acq: str = "", wfx: str = "", wfx_mode: str = "any",
                skills: str = "", skill_mode: str = "any",
-               support: str = "", exclude: str = "") -> dict:
+               support: str = "", exclude: str = "",
+               match: str = "and", cond: str = "",
+               form: str = "", full_cond: bool = False) -> dict:
     """伤害计算器的机体/驾驶员选择器：机体库 或 关卡敌人。
 
     支持筛选：稀有度、类型、系列、标签（多标签 tag_mode=any|all）、
@@ -1642,8 +1644,13 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 args += wfx_args
             preds, f_args = _filter_predicates("u", series, type_, tags, tag_mode or "any")
             if preds:
-                where.append(" AND ".join(preds))
+                join = " OR " if match == "or" else " AND "
+                where.append("(" + join.join(preds) + ")")
                 args += f_args
+            cond_sql, cond_args = _cond_where("u", cond)
+            if cond_sql:
+                where.append(cond_sql)
+                args += cond_args
             if ex_ids:
                 where.append(_not_in_clause("u.id", ex_ids))
                 args += ex_ids
@@ -1653,9 +1660,11 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 conn,
                 f"""SELECT u.id, u.name, u.rarity,
                            u.role,
-                           u.max_attack AS attack, u.max_defense AS defense,
-                           u.max_hp AS hp,
-                           u.tags, s.name AS series_name, u.stat_bonuses
+                           u.max_attack, u.max_defense, u.max_hp,
+                           u.sp_max_attack, u.sp_max_defense, u.sp_max_hp,
+                           u.ssp_max_attack, u.ssp_max_defense, u.ssp_max_hp,
+                           u.tags, s.name AS series_name, u.stat_bonuses,
+                           u.conditional_bonuses
                     FROM unit u LEFT JOIN series s ON s.id = u.series_id {w}
                     ORDER BY u.rarity DESC, u.id""",
                 args,
@@ -1665,16 +1674,20 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 r["tags"] = _json_list(r.get("tags"))
                 r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
                 bonuses = _json_dict(r.pop("stat_bonuses", None))
-                r["atk_base"] = r.get("attack") or 0
-                r["def_base"] = r.get("defense") or 0
-                r["atk_pct"] = bonuses.get("attack", 0)
-                r["def_pct"] = bonuses.get("defense", 0)
-                r["hp_base"] = r.get("hp") or 0
-                r["hp_pct"] = bonuses.get("hp", 0)
-                for k, bkey in (("attack", "atk_pct"), ("defense", "def_pct")):
-                    v, b = star_value(r.get(k) or 0, r[f"{'atk' if k == 'attack' else 'def'}_pct"], 0)
+                use, cond_pct = _unit_form_choice(r, form, full_cond)
+                r["form_used"] = use
+                for k, bkey in (("attack", "atk"), ("defense", "def")):
+                    base = _unit_form_max(r, k, use)
+                    pct = bonuses.get(k, 0) + cond_pct.get(k, 0)
+                    r[f"{bkey}_base"] = base
+                    r[f"{bkey}_pct"] = pct
+                    v, b = star_value(base, pct, 0)
                     r[k] = v
                     r[f"{k}_bonus"] = b
+                hp_base = _unit_form_max(r, "hp", use)
+                r["hp_base"] = hp_base
+                r["hp_pct"] = bonuses.get("hp", 0) + cond_pct.get("hp", 0)
+                r["hp"] = hp_base
     elif kind == "pilots":
         if source == "enemy":
             ex_where, ex_args = ("", [])
@@ -1720,7 +1733,8 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 args.append(int(rarity))
             preds, f_args = _filter_predicates("c", series, type_, tags, tag_mode or "any")
             if preds:
-                where.append(" AND ".join(preds))
+                join = " OR " if match == "or" else " AND "
+                where.append("(" + join.join(preds) + ")")
                 args += f_args
             skill_sql, skill_args = _skill_where(skills, skill_mode)
             if skill_sql:
@@ -1735,8 +1749,8 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 conn,
                 f"""SELECT c.id, c.name, c.rarity,
                            c.role,
-                           c.max_ranged AS ranged, c.max_melee AS melee,
-                           c.max_awaken AS awaken, c.max_defense AS defense,
+                           c.max_ranged, c.max_melee, c.max_awaken, c.max_defense,
+                           c.sp_max_ranged, c.sp_max_melee, c.sp_max_awaken, c.sp_max_defense,
                            c.tags, s.name AS series_name, c.stat_bonuses,
                            c.support_info
                     FROM character c LEFT JOIN series s ON s.id = c.series_id {w}
@@ -1749,8 +1763,11 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
                 r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
                 r["support_label"] = support_label(_json_dict(r.get("support_info")))
                 bonuses = _json_dict(r.pop("stat_bonuses", None))
+                use_sp = _char_form_sp(r, form)
+                r["form_used"] = "sp" if use_sp else "default"
                 for k in ("ranged", "melee", "awaken", "defense"):
-                    v, b = star_value(r.get(k) or 0, bonuses.get(k, 0), 0)
+                    base = (r.get(f"sp_max_{k}") if use_sp else r.get(f"max_{k}")) or 0
+                    v, b = star_value(base, bonuses.get(k, 0), 0)
                     r[k] = v
                     if k == "defense":
                         r["defense_bonus"] = b
@@ -1771,15 +1788,12 @@ def api_picker(kind: str, q: str, source: str, rarity: str, type_: str,
             )
         else:
             r["atk"] = r.get("attack") or 0
-    if sort in PICKER_SORT_KEYS:
-        key = PICKER_SORT_KEYS[sort]
-        fallback = 0 if key in ("rarity", "atk", "defense") else ""
-        items.sort(
-            key=lambda x: (x.get(key) or fallback, x.get("id") or 0),
-            reverse=(order != "asc"),
-        )
-    else:
-        items.sort(key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0))
+    _apply_sort(
+        items,
+        _multi_sort_specs(sort, order, PICKER_SORT_KEYS),
+        default_key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0),
+        tiebreak=lambda x: x.get("id") or 0,
+    )
     return {"total": total, "items": items[offset:offset + limit]}
 
 
@@ -1932,6 +1946,45 @@ def _apply_sort(rows: list, specs: list, default_key, tiebreak=None) -> None:
         rows.sort(key=tiebreak)
     for attr, order in reversed(specs):
         rows.sort(key=lambda x, a=attr: _sort_val(x, a), reverse=(order != "asc"))
+
+
+_UNIT_FORM_STATS = ("attack", "defense", "mobility", "hp", "en")
+
+
+def _unit_form_choice(row: dict, form: str, full_cond: bool):
+    """机体形态选择 -> ("default"|"sp"|"ssp", {stat: 条件加成 pct})。
+
+    UR（rarity>=5）无 SP；请求 ssp 但该机体无 SSP 数据时回退 sp；
+    full_cond 时把全部条件加成的 pct 汇总（含 HP 条件）。
+    """
+    no_sp = (row.get("rarity") or 5) >= 5
+    use = "default"
+    if not no_sp and form == "ssp":
+        has_ssp = any(row.get(f"ssp_max_{k}") for k in _UNIT_FORM_STATS)
+        use = "ssp" if has_ssp else "sp"
+    elif not no_sp and form == "sp":
+        use = "sp"
+    cond_pct: dict = {}
+    if full_cond:
+        for item in _json_list(row.get("conditional_bonuses")):
+            key = item.get("stat")
+            if key:
+                cond_pct[key] = cond_pct.get(key, 0) + int(item.get("pct") or 0)
+    return use, cond_pct
+
+
+def _unit_form_max(row: dict, key: str, use: str) -> int:
+    """按形态取某 stat 的满级基值（ssp = sp_max + ssp_max）。"""
+    if use == "sp":
+        return row.get(f"sp_max_{key}") or 0
+    if use == "ssp":
+        return (row.get(f"sp_max_{key}") or 0) + (row.get(f"ssp_max_{key}") or 0)
+    return row.get(f"max_{key}") or 0
+
+
+def _char_form_sp(row: dict, form: str) -> bool:
+    """驾驶员是否用 SP 形态数值（UR 无 SP）。"""
+    return form == "sp" and (row.get("rarity") or 5) < 5
 
 WFX_FILTERS = {
     "map": (
@@ -2125,31 +2178,12 @@ def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
     for r in rows:
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
         bonuses = _json_dict(r.get("stat_bonuses"))
-        cond_pct: dict = {}
-        if full_cond:
-            for item in _json_list(r.get("conditional_bonuses")):
-                key = item.get("stat")
-                if key:
-                    cond_pct[key] = cond_pct.get(key, 0) + int(item.get("pct") or 0)
         short = {"attack": "atk_f", "defense": "def_f", "mobility": "mob_f",
                  "hp": "hp_f", "en": "en_f"}
         star = 0 if ULTIMATE_TAG in _json_list(r.get("tags")) else 3
-        no_sp = (r.get("rarity") or 5) >= 5  # UR 无 SP
-        use = "default"
-        if not no_sp and form == "ssp":
-            has_ssp = any(
-                (r.get(f"ssp_max_{k}") or 0)
-                for k in ("attack", "defense", "mobility", "hp", "en")
-            )
-            use = "ssp" if has_ssp else "sp"
-        elif not no_sp and form == "sp":
-            use = "sp"
+        use, cond_pct = _unit_form_choice(r, form, full_cond)
         for key, fname in short.items():
-            base = r.get(f"max_{key}") or 0
-            if use == "sp":
-                base = r.get(f"sp_max_{key}") or 0
-            elif use == "ssp":
-                base = (r.get(f"sp_max_{key}") or 0) + (r.get(f"ssp_max_{key}") or 0)
+            base = _unit_form_max(r, key, use)
             pct = bonuses.get(key, 0) + cond_pct.get(key, 0)
             r[fname] = star_value(base, pct, star)[0]
         mov_pref = {"default": "max_", "sp": "sp_max_", "ssp": "ssp_max_"}[use]
@@ -3340,7 +3374,7 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")
         r["support_label"] = support_label(_json_dict(r.get("support_info")))
         bonuses = _json_dict(r.get("stat_bonuses"))
-        use_sp = form == "sp" and (r.get("rarity") or 5) < 5  # UR 无 SP
+        use_sp = _char_form_sp(r, form)
         for key in ("ranged", "melee", "defense", "reaction", "awaken"):
             base = (r.get(f"sp_max_{key}") if use_sp else r.get(f"max_{key}")) or 0
             r[f"{key}_f"] = star_value(base, bonuses.get(key, 0), 0)[0]
@@ -4685,6 +4719,8 @@ class Handler(BaseHTTPRequestHandler):
                 ("tag_mode", "ptag_mode"), ("skills", "pskills"),
                 ("skill_mode", "pskill_mode"), ("support", "psupport"),
                 ("match", "pmatch"), ("sort", "sort"), ("order", "order"),
+                # 形态开关：机体（uform/ufullcond）与驾驶员（pform）分别传入
+                ("uform", "uform"), ("ufullcond", "ufullcond"), ("pform", "pform"),
             ):
                 filters[key] = q.get(param, [""])[0]
             if action == "defense":
@@ -4760,7 +4796,10 @@ class Handler(BaseHTTPRequestHandler):
                 skills=q.get("skills", [""])[0],
                 skill_mode=q.get("skill_mode", ["any"])[0],
                 support=q.get("support", [""])[0],
-                exclude=q.get("exclude", [""])[0]))
+                exclude=q.get("exclude", [""])[0],
+                match=q.get("match", ["and"])[0], cond=q.get("cond", [""])[0],
+                form=q.get("form", [""])[0],
+                full_cond=q.get("fullcond", ["0"])[0] == "1"))
         if path == "/api/stages":
             limit = min(int(q.get("limit", ["25"])[0]), 100)
             offset = max(int(q.get("offset", ["0"])[0]), 0)

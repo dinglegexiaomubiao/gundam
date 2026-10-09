@@ -492,6 +492,7 @@
               <select id="pr-match" aria-label="筛选条件匹配模式" data-page-node-id="5UrDQICvygCrOwDEZdxJgj">
                 <option value="and" selected data-page-node-id="7Gfb8G7MTi1jzeXfPTJ0BU">交集（全部满足）</option><option value="or" data-page-node-id="9Tsd3QMBtkBMsjJqr3BOx4">并集（任一满足）</option>
               </select>
+              <label class="form-toggle" title="按 SP 形态数值参与配对计算与排序"><input type="checkbox" id="pr-form-sp">SP</label>
               <button id="pr-search" data-page-node-id="mHgPUYT7TGMQaRHkmBEFVL">查询</button>
               <button id="pr-reset" class="reset-btn" title="重置筛选条件" data-page-node-id="FlOEBOdq369dfpm0jPSwOL">重置</button>
             </div>
@@ -677,6 +678,9 @@
           <option value="any" selected data-page-node-id="KMv4L04H2FrPdvvbvlmiac">含任一特效</option>
           <option value="all" data-page-node-id="vBQJmgOfINwDnFjGKtbJN2">含全部特效</option>
         </select>
+        <label class="form-toggle" title="按 SP 形态数值显示与排序"><input type="checkbox" id="pp-form-sp">SP</label>
+        <label class="form-toggle" title="按 SSP 形态数值显示与排序（与 SP 同勾时以 SSP 为准）"><input type="checkbox" id="pp-form-ssp">SSP</label>
+        <label class="form-toggle" title="计入该机体全部条件加成后的数值"><input type="checkbox" id="pp-full-cond">完全达成条件</label>
         <button id="pp-search" data-page-node-id="K3uctVp725bdYGy9AaRkUD">查询</button>
         <button id="pp-reset" class="reset-btn" title="重置筛选" data-page-node-id="lz0iEifvHgNi43sBX4evKH">重置</button>
       </div>
@@ -684,7 +688,15 @@
       <div id="pp-wfx-chips" class="tagbar" data-page-node-id="Ezs09zDMUjqNw69zeDkPZr"></div>
       <div id="pp-count" class="result-count" data-page-node-id="7o9nFPMqyBTZgqXSJlHz2b"></div>
       <div class="list-head units" data-page-node-id="BhGtKBwUhn3ZuqvqOwBKGw">
-        <span data-page-node-id="0tfwM6u4OdcQx5wE0T5xII">名称</span><span data-page-node-id="nnUqgMhTN2NJOdGHd4kyR7">稀有度</span><span data-page-node-id="dJBUJlMBDGDVJ71drgldtB">类型</span><span data-page-node-id="op5mVP9XYXb7WzwAZscHCi">攻击</span><span data-page-node-id="Jiwxh4hA9nTPqQgyMxvwnE">防御</span><span data-page-node-id="sR5vJ1iZatTkCDVDDxJxNz">机动</span><span data-page-node-id="C0X8nZAAXwhMyLBAE6GAMF">HP</span><span data-page-node-id="Ky6KJfwYbW4bwzpaxKuoH2">EN</span><span data-page-node-id="iPDmzC4zBaLHlMeq83UeEU">移动</span>
+        <span><button class="sort-th" data-kind="pp" data-sort="name">名称</button></span>
+        <span><button class="sort-th" data-kind="pp" data-sort="rarity">稀有度</button></span>
+        <span><button class="sort-th" data-kind="pp" data-sort="role">类型</button></span>
+        <span><button class="sort-th" data-kind="pp" data-sort="attack">攻击</button></span>
+        <span><button class="sort-th" data-kind="pp" data-sort="defense">防御</button></span>
+        <span><button class="sort-th" data-kind="pp" data-sort="mobility">机动</button></span>
+        <span><button class="sort-th" data-kind="pp" data-sort="hp">HP</button></span>
+        <span><button class="sort-th" data-kind="pp" data-sort="en">EN</button></span>
+        <span><button class="sort-th" data-kind="pp" data-sort="movement">移动</button></span>
       </div>
       <div id="pp-list" class="list units" data-page-node-id="PIbGfIEi1Kmv6bd8gH7llP"></div>
       <div id="pp-pager" class="pager" data-page-node-id="8UCh4gJRFYsea0IcZtHZdE"></div>
@@ -769,6 +781,15 @@
         <select id="picker-support" class="picker-filter picker-pilot-only hidden" aria-label="支援次数筛选" data-page-node-id="gXJmgug4uy4c3YnUUWi1mY">
           <option value="" data-page-node-id="SfL9Ha63NM8BxYD4PZLbem">全部支援次数</option>
         </select>
+        <select id="picker-match" class="picker-filter hidden" aria-label="筛选条件匹配模式" data-page-node-id="pMtchTggz4c3YnUUWi9xY">
+          <option value="and" data-page-node-id="pMtchAndz4c3YnUUWi9xY">交集（全部满足）</option>
+          <option value="or" data-page-node-id="pMtchOrzz4c3YnUUWi9xY">并集（任一满足）</option>
+        </select>
+        <div id="picker-cond-bar" class="tagbar picker-filter picker-unit-only hidden" data-page-node-id="pCndBarz4c3YnUUWi9xY"></div>
+        <label class="form-toggle picker-filter picker-unit-only hidden" title="按 SP 形态数值显示与排序"><input type="checkbox" id="picker-form-sp">SP</label>
+        <label class="form-toggle picker-filter picker-unit-only hidden" title="按 SSP 形态数值显示与排序（与 SP 同勾时以 SSP 为准）"><input type="checkbox" id="picker-form-ssp">SSP</label>
+        <label class="form-toggle picker-filter picker-unit-only hidden" title="计入该机体全部条件加成后的数值"><input type="checkbox" id="picker-full-cond">完全达成条件</label>
+        <label class="form-toggle picker-filter picker-pilot-only hidden" title="按 SP 形态数值显示与排序；UR 无 SP"><input type="checkbox" id="picker-pilot-sp">SP</label>
         <button id="picker-search" data-page-node-id="Q87gC2OLeghdbNSdi53fjf">查询</button>
         <button id="picker-reset" class="reset-btn" title="重置筛选" data-page-node-id="tkJ7eWsEQBLVPuhkb1yvNL">重置</button>
       </div>
