@@ -537,11 +537,26 @@ SUPPORT_NAMES = {"defense": "支援防御", "attack": "支援攻击", "extra": "
 
 
 def support_label(info) -> str:
-    """支援次数标签，如 无条件支援防御2次 / 有条件支援攻击2次。"""
+    """支援次数标签，如 无条件支援防御2次 / 无条件额外行动1次+有条件额外行动1次。
+
+    一个 kind 同时有“无条件 / 有条件”两部分时分别列出并用 + 连接；
+    旧数据只有总数与 cond 标志时退化为单一标签。
+    """
     info = info or {}
+    parts: list[str] = []
     for k in SUPPORT_ORDER:
         item = info.get(k) or {}
-        if item.get("count"):
-            cond = "有条件" if item.get("cond") else "无条件"
-            return f"{cond}{SUPPORT_NAMES[k]}{item['count']}次"
-    return ""
+        cnt = int(item.get("count") or 0)
+        if not cnt:
+            continue
+        name = SUPPORT_NAMES[k]
+        uncond = item.get("uncond_count")
+        cond = item.get("cond_count")
+        if uncond is None and cond is None:
+            parts.append(f"{'有条件' if item.get('cond') else '无条件'}{name}{cnt}次")
+            continue
+        if int(uncond or 0):
+            parts.append(f"无条件{name}{int(uncond)}次")
+        if int(cond or 0):
+            parts.append(f"有条件{name}{int(cond)}次")
+    return "+".join(parts)

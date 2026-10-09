@@ -1895,6 +1895,44 @@ CHAR_SORT_KEYS = {
     "support": "support_label",
 }
 
+# 文本类排序属性（缺失值时用 "" 兜底，数字类用 0）
+_TEXT_SORT_ATTRS = {"name", "support_label", "active_skill", "series_name",
+                    "effect_text", "owner_name"}
+
+
+def _multi_sort_specs(sort: str, order: str, keymap: dict) -> list:
+    """把 sort/order 逗号串解析成 [(属性名, 'asc'|'desc'), ...]（主 -> 次）。"""
+    keys = [k.strip() for k in (sort or "").split(",") if k.strip()]
+    orders = [o.strip() for o in (order or "").split(",")]
+    specs: list = []
+    for i, k in enumerate(keys):
+        if k in keymap:
+            o = orders[i] if i < len(orders) and orders[i] else "desc"
+            specs.append((keymap[k], o))
+    return specs
+
+
+def _sort_val(row: dict, attr: str):
+    v = row.get(attr)
+    if v is None:
+        return "" if attr in _TEXT_SORT_ATTRS else 0
+    return v
+
+
+def _apply_sort(rows: list, specs: list, default_key, tiebreak=None) -> None:
+    """稳定多键排序：specs 主 -> 次；无有效键时用 default_key。
+
+    先按 tiebreak（通常 id）打底，再从最次键到主键依次稳定排序，
+    结果按 主键, 次键, …, tiebreak 排列。
+    """
+    if not specs:
+        rows.sort(key=default_key)
+        return
+    if tiebreak is not None:
+        rows.sort(key=tiebreak)
+    for attr, order in reversed(specs):
+        rows.sort(key=lambda x, a=attr: _sort_val(x, a), reverse=(order != "asc"))
+
 WFX_FILTERS = {
     "map": (
         "EXISTS (SELECT 1 FROM unit_weapon w WHERE w.unit_id = u.id "
@@ -1999,25 +2037,34 @@ def _unit_facets(conn, build) -> dict:
             counts[key] = counts.get(key, 0) + n
         counts["__all__"] = _facet_all(conn, "unit", "u", w, args)
         facets[dim] = counts
-    for dim, col in (("series", "u.series_ids"), ("tags", "u.tags")):
-        w, args = build({dim})
-        counts = {}
-        for v, n in conn.execute(
-            f"SELECT CAST(je.value AS TEXT) v, COUNT(DISTINCT u.id) n "
-            f"FROM unit u, json_each({col}) je {w} GROUP BY je.value", args
-        ):
-            counts[str(v)] = n
-        counts["__all__"] = _facet_all(conn, "unit", "u", w, args)
-        facets[dim] = counts
-    # 武器特效：14 个 key 一次 SUM(CASE) 算完
-    w, args = build({"wfx"})
+    # 系列：单选（可切换）-> 排除自身维度
+    w, args = build({"series"})
+    counts = {}
+    for v, n in conn.execute(
+        f"SELECT CAST(je.value AS TEXT) v, COUNT(DISTINCT u.id) n "
+        f"FROM unit u, json_each(u.series_ids) je {w} GROUP BY je.value", args
+    ):
+        counts[str(v)] = n
+    counts["__all__"] = _facet_all(conn, "unit", "u", w, args)
+    facets["series"] = counts
+    # 标签 / 武器特效：多选“继续叠加”-> 数量＝当前结果里也符合该项的条数，
+    # 故用完整筛选（含该维度自身选择）；__all__ 仍为“清空该维度”。
+    w_full, args_full = build(set())
+    counts = {}
+    for v, n in conn.execute(
+        f"SELECT CAST(je.value AS TEXT) v, COUNT(DISTINCT u.id) n "
+        f"FROM unit u, json_each(u.tags) je {w_full} GROUP BY je.value", args_full
+    ):
+        counts[str(v)] = n
+    counts["__all__"] = _facet_all(conn, "unit", "u", *build({"tags"}))
+    facets["tags"] = counts
     keys = list(WFX_FILTERS)
     sums = ", ".join(
         f"SUM(CASE WHEN ({WFX_FILTERS[k]}) THEN 1 ELSE 0 END)" for k in keys
     )
-    row = conn.execute(f"SELECT {sums} FROM unit u {w}", args).fetchone()
+    row = conn.execute(f"SELECT {sums} FROM unit u {w_full}", args_full).fetchone()
     counts = {k: (row[i] or 0) for i, k in enumerate(keys)}
-    counts["__all__"] = _facet_all(conn, "unit", "u", w, args)
+    counts["__all__"] = _facet_all(conn, "unit", "u", *build({"wfx"}))
     facets["wfx"] = counts
     return facets
 
@@ -2081,14 +2128,12 @@ def api_units(q: str, rarity: str, acq: str, series: str, type_: str,
                 r.get(f"max_{key}") or 0, bonuses.get(key, 0), star
             )[0]
         r["mov"] = r.get("max_movement") or 0
-    if sort in UNIT_SORT_KEYS:
-        key = UNIT_SORT_KEYS[sort]
-        rows.sort(
-            key=lambda x: (x.get(key) or 0, x.get("id") or 0),
-            reverse=(order != "asc"),
-        )
-    else:
-        rows.sort(key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0))
+    _apply_sort(
+        rows,
+        _multi_sort_specs(sort, order, UNIT_SORT_KEYS),
+        default_key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0),
+        tiebreak=lambda x: x.get("id") or 0,
+    )
     total = len(rows)
     result = {"total": total, "items": rows[offset:offset + limit]}
     if facets_data is not None:
@@ -3161,7 +3206,8 @@ def _char_facets(conn, build, support: str, counter_guard: set) -> dict:
     """
     facets: dict = {}
     for dim in ("rarity", "type", "series", "tags", "skills", "support"):
-        w, args = build({dim})
+        # 多选“继续叠加”维度（tags/skills）用完整筛选；单选维度排除自身
+        w, args = build(set() if dim in ("tags", "skills") else {dim})
         rows = _all(
             conn,
             f"SELECT c.id, c.rarity, c.role, c.series_ids, c.tags, c.support_info "
@@ -3271,14 +3317,12 @@ def api_characters(q: str, rarity: str, series: str, type_: str,
             rows = [r for r in rows if r["id"] in counter_guard]
         else:
             rows = [r for r in rows if r["support_label"] == support]
-    if sort in CHAR_SORT_KEYS:
-        key = CHAR_SORT_KEYS[sort]
-        rows.sort(
-            key=lambda x: (x.get(key) or 0, x.get("id") or 0),
-            reverse=(order != "asc"),
-        )
-    else:
-        rows.sort(key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0))
+    _apply_sort(
+        rows,
+        _multi_sort_specs(sort, order, CHAR_SORT_KEYS),
+        default_key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0),
+        tiebreak=lambda x: x.get("id") or 0,
+    )
     total = len(rows)
     result = {"total": total, "items": rows[offset:offset + limit]}
     if facets_data is not None:
@@ -3451,27 +3495,30 @@ SUPPORTER_SORT_KEYS = {
 
 
 def _supporter_facets(conn, build) -> dict:
-    """支援角色分面：词条标签 / 主动技 候选项数量（剔除该维度自身）。"""
+    """支援角色分面：词条标签 / 主动技 候选数量。
+
+    两者都是多选“继续叠加”维度 -> 数量＝当前结果里也符合该项的条数（用完整筛选）；
+    __all__ 为“清空该维度”。
+    """
     facets: dict = {}
-    w, args = build({"tags"})
+    w_full, args_full = build(set())
     counts: dict = {}
     for v, n in conn.execute(
         f"SELECT CAST(je.value AS TEXT) v, COUNT(DISTINCT s.id) n "
-        f"FROM supporter s, json_each(s.tags) je {w} GROUP BY je.value", args
+        f"FROM supporter s, json_each(s.tags) je {w_full} GROUP BY je.value", args_full
     ):
         counts[str(v)] = n
-    counts["__all__"] = _facet_all(conn, "supporter", "s", w, args)
+    counts["__all__"] = _facet_all(conn, "supporter", "s", *build({"tags"}))
     facets["tags"] = counts
-    w, args = build({"skills"})
     counts = {}
     for name, n in conn.execute(
         f"SELECT ss.name, COUNT(DISTINCT s.id) FROM supporter s "
         f"JOIN supporter_skill ss ON ss.supporter_id = s.id AND ss.skill_type = 'active' "
-        f"{w} GROUP BY ss.name", args
+        f"{w_full} GROUP BY ss.name", args_full
     ):
         if name:
             counts[name] = n
-    counts["__all__"] = _facet_all(conn, "supporter", "s", w, args)
+    counts["__all__"] = _facet_all(conn, "supporter", "s", *build({"skills"}))
     facets["skills"] = counts
     return facets
 
@@ -3591,14 +3638,12 @@ def api_supporters(q: str, tags: str, tag_mode: str, skills: str, skill_mode: st
                     or set()
                 )
             ]
-    if sort in SUPPORTER_SORT_KEYS:
-        key = SUPPORTER_SORT_KEYS[sort]
-        rows.sort(
-            key=lambda x: (x.get(key), x.get("id") or 0),
-            reverse=(order != "asc"),
-        )
-    else:
-        rows.sort(key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0))
+    _apply_sort(
+        rows,
+        _multi_sort_specs(sort, order, SUPPORTER_SORT_KEYS),
+        default_key=lambda x: (-(x.get("rarity") or 0), x.get("id") or 0),
+        tiebreak=lambda x: x.get("id") or 0,
+    )
     total = len(rows)
     result = {"total": total, "items": rows[offset:offset + limit]}
     if facets_data is not None:
@@ -3864,13 +3909,12 @@ def api_search(type_: str, q: str, kind: str, sort: str, order: str,
         first = eff[0] if eff else (r.get("detail_desc") or "")
         r["effect_text"] = (first.get("name") or first.get("desc") or first) if isinstance(first, dict) else (first or "")
         r["series_name"] = r.get("series_name") or ""
-    if sort in SEARCH_SORT_KEYS:
-        key = SEARCH_SORT_KEYS[sort]
-        fallback = 0 if key == "owner_rarity" else ""
-        items.sort(
-            key=lambda x: (x.get(key) or fallback, x.get("owner_id") or 0),
-            reverse=(order != "asc"),
-        )
+    _apply_sort(
+        items,
+        _multi_sort_specs(sort, order, SEARCH_SORT_KEYS),
+        default_key=lambda x: (-(x.get("owner_rarity") or 0), x.get("owner_id") or 0),
+        tiebreak=lambda x: x.get("owner_id") or 0,
+    )
     total = len(items)
     for r in items:
         r["role_label"] = ROLE_NAMES.get(r.get("role"), "—")

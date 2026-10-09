@@ -193,6 +193,13 @@ button.primary:hover, .toolbar button:hover { background: #f05047; }
   color: var(--muted); font-weight: 600; cursor: pointer;
 }
 .list-head .sort-th:hover { color: var(--accent2); }
+.list-head .sort-add {
+  position: absolute; top: 50%; right: 0; transform: translateY(-50%);
+  background: none; border: none; padding: 0 2px; font-size: 12px; line-height: 1;
+  color: var(--muted); opacity: .5; cursor: pointer;
+}
+.list-head .sort-add:hover { color: var(--accent2); opacity: 1; }
+.list-head .sort-add.active { color: var(--accent2); opacity: 1; }
 .list-head { color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
 .list { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
 .list-row { border-bottom: 1px solid var(--line); cursor: pointer; font-size: 14px; }

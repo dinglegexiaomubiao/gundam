@@ -7,11 +7,11 @@ const fmtNum = (n, digits) => {
   catch (_) { return String(n); }
 };
 const state = {
-  units: { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", cond: null, sort: "rarity", order: "desc", page: 0, size: 25 },
-  characters: { q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", skills: [], skill_mode: "any", support: "", sort: "rarity", order: "desc", page: 0, size: 25 },
-  supporters: { q: "", tags: [], tag_mode: "any", skills: [], skill_mode: "any", sort: "rarity", order: "desc", page: 0, size: 25 },
+  units: { q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", wfx: [], wfx_mode: "any", cond: null, sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
+  characters: { q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and", skills: [], skill_mode: "any", support: "", sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
+  supporters: { q: "", tags: [], tag_mode: "any", skills: [], skill_mode: "any", sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
   stages: { q: "", page: 0, size: 25 },
-  search: { type: "skill", kind: "all", q: "", sort: "rarity", order: "desc", page: 0, size: 25 },
+  search: { type: "skill", kind: "all", q: "", sorts: [{ k: "rarity", o: "desc" }], page: 0, size: 25 },
 };
 let currentSupporter = null;
 const colWidths = {};
@@ -1130,11 +1130,17 @@ function initCombobox(boxId, options, getVal, onPick, clearable) {
   const render = () => {
     const c = cur();
     const kw = c.input.value.trim().toLowerCase();
-    const opts = c.options.filter((o) => !kw || o.label.toLowerCase().includes(kw));
+    // 有 facets 时：隐藏数量为 0 的候选项，并按数量降序（占位 "" 恒在首位）
+    let pool = c.options;
+    if (c.counts) {
+      pool = sortByCount(
+        c.options.filter((o) => o.value === "" || (facetCount(o.value, c.counts) || 0) > 0),
+        c.counts,
+      );
+    }
+    const opts = pool.filter((o) => !kw || o.label.toLowerCase().includes(kw));
     c.list.innerHTML = opts.slice(0, 60).map((o) => {
-      const n = c.counts
-        ? (o.value === "" ? c.counts.__all__ : (c.counts[String(o.value)] ?? 0))
-        : undefined;
+      const n = facetCount(o.value, c.counts);
       const tail = n == null ? "" : ` <span class="opt-count">(${n})</span>`;
       return `<button class="sbox-item" data-v="${esc(String(o.value))}" data-label="${esc(o.label)}">${esc(o.label)}${tail}</button>`;
     }).join("") || '<div class="empty">无匹配</div>';
@@ -1230,18 +1236,48 @@ async function initFilterControls() {
 
 /* ---------- 筛选选项数量（facet counts） ---------- */
 
-// 静态 <select>：原始文案缓存在 data-base，再追加 “(数量)”；“全部” 选项用 __all__。
-function applyOptionCounts(selId, counts) {
-  const el = $(selId);
-  if (!el || !counts) return;
-  el.querySelectorAll("option").forEach((o) => {
-    if (o.dataset.base === undefined) o.dataset.base = o.textContent;
-    const n = o.value === "" ? counts.__all__ : (counts[o.value] ?? 0);
-    o.textContent = (n == null) ? o.dataset.base : `${o.dataset.base} (${n})`;
+// 取某选项在当前 facets 下的数量（占位 “全部” value="" 用 __all__）；无 facets 返回 null。
+function facetCount(value, counts) {
+  if (!counts) return null;
+  if (value === "") return counts.__all__;
+  const n = counts[String(value)];
+  return n == null ? 0 : n;
+}
+
+// 按数量降序排序（占位 "" 恒在首位，其余并列时保持原序；不改动入参数组）。
+function sortByCount(options, counts) {
+  if (!counts) return options.slice();
+  const idx = new Map(options.map((o, i) => [o, i]));
+  return options.slice().sort((a, b) => {
+    const ap = a.value === "", bp = b.value === "";
+    if (ap !== bp) return ap ? -1 : 1;
+    const an = facetCount(a.value, counts) || 0;
+    const bn = facetCount(b.value, counts) || 0;
+    return bn - an || idx.get(a) - idx.get(b);
   });
 }
 
-// sbox 组合框：把数量挂到 combobox 配置上，展开时由 render() 追加。
+// 静态 <select>：追加 “(数量)”、隐藏数量为 0 的项、按数量降序重排。
+// 占位（value=""）与当前选中项始终保留（避免选择框变空）。
+function applyOptionCounts(selId, counts) {
+  const el = $(selId);
+  if (!el || !counts) return;
+  const opts = [...el.querySelectorAll("option")];
+  opts.forEach((o) => {
+    if (o.dataset.base === undefined) o.dataset.base = o.textContent;
+  });
+  const selected = el.value;
+  sortByCount(opts, counts).forEach((o) => el.appendChild(o)); // 重挂载即完成排序
+  opts.forEach((o) => {
+    const n = facetCount(o.value, counts);
+    o.textContent = n == null ? o.dataset.base : `${o.dataset.base} (${n})`;
+    const hide = o.value !== "" && n === 0 && o.value !== selected;
+    o.hidden = hide;
+    o.disabled = hide;
+  });
+}
+
+// sbox 组合框：把数量挂到 combobox 配置上，展开时由 render() 追加/排序/隐藏。
 function setComboCounts(boxId, counts) {
   const c = comboboxes[boxId];
   if (c) c.counts = counts || null;
@@ -1392,7 +1428,7 @@ async function loadUnits(page = state.units.page) {
     tags: s.tags.join(","), tag_mode: s.tag_mode,
     match: s.match, wfx: s.wfx.join(","), wfx_mode: s.wfx_mode,
     cond: s.cond ? JSON.stringify(s.cond) : "",
-    sort: s.sort, order: s.order, facets: "1",
+    sort: sortParam(s), order: orderParam(s), facets: "1",
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/units?" + q);
@@ -2256,7 +2292,7 @@ async function loadCharacters(page = state.characters.page) {
     q: s.q, rarity: s.rarity, series: s.series, type: s.type,
     tags: s.tags.join(","), tag_mode: s.tag_mode,
     match: s.match, skills: s.skills.join(","), skill_mode: s.skill_mode,
-    support: s.support, sort: s.sort, order: s.order, facets: "1",
+    support: s.support, sort: sortParam(s), order: orderParam(s), facets: "1",
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/characters?" + q);
@@ -2904,7 +2940,7 @@ async function loadSupporters(page = state.supporters.page) {
   const q = new URLSearchParams({
     q: s.q, tags: s.tags.join(","), tag_mode: s.tag_mode,
     skills: s.skills.join(","), skill_mode: s.skill_mode,
-    sort: s.sort, order: s.order, facets: "1",
+    sort: sortParam(s), order: orderParam(s), facets: "1",
     limit: s.size, offset: s.page * s.size,
   });
   const d = await api("/api/supporters?" + q);
@@ -3035,7 +3071,7 @@ async function loadSearch(page = state.search.page) {
   const s = state.search;
   const q = new URLSearchParams({
     type: s.type, kind: s.kind, q: s.q, limit: s.size, offset: s.page * s.size,
-    sort: s.sort, order: s.order,
+    sort: sortParam(s), order: orderParam(s),
   });
   const d = await api("/api/search?" + q);
   $("#sr-count").textContent = s.q.trim()
@@ -4055,44 +4091,89 @@ $("#char-search").addEventListener("click", () => {
 });
 $("#char-q").addEventListener("keydown", (e) => e.key === "Enter" && $("#char-search").click());
 
-function updateSortArrows(kind) {
-  const s = {
+/* ---------- 多级排序 ---------- */
+const CIRCLED = ["", "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
+
+function sortStateByKind(kind) {
+  return {
     units: state.units,
     characters: state.characters,
     supporters: state.supporters,
     search: state.search,
   }[kind];
+}
+
+function loadersByKind() {
+  return {
+    units: loadUnits, characters: loadCharacters,
+    supporters: loadSupporters, search: loadSearch,
+  };
+}
+
+function sortParam(s) { return (s.sorts || []).map((x) => x.k).join(","); }
+function orderParam(s) { return (s.sorts || []).map((x) => x.o).join(","); }
+
+function updateSortArrows(kind) {
+  const s = sortStateByKind(kind);
   if (!s) return;
+  const specs = s.sorts || [];
   document.querySelectorAll(`.sort-th[data-kind="${kind}"]`).forEach((b) => {
-    b.textContent = b.textContent.replace(/ [▲▼]$/, "");
-    if (b.dataset.sort === s.sort) b.textContent += s.order === "asc" ? " ▲" : " ▼";
+    if (b.dataset.baseLabel === undefined) b.dataset.baseLabel = b.textContent.trim();
+    const i = specs.findIndex((x) => x.k === b.dataset.sort);
+    let suffix = "";
+    if (i >= 0) {
+      const arrow = specs[i].o === "asc" ? " ▲" : " ▼";
+      suffix = i === 0 ? arrow : ` ${CIRCLED[i + 1] || i + 1}${arrow}`;
+    }
+    b.textContent = b.dataset.baseLabel + suffix;
+  });
+  document.querySelectorAll(`.sort-add[data-kind="${kind}"]`).forEach((p) => {
+    const active = specs.some((x) => x.k === p.dataset.sort);
+    p.classList.toggle("active", active);
+    p.textContent = active ? "×" : "+";
+    p.title = active ? "移除该级排序" : "加为下一级排序";
   });
 }
 
+// 每列生成一个小「+」按钮：点一下把该列加为下一级排序，再点从排序中移除
+document.querySelectorAll(".sort-th[data-kind]").forEach((b) => {
+  const plus = document.createElement("button");
+  plus.type = "button";
+  plus.className = "sort-add";
+  plus.dataset.kind = b.dataset.kind;
+  plus.dataset.sort = b.dataset.sort;
+  plus.textContent = "+";
+  plus.title = "加为下一级排序";
+  b.parentNode.insertBefore(plus, b.nextSibling);
+  plus.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const s = sortStateByKind(plus.dataset.kind);
+    if (!s || !s.sorts) return;
+    const k = plus.dataset.sort;
+    const i = s.sorts.findIndex((x) => x.k === k);
+    if (i >= 0) s.sorts.splice(i, 1);
+    else s.sorts.push({ k, o: "desc" });
+    if (!s.sorts.length) s.sorts = [{ k: "rarity", o: "desc" }];
+    s.page = 0;
+    loadersByKind()[plus.dataset.kind](0);
+  });
+});
+
+// 点列名：未参与排序 -> 设为唯一主键（降序）；已参与 -> 切换该级的升降序
 document.querySelectorAll(".sort-th").forEach((b) =>
   b.addEventListener("click", () => {
     const kind = b.dataset.kind;
-    const s = {
-      units: state.units,
-      characters: state.characters,
-      supporters: state.supporters,
-      search: state.search,
-    }[kind];
-    if (!s) return;
-    if (s.sort === b.dataset.sort) {
-      s.order = s.order === "asc" ? "desc" : "asc";
+    const s = sortStateByKind(kind);
+    if (!s || !s.sorts) return;
+    const k = b.dataset.sort;
+    const i = s.sorts.findIndex((x) => x.k === k);
+    if (i >= 0) {
+      s.sorts[i].o = s.sorts[i].o === "asc" ? "desc" : "asc";
     } else {
-      s.sort = b.dataset.sort;
-      s.order = "desc";
+      s.sorts = [{ k, o: "desc" }];
     }
     s.page = 0;
-    const loaders = {
-      units: loadUnits,
-      characters: loadCharacters,
-      supporters: loadSupporters,
-      search: loadSearch,
-    };
-    loaders[kind](0);
+    loadersByKind()[kind](0);
   }));
 
 $("#sup-search").addEventListener("click", () => {
@@ -4113,7 +4194,7 @@ function resetUnits() {
   Object.assign(state.units, {
     q: "", rarity: "", acq: "", series: "", type: "", tags: [], tag_mode: "all", match: "and",
     wfx: [], wfx_mode: "any", cond: null,
-    sort: "rarity", order: "desc", page: 0,
+    sorts: [{ k: "rarity", o: "desc" }], page: 0,
   });
   $("#unit-q").value = "";
   $("#unit-rarity").value = "";
@@ -4132,7 +4213,7 @@ function resetCharacters() {
   Object.assign(state.characters, {
     q: "", rarity: "", series: "", type: "", tags: [], tag_mode: "all", match: "and",
     skills: [], skill_mode: "any", support: "",
-    sort: "rarity", order: "desc", page: 0,
+    sorts: [{ k: "rarity", o: "desc" }], page: 0,
   });
   $("#char-q").value = "";
   $("#char-rarity").value = "";
@@ -4149,7 +4230,7 @@ function resetCharacters() {
 function resetSupporters() {
   Object.assign(state.supporters, {
     q: "", tags: [], tag_mode: "any", skills: [], skill_mode: "any",
-    sort: "rarity", order: "desc", page: 0,
+    sorts: [{ k: "rarity", o: "desc" }], page: 0,
   });
   $("#sup-q").value = "";
   $("#sup-tag-mode").value = "any";
@@ -4166,7 +4247,7 @@ function resetStages() {
 }
 function resetSearch() {
   Object.assign(state.search, {
-    type: "skill", kind: "all", q: "", sort: "rarity", order: "desc", page: 0,
+    type: "skill", kind: "all", q: "", sorts: [{ k: "rarity", o: "desc" }], page: 0,
   });
   $("#sr-type").value = "skill";
   $("#sr-kind").value = "all";

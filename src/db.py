@@ -535,11 +535,15 @@ def ingest_character_children(conn, c: dict) -> None:
 
 
 def _support_info(abilities, skills) -> dict:
-    """支援次数仅从能力（abilities）统计，技能不计入。"""
+    """支援次数仅从能力（abilities）统计，技能不计入。
+
+    每个 kind 记录总数 count 与拆分 uncond_count/cond_count，让备注能分别展示
+    （例如 无条件额外行动1次+有条件额外行动1次，而不是合并成“有条件…2次”）。
+    """
     info = {
-        "defense": {"count": 0, "cond": False},
-        "attack": {"count": 0, "cond": False},
-        "extra": {"count": 0, "cond": False},
+        "defense": {"count": 0, "cond": False, "uncond_count": 0, "cond_count": 0},
+        "attack": {"count": 0, "cond": False, "uncond_count": 0, "cond_count": 0},
+        "extra": {"count": 0, "cond": False, "uncond_count": 0, "cond_count": 0},
     }
 
     def scan(traits):
@@ -556,9 +560,13 @@ def _support_info(abilities, skills) -> dict:
             for kind, rx in _SUPPORT_RES:
                 m = rx.search(d)
                 if m:
-                    info[kind]["count"] += int(m.group(1))
+                    n = int(m.group(1))
+                    info[kind]["count"] += n
                     if has_cond:
                         info[kind]["cond"] = True
+                        info[kind]["cond_count"] += n
+                    else:
+                        info[kind]["uncond_count"] += n
 
     for ab in abilities or []:
         # 主能力与 SP 能力都要统计；互为镜像时 _slot_variants 已按 id 去重，
@@ -1101,9 +1109,9 @@ def recompute_character_derived(conn, char_id: int) -> None:
     }
     stat_bonuses: dict[str, int] = {}
     conditional_bonuses: list[dict] = []
-    support = {"defense": {"count": 0, "cond": False},
-               "attack": {"count": 0, "cond": False},
-               "extra": {"count": 0, "cond": False}}
+    support = {"defense": {"count": 0, "cond": False, "uncond_count": 0, "cond_count": 0},
+               "attack": {"count": 0, "cond": False, "uncond_count": 0, "cond_count": 0},
+               "extra": {"count": 0, "cond": False, "uncond_count": 0, "cond_count": 0}}
     for row in rows:
         ab_name = row["name"] or ""
         try:
@@ -1134,9 +1142,13 @@ def recompute_character_derived(conn, char_id: int) -> None:
             for kind, rx in _SUPPORT_RES:
                 m = rx.search(desc)
                 if m:
-                    support[kind]["count"] += int(m.group(1))
+                    n = int(m.group(1))
+                    support[kind]["count"] += n
                     if has_cond:
                         support[kind]["cond"] = True
+                        support[kind]["cond_count"] += n
+                    else:
+                        support[kind]["uncond_count"] += n
     conn.execute(
         "UPDATE character SET stat_bonuses=?, conditional_bonuses=?, support_info=? "
         "WHERE id=?",

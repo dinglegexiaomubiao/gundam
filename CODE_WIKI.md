@@ -429,6 +429,8 @@ baseDamage         = roundUp((四者之和) × 武器威力)
 
 #### `ingest_characters(conn, tag_map)`
 解析驾驶员 JSON，额外计算 `_support_info`（支援防御/攻击/额外行动次数）。
+每个 kind 记录 `count` 与拆分 `uncond_count` / `cond_count`，备注（`support_label`）据此把
+「无条件 / 有条件」两部分分别展示并用 `+` 连接（旧数据缺拆分字段时退化为单一标签）。
 
 #### `ingest_supporters(conn, tag_map)`
 解析支援角色，使用 `parse_supporter_conditions` 解析队长技条件。
@@ -687,8 +689,11 @@ Web 服务默认监听 `http://127.0.0.1:8765`。所有 API 返回 JSON，`Cache
 - `GET /api/units?q=&rarity=&acq=&series=&type=&tags=&tag_mode=&match=&wfx=&wfx_mode=&cond=&sort=&order=&limit=&offset=&facets=1`
 - `GET /api/characters?q=&rarity=&series=&type=&tags=&tag_mode=&match=&skills=&skill_mode=&support=&sort=&order=&limit=&offset=&facets=1`
 - `GET /api/supporters?q=&tags=&tag_mode=&skills=&skill_mode=&sort=&order=&limit=&offset=&exclude=&facets=1`
+  - `sort` / `order` 支持**逗号分隔的多级键**（主 -> 次），长度一一对应，如
+    `sort=rarity,role&order=desc,asc`（稀有度降序、同级内类型升序）；单个键时即原有行为。
   - `facets=1` 时响应额外含 `facets`：`{维度: {选项值: 数量, "__all__": 清空该维度后的数量}}`。
-    某维度 D 的选项数量＝应用**除 D 以外**的全部筛选（含 `q`）后叠加该选项的命中数（标准分面）。
+    - **单选维度**（`rarity/acq/type/series/support`）＝应用**除该维度以外**的全部筛选（含 `q`）后该选项的命中数，便于切换。
+    - **多选维度**（`tags/wfx/skills`）＝**当前结果里也符合该项的条数**，便于在已有选择上继续叠加（会随选择收窄）。
     机体维度：`rarity/acq/type/series/tags/wfx`；驾驶员：`rarity/type/series/tags/skills/support`；
     支援角色：`tags/skills`。未传 `facets` 时不计算、不返回（选择器/配对页据此保持轻量）。
 - `GET /api/stages?q=&limit=&offset=`

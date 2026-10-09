@@ -84,6 +84,27 @@ class TestFacets(unittest.TestCase):
         # 清空 tags 维度后应回到全集
         self.assertEqual(got["facets"]["tags"]["__all__"], base["total"])
 
+    def test_multiselect_tag_facet_refines_current_results(self):
+        base = _units()
+        tag = max((k for k in base["facets"]["tags"] if k != "__all__"),
+                  key=lambda k: base["facets"]["tags"][k])
+        got = _units(tags=tag, tag_mode="any")
+        counts = {k: v for k, v in got["facets"]["tags"].items() if k != "__all__"}
+        # 多选口径：数量＝当前结果里也符合该项的条数 -> 选中的标签＝当前总数，
+        # 且任何候选都不超过当前结果数（不是全局数量）。
+        self.assertEqual(counts[tag], got["total"])
+        self.assertLessEqual(max(counts.values()), got["total"])
+        self.assertEqual(got["facets"]["tags"]["__all__"], base["total"])  # 清空该维度
+
+    def test_multiselect_wfx_facet_refines_current_results(self):
+        base = _units()
+        key = max((k for k in base["facets"]["wfx"] if k != "__all__"),
+                  key=lambda k: base["facets"]["wfx"][k])
+        got = _units(wfx=key, wfx_mode="any")
+        f = got["facets"]["wfx"]
+        self.assertEqual(f[key], got["total"])
+        self.assertLessEqual(max(v for k, v in f.items() if k != "__all__"), got["total"])
+
     def test_characters_support_filter_respected(self):
         base = api_characters("", "", "", "", "", "all", "and", "", "any", "",
                               "", "desc", 5, 0, facets=True)
